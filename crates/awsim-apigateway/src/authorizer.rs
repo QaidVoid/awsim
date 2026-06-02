@@ -121,6 +121,9 @@ fn build_method_arn(
     path: &str,
 ) -> String {
     let path_no_leading = path.trim_start_matches('/');
+    // Partition left literal: this helper receives region/account as plain
+    // strings from the gateway proxy path, which carries no RequestContext to
+    // source ctx.partition from.
     format!("arn:aws:execute-api:{region}:{account_id}:{api_id}/{stage}/{method}/{path_no_leading}")
 }
 

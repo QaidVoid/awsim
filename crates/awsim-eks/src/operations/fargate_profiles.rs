@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
 use crate::state::{EksState, FargateProfile, now_secs};
@@ -17,13 +17,15 @@ pub fn create_fargate_profile(
             "fargateProfileName is required",
         )
     })?;
-    let arn = format!(
-        "arn:aws:eks:{}:{}:fargateprofile/{}/{}/{}",
-        ctx.region,
-        ctx.account_id,
-        cluster,
-        name,
-        &uuid::Uuid::new_v4().simple().to_string()[..8]
+    let arn = arn::build(
+        ctx,
+        "eks",
+        format!(
+            "fargateprofile/{}/{}/{}",
+            cluster,
+            name,
+            &uuid::Uuid::new_v4().simple().to_string()[..8]
+        ),
     );
     let fp = FargateProfile {
         cluster_name: cluster.to_string(),

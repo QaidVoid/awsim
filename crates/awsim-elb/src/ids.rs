@@ -14,8 +14,8 @@ pub fn random_hex(len: usize) -> String {
 }
 
 /// Load Balancer ARN.
-/// Format: `arn:aws:elasticloadbalancing:{region}:{account}:loadbalancer/{lb_type}/{name}/{random}`
-pub fn lb_arn(region: &str, account: &str, lb_type: &str, name: &str) -> String {
+/// Format: `arn:{partition}:elasticloadbalancing:{region}:{account}:loadbalancer/{lb_type}/{name}/{random}`
+pub fn lb_arn(partition: &str, region: &str, account: &str, lb_type: &str, name: &str) -> String {
     // lb_type "application" -> "app", "network" -> "net"
     let type_prefix = match lb_type {
         "network" => "net",
@@ -23,26 +23,33 @@ pub fn lb_arn(region: &str, account: &str, lb_type: &str, name: &str) -> String 
     };
     let rand = random_hex(16);
     format!(
-        "arn:aws:elasticloadbalancing:{region}:{account}:loadbalancer/{type_prefix}/{name}/{rand}"
+        "arn:{partition}:elasticloadbalancing:{region}:{account}:loadbalancer/{type_prefix}/{name}/{rand}"
     )
 }
 
 /// Target Group ARN.
-pub fn tg_arn(region: &str, account: &str, name: &str) -> String {
+pub fn tg_arn(partition: &str, region: &str, account: &str, name: &str) -> String {
     let rand = random_hex(16);
-    format!("arn:aws:elasticloadbalancing:{region}:{account}:targetgroup/{name}/{rand}")
+    format!("arn:{partition}:elasticloadbalancing:{region}:{account}:targetgroup/{name}/{rand}")
 }
 
 /// Listener ARN.
-pub fn listener_arn(region: &str, account: &str, lb_name: &str, lb_rand: &str) -> String {
+pub fn listener_arn(
+    partition: &str,
+    region: &str,
+    account: &str,
+    lb_name: &str,
+    lb_rand: &str,
+) -> String {
     let rand = random_hex(16);
     format!(
-        "arn:aws:elasticloadbalancing:{region}:{account}:listener/app/{lb_name}/{lb_rand}/{rand}"
+        "arn:{partition}:elasticloadbalancing:{region}:{account}:listener/app/{lb_name}/{lb_rand}/{rand}"
     )
 }
 
 /// Rule ARN.
 pub fn rule_arn(
+    partition: &str,
     region: &str,
     account: &str,
     lb_name: &str,
@@ -51,7 +58,7 @@ pub fn rule_arn(
 ) -> String {
     let rand = random_hex(16);
     format!(
-        "arn:aws:elasticloadbalancing:{region}:{account}:listener-rule/app/{lb_name}/{lb_rand}/{listener_rand}/{rand}"
+        "arn:{partition}:elasticloadbalancing:{region}:{account}:listener-rule/app/{lb_name}/{lb_rand}/{listener_rand}/{rand}"
     )
 }
 

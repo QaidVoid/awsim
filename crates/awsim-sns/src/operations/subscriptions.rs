@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 use tracing::info;
 use uuid::Uuid;
@@ -55,10 +55,7 @@ pub fn subscribe(state: &SnsState, input: &Value, ctx: &RequestContext) -> Resul
 
     let sub_id = Uuid::new_v4();
     let topic_name = topic.name.clone();
-    let sub_arn = format!(
-        "arn:aws:sns:{}:{}:{}:{}",
-        ctx.region, ctx.account_id, topic_name, sub_id
-    );
+    let sub_arn = arn::build(ctx, "sns", format!("{topic_name}:{sub_id}"));
 
     let mut sub_attributes: HashMap<String, String> = HashMap::new();
     sub_attributes.insert("SubscriptionArn".to_string(), sub_arn.clone());

@@ -36,33 +36,38 @@ pub fn cluster_reader_endpoint(identifier: &str, region: &str) -> String {
 }
 
 /// Build a DB instance ARN.
-pub fn instance_arn(region: &str, account: &str, identifier: &str) -> String {
-    format!("arn:aws:rds:{region}:{account}:db:{identifier}")
+pub fn instance_arn(partition: &str, region: &str, account: &str, identifier: &str) -> String {
+    format!("arn:{partition}:rds:{region}:{account}:db:{identifier}")
 }
 
 /// Build a DB cluster ARN.
-pub fn cluster_arn(region: &str, account: &str, identifier: &str) -> String {
-    format!("arn:aws:rds:{region}:{account}:cluster:{identifier}")
+pub fn cluster_arn(partition: &str, region: &str, account: &str, identifier: &str) -> String {
+    format!("arn:{partition}:rds:{region}:{account}:cluster:{identifier}")
 }
 
 /// Build a DB subnet group ARN.
-pub fn subnet_group_arn(region: &str, account: &str, name: &str) -> String {
-    format!("arn:aws:rds:{region}:{account}:subgrp:{name}")
+pub fn subnet_group_arn(partition: &str, region: &str, account: &str, name: &str) -> String {
+    format!("arn:{partition}:rds:{region}:{account}:subgrp:{name}")
 }
 
 /// Build a DB parameter group ARN.
-pub fn parameter_group_arn(region: &str, account: &str, name: &str) -> String {
-    format!("arn:aws:rds:{region}:{account}:pg:{name}")
+pub fn parameter_group_arn(partition: &str, region: &str, account: &str, name: &str) -> String {
+    format!("arn:{partition}:rds:{region}:{account}:pg:{name}")
 }
 
 /// Build a DB snapshot ARN.
-pub fn snapshot_arn(region: &str, account: &str, identifier: &str) -> String {
-    format!("arn:aws:rds:{region}:{account}:snapshot:{identifier}")
+pub fn snapshot_arn(partition: &str, region: &str, account: &str, identifier: &str) -> String {
+    format!("arn:{partition}:rds:{region}:{account}:snapshot:{identifier}")
 }
 
 /// Build a DB cluster endpoint ARN.
-pub fn cluster_endpoint_arn(region: &str, account: &str, endpoint_identifier: &str) -> String {
-    format!("arn:aws:rds:{region}:{account}:cluster-endpoint:{endpoint_identifier}")
+pub fn cluster_endpoint_arn(
+    partition: &str,
+    region: &str,
+    account: &str,
+    endpoint_identifier: &str,
+) -> String {
+    format!("arn:{partition}:rds:{region}:{account}:cluster-endpoint:{endpoint_identifier}")
 }
 
 /// Build a cluster custom endpoint address.

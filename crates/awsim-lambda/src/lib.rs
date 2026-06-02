@@ -747,7 +747,10 @@ impl ServiceHandler for LambdaService {
     }
 
     fn iam_resource(&self, operation: &str, input: &Value, ctx: &RequestContext) -> Option<String> {
-        let prefix = format!("arn:aws:lambda:{}:{}", ctx.region, ctx.account_id);
+        let prefix = format!(
+            "arn:{}:lambda:{}:{}",
+            ctx.partition, ctx.region, ctx.account_id
+        );
         match operation {
             "ListFunctions"
             | "ListEventSourceMappings"

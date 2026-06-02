@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 use tracing::{debug, info};
 
@@ -28,10 +28,7 @@ fn build_arn(ctx: &RequestContext, name: &str) -> String {
     } else {
         format!("/{name}")
     };
-    format!(
-        "arn:aws:ssm:{}:{}:parameter{}",
-        ctx.region, ctx.account_id, normalized
-    )
+    arn::build(ctx, "ssm", format!("parameter{normalized}"))
 }
 
 /// AWS ParameterPolicy schema is a JSON array of `{Type,Version,Attributes}`

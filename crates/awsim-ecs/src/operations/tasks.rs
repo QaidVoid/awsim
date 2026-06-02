@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 use tracing::info;
 use uuid::Uuid;
@@ -346,10 +346,7 @@ pub fn run_task(
 
     for _ in 0..count {
         let task_id = Uuid::new_v4().to_string();
-        let task_arn = format!(
-            "arn:aws:ecs:{}:{}:task/{}/{}",
-            ctx.region, ctx.account_id, cluster_name, task_id
-        );
+        let task_arn = arn::build(ctx, "ecs", format!("task/{cluster_name}/{task_id}"));
 
         let attachments = if requires_network_config {
             let nc = network_configuration.clone().unwrap_or(Value::Null);

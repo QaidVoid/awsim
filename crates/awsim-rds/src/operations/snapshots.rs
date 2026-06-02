@@ -74,7 +74,7 @@ pub fn create_db_snapshot(
     }
     let snapshot = DbSnapshot {
         snapshot_identifier: snapshot_id.to_string(),
-        arn: snapshot_arn(&ctx.region, &ctx.account_id, snapshot_id),
+        arn: snapshot_arn(&ctx.partition, &ctx.region, &ctx.account_id, snapshot_id),
         db_instance_identifier: instance_id.to_string(),
         engine: instance.engine.clone(),
         engine_version: instance.engine_version.clone(),
@@ -190,7 +190,12 @@ pub fn copy_db_snapshot(
 
     let copied = DbSnapshot {
         snapshot_identifier: target_snapshot_id.to_string(),
-        arn: snapshot_arn(&ctx.region, &ctx.account_id, target_snapshot_id),
+        arn: snapshot_arn(
+            &ctx.partition,
+            &ctx.region,
+            &ctx.account_id,
+            target_snapshot_id,
+        ),
         db_instance_identifier: source.db_instance_identifier.clone(),
         engine: source.engine.clone(),
         engine_version: source.engine_version.clone(),

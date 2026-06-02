@@ -7,7 +7,7 @@ mod util;
 pub use authz::{KmsGrantLookup, KmsKeyResolver, KmsResourcePolicyLookup};
 
 use async_trait::async_trait;
-use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler};
+use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler, arn};
 use serde_json::Value;
 use tracing::debug;
 
@@ -229,7 +229,6 @@ impl ServiceHandler for KmsService {
     }
 
     fn iam_resource(&self, operation: &str, input: &Value, ctx: &RequestContext) -> Option<String> {
-        let prefix = format!("arn:aws:kms:{}:{}", ctx.region, ctx.account_id);
         match operation {
             "ListKeys"
             | "ListAliases"
@@ -251,9 +250,9 @@ impl ServiceHandler for KmsService {
                 if key_id.starts_with("arn:") {
                     Some(key_id.to_string())
                 } else if key_id.starts_with("alias/") {
-                    Some(format!("{prefix}:{key_id}"))
+                    Some(arn::build(ctx, "kms", key_id))
                 } else {
-                    Some(format!("{prefix}:key/{key_id}"))
+                    Some(arn::build(ctx, "kms", format!("key/{key_id}")))
                 }
             }
         }

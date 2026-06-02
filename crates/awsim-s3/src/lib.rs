@@ -13,7 +13,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use awsim_core::{
     AccountRegionStore, AwsError, BlobInventory, BodyStore, InternalEvent, Protocol,
-    RequestContext, RouteDefinition, ServiceHandler,
+    RequestContext, RouteDefinition, ServiceHandler, arn,
 };
 use serde_json::Value;
 use tracing::debug;
@@ -1088,7 +1088,7 @@ impl ServiceHandler for S3Service {
                                 detail: serde_json::json!({
                                     "bucket": {
                                         "name": bucket_name,
-                                        "arn": format!("arn:aws:s3:::{}", bucket_name),
+                                        "arn": arn::build_partition(ctx, "s3", bucket_name),
                                     },
                                     "object": {
                                         "key": key,
@@ -1133,7 +1133,7 @@ impl ServiceHandler for S3Service {
                                 detail: serde_json::json!({
                                     "bucket": {
                                         "name": bucket_name,
-                                        "arn": format!("arn:aws:s3:::{}", bucket_name),
+                                        "arn": arn::build_partition(ctx, "s3", bucket_name),
                                     },
                                     "object": {
                                         "key": key,
@@ -1187,7 +1187,7 @@ impl ServiceHandler for S3Service {
                         detail: serde_json::json!({
                             "bucket": {
                                 "name": bucket_name,
-                                "arn": format!("arn:aws:s3:::{}", bucket_name),
+                                "arn": arn::build_partition(ctx, "s3", &bucket_name),
                             },
                             "object": {
                                 "key": key,
@@ -1338,12 +1338,7 @@ impl ServiceHandler for S3Service {
         }
     }
 
-    fn iam_resource(
-        &self,
-        operation: &str,
-        input: &Value,
-        _ctx: &RequestContext,
-    ) -> Option<String> {
+    fn iam_resource(&self, operation: &str, input: &Value, ctx: &RequestContext) -> Option<String> {
         match operation {
             "ListBuckets" => Some("*".to_string()),
             "ListObjects"
@@ -1416,15 +1411,15 @@ impl ServiceHandler for S3Service {
             | "ListMultipartUploads"
             | "CreateSession" => {
                 let bucket = input.get("Bucket").and_then(|v| v.as_str())?;
-                Some(format!("arn:aws:s3:::{bucket}"))
+                Some(arn::build_partition(ctx, "s3", bucket))
             }
             _ => {
                 let bucket = input.get("Bucket").and_then(|v| v.as_str())?;
                 let key = input.get("Key").and_then(|v| v.as_str()).unwrap_or("");
                 if key.is_empty() {
-                    Some(format!("arn:aws:s3:::{bucket}"))
+                    Some(arn::build_partition(ctx, "s3", bucket))
                 } else {
-                    Some(format!("arn:aws:s3:::{bucket}/{key}"))
+                    Some(arn::build_partition(ctx, "s3", format!("{bucket}/{key}")))
                 }
             }
         }

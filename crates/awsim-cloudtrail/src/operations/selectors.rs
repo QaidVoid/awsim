@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
 use crate::state::{CloudTrailState, EventSelector, InsightSelector};
@@ -12,10 +12,7 @@ pub fn get_event_selectors(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "TrailName is required"))?;
     let key = resolve_name(name);
-    let trail_arn = format!(
-        "arn:aws:cloudtrail:{}:{}:trail/{}",
-        ctx.region, ctx.account_id, key
-    );
+    let trail_arn = arn::build(ctx, "cloudtrail", format!("trail/{key}"));
     let selectors: Vec<Value> = state
         .event_selectors
         .get(&key)
@@ -47,10 +44,7 @@ pub fn put_event_selectors(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "TrailName is required"))?;
     let key = resolve_name(name);
-    let trail_arn = format!(
-        "arn:aws:cloudtrail:{}:{}:trail/{}",
-        ctx.region, ctx.account_id, key
-    );
+    let trail_arn = arn::build(ctx, "cloudtrail", format!("trail/{key}"));
     let sels: Vec<EventSelector> = input["EventSelectors"]
         .as_array()
         .map(|a| {
@@ -90,10 +84,7 @@ pub fn put_insight_selectors(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "TrailName is required"))?;
     let key = resolve_name(name);
-    let trail_arn = format!(
-        "arn:aws:cloudtrail:{}:{}:trail/{}",
-        ctx.region, ctx.account_id, key
-    );
+    let trail_arn = arn::build(ctx, "cloudtrail", format!("trail/{key}"));
     let sels: Vec<InsightSelector> = input["InsightSelectors"]
         .as_array()
         .map(|a| {

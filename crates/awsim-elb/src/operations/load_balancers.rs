@@ -52,7 +52,13 @@ pub fn create_load_balancer(
 
     let tags = super::tags::parse_tags_input(input)?;
 
-    let arn = lb_arn(&ctx.region, &ctx.account_id, &lb_type, &name);
+    let arn = lb_arn(
+        &ctx.partition,
+        &ctx.region,
+        &ctx.account_id,
+        &lb_type,
+        &name,
+    );
     let dns_name = lb_dns_name(&name, &ctx.region, &scheme);
 
     let lb = LoadBalancer {

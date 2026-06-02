@@ -20,8 +20,8 @@ pub fn new_oac_id() -> String {
 }
 
 /// Distribution ARN (CloudFront is global — no region in ARN).
-pub fn distribution_arn(account: &str, id: &str) -> String {
-    format!("arn:aws:cloudfront::{account}:distribution/{id}")
+pub fn distribution_arn(partition: &str, account: &str, id: &str) -> String {
+    format!("arn:{partition}:cloudfront::{account}:distribution/{id}")
 }
 
 /// Domain name for a distribution.

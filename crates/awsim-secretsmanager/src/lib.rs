@@ -8,7 +8,7 @@ pub use authz::{SecretsManagerResourcePolicyLookup, SecretsManagerSecretLookup};
 
 use async_trait::async_trait;
 use awsim_core::{
-    AccountRegionStore, AwsError, LambdaInvoker, Protocol, RequestContext, ServiceHandler,
+    AccountRegionStore, AwsError, LambdaInvoker, Protocol, RequestContext, ServiceHandler, arn,
 };
 use serde_json::Value;
 use std::sync::Arc;
@@ -165,9 +165,10 @@ impl ServiceHandler for SecretsManagerService {
                 if secret_id.starts_with("arn:") {
                     Some(secret_id.to_string())
                 } else {
-                    Some(format!(
-                        "arn:aws:secretsmanager:{}:{}:secret:{}",
-                        ctx.region, ctx.account_id, secret_id
+                    Some(arn::build(
+                        ctx,
+                        "secretsmanager",
+                        format!("secret:{secret_id}"),
                     ))
                 }
             }

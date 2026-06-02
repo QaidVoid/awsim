@@ -208,7 +208,7 @@ pub fn create_change_set(
         (existing.stack_id.clone(), changes)
     } else {
         // Create change set: all resources are "Add"
-        let new_stack_id = stack_arn(&ctx.region, &ctx.account_id, &stack_name);
+        let new_stack_id = stack_arn(&ctx.partition, &ctx.region, &ctx.account_id, &stack_name);
         let changes = parsed
             .resources
             .iter()
@@ -223,7 +223,13 @@ pub fn create_change_set(
         (new_stack_id, changes)
     };
 
-    let change_set_id = change_set_arn(&ctx.region, &ctx.account_id, &stack_name, &change_set_name);
+    let change_set_id = change_set_arn(
+        &ctx.partition,
+        &ctx.region,
+        &ctx.account_id,
+        &stack_name,
+        &change_set_name,
+    );
 
     let change_set = ChangeSet {
         change_set_id: change_set_id.clone(),
@@ -504,7 +510,7 @@ mod change_set_diff_tests {
         state.stacks.insert(
             "s".into(),
             Stack {
-                stack_id: stack_arn("us-east-1", "000000000000", "s"),
+                stack_id: stack_arn("aws", "us-east-1", "000000000000", "s"),
                 stack_name: "s".into(),
                 template_body: template_v1.to_string(),
                 parameters: HashMap::new(),
@@ -580,7 +586,7 @@ mod change_set_diff_tests {
         state.stacks.insert(
             "s".into(),
             Stack {
-                stack_id: stack_arn("us-east-1", "000000000000", "s"),
+                stack_id: stack_arn("aws", "us-east-1", "000000000000", "s"),
                 stack_name: "s".into(),
                 template_body: template_v1.to_string(),
                 parameters: HashMap::new(),
@@ -646,7 +652,7 @@ mod change_set_diff_tests {
         state.stacks.insert(
             "s".into(),
             Stack {
-                stack_id: stack_arn("us-east-1", "000000000000", "s"),
+                stack_id: stack_arn("aws", "us-east-1", "000000000000", "s"),
                 stack_name: "s".into(),
                 template_body: template_v1.to_string(),
                 parameters: HashMap::new(),

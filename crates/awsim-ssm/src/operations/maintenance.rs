@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -590,7 +590,7 @@ pub fn get_service_setting(
             "SettingValue": "false",
             "LastModifiedDate": now_epoch_secs(),
             "LastModifiedUser": "awsim",
-            "ARN": format!("arn:aws:ssm:{}:{}:servicesetting{}", ctx.region, ctx.account_id, setting_id),
+            "ARN": arn::build(ctx, "ssm", format!("servicesetting{setting_id}")),
             "Status": "Default",
         }
     }))
@@ -1079,7 +1079,7 @@ pub fn reset_service_setting(
             "SettingValue": "false",
             "LastModifiedDate": now_epoch_secs(),
             "LastModifiedUser": "awsim",
-            "ARN": format!("arn:aws:ssm:{}:{}:servicesetting{}", ctx.region, ctx.account_id, setting_id),
+            "ARN": arn::build(ctx, "ssm", format!("servicesetting{setting_id}")),
             "Status": "Default",
         }
     }))

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
 use crate::state::{PlatformApplication, PlatformEndpoint, SnsState};
@@ -21,10 +21,7 @@ pub fn create_platform_application(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Platform is required"))?;
 
-    let arn = format!(
-        "arn:aws:sns:{}:{}:app/{}/{}",
-        ctx.region, ctx.account_id, platform, name
-    );
+    let arn = arn::build(ctx, "sns", format!("app/{platform}/{name}"));
 
     let mut attributes: HashMap<String, String> = HashMap::new();
     if let Some(attrs) = input["Attributes"].as_object() {
@@ -164,14 +161,17 @@ pub fn create_platform_endpoint(
     // Derive platform from ARN: arn:aws:sns:{region}:{account}:app/{platform}/{name}
     let platform = platform_application_arn.split('/').nth(1).unwrap_or("APNS");
 
-    let endpoint_arn = format!(
-        "arn:aws:sns:{}:{}:endpoint/{}/{}/{}",
-        ctx.region,
-        ctx.account_id,
-        platform,
-        // extract app name from platform ARN
-        platform_application_arn.rsplit('/').next().unwrap_or("app"),
-        uuid::Uuid::new_v4()
+    // extract app name from platform ARN
+    let app_name = platform_application_arn.rsplit('/').next().unwrap_or("app");
+    let endpoint_arn = arn::build(
+        ctx,
+        "sns",
+        format!(
+            "endpoint/{}/{}/{}",
+            platform,
+            app_name,
+            uuid::Uuid::new_v4()
+        ),
     );
 
     let mut attributes: HashMap<String, String> = HashMap::new();

@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
@@ -133,10 +133,7 @@ pub fn create_event_source_mapping(
     } else {
         match state.functions.get(function_name) {
             Some(f) => f.arn.clone(),
-            None => format!(
-                "arn:aws:lambda:{}:{}:function:{}",
-                ctx.region, ctx.account_id, function_name
-            ),
+            None => arn::build(ctx, "lambda", format!("function:{function_name}")),
         }
     };
 

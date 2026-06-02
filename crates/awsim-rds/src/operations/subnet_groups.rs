@@ -61,7 +61,7 @@ pub fn create_db_subnet_group(
         return Err(db_subnet_group_already_exists(name));
     }
 
-    let arn = subnet_group_arn(&ctx.region, &ctx.account_id, name);
+    let arn = subnet_group_arn(&ctx.partition, &ctx.region, &ctx.account_id, name);
     let sg = DbSubnetGroup {
         name: name.to_string(),
         arn,

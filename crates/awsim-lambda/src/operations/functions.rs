@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, Body, RequestContext};
+use awsim_core::{AwsError, Body, RequestContext, arn};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
@@ -289,10 +289,7 @@ pub fn create_function(
     let (code_data, code_sha256, code_size) = resolve_code(input)?;
     let code = persist_code(state, name, "$LATEST", code_data)?;
 
-    let arn = format!(
-        "arn:aws:lambda:{}:{}:function:{}",
-        ctx.region, ctx.account_id, name
-    );
+    let arn = arn::build(ctx, "lambda", format!("function:{name}"));
     let now = now_iso8601();
 
     // Extract tags from CreateFunction input

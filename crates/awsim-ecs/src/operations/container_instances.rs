@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
 use crate::state::EcsState;
@@ -42,12 +42,7 @@ pub fn describe_container_instances(
         .clusters
         .get(cluster_name)
         .map(|c| c.arn.clone())
-        .unwrap_or_else(|| {
-            format!(
-                "arn:aws:ecs:{}:{}:cluster/{}",
-                ctx.region, ctx.account_id, cluster_name
-            )
-        });
+        .unwrap_or_else(|| arn::build(ctx, "ecs", format!("cluster/{cluster_name}")));
 
     let instances: Vec<Value> = input["containerInstances"]
         .as_array()
@@ -58,9 +53,10 @@ pub fn describe_container_instances(
                     let arn = if id.starts_with("arn:") {
                         id.to_string()
                     } else {
-                        format!(
-                            "arn:aws:ecs:{}:{}:container-instance/{}/{}",
-                            ctx.region, ctx.account_id, cluster_name, id
+                        arn::build(
+                            ctx,
+                            "ecs",
+                            format!("container-instance/{cluster_name}/{id}"),
                         )
                     };
                     instance_to_json(&arn, &cluster_arn)

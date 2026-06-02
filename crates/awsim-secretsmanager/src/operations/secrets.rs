@@ -34,9 +34,9 @@ fn resolve_name(state: &SecretsState, secret_id: &str) -> Result<String, AwsErro
     Err(error::resource_not_found(secret_id))
 }
 
-fn build_arn(region: &str, account_id: &str, name: &str) -> String {
+fn build_arn(partition: &str, region: &str, account_id: &str, name: &str) -> String {
     let suffix = random_suffix(6);
-    format!("arn:aws:secretsmanager:{region}:{account_id}:secret:{name}-{suffix}")
+    format!("arn:{partition}:secretsmanager:{region}:{account_id}:secret:{name}-{suffix}")
 }
 
 fn secret_metadata(secret: &Secret) -> Value {
@@ -130,7 +130,7 @@ pub fn create_secret(
         }
     }
 
-    let arn = build_arn(&ctx.region, &ctx.account_id, name);
+    let arn = build_arn(&ctx.partition, &ctx.region, &ctx.account_id, name);
     let now = now_epoch_f64();
     // ClientRequestToken doubles as the VersionId (idempotency key) when
     // supplied; the SDK auto-generates one client-side otherwise. We

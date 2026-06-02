@@ -6,20 +6,23 @@ pub fn new_uuid() -> String {
 }
 
 /// Generate a stack ARN.
-pub fn stack_arn(region: &str, account_id: &str, stack_name: &str) -> String {
+pub fn stack_arn(partition: &str, region: &str, account_id: &str, stack_name: &str) -> String {
     let uid = new_uuid();
-    format!("arn:aws:cloudformation:{region}:{account_id}:stack/{stack_name}/{uid}")
+    format!("arn:{partition}:cloudformation:{region}:{account_id}:stack/{stack_name}/{uid}")
 }
 
 /// Generate a change set ARN.
 pub fn change_set_arn(
+    partition: &str,
     region: &str,
     account_id: &str,
     _stack_name: &str,
     change_set_name: &str,
 ) -> String {
     let uid = new_uuid();
-    format!("arn:aws:cloudformation:{region}:{account_id}:changeSet/{change_set_name}/{uid}")
+    format!(
+        "arn:{partition}:cloudformation:{region}:{account_id}:changeSet/{change_set_name}/{uid}"
+    )
 }
 
 /// Current UTC timestamp in ISO 8601 format.

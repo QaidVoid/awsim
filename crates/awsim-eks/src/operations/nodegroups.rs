@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
 use crate::state::{EksState, Nodegroup, now_secs};
@@ -126,13 +126,15 @@ pub fn create_nodegroup(
         _ => None,
     };
 
-    let arn = format!(
-        "arn:aws:eks:{}:{}:nodegroup/{}/{}/{}",
-        ctx.region,
-        ctx.account_id,
-        cluster,
-        name,
-        &uuid::Uuid::new_v4().simple().to_string()[..8]
+    let arn = arn::build(
+        ctx,
+        "eks",
+        format!(
+            "nodegroup/{}/{}/{}",
+            cluster,
+            name,
+            &uuid::Uuid::new_v4().simple().to_string()[..8]
+        ),
     );
     let ng = Nodegroup {
         cluster_name: cluster.to_string(),

@@ -35,6 +35,7 @@ pub struct SeedSecretsState {
     pub store: AccountRegionStore<SecretsState>,
     pub default_account: String,
     pub default_region: String,
+    pub default_partition: String,
 }
 
 const MAX_COUNT: u64 = 50_000;
@@ -62,6 +63,7 @@ pub async fn seed(
         .account
         .unwrap_or_else(|| state.default_account.clone());
     let region = body.region.unwrap_or_else(|| state.default_region.clone());
+    let partition = state.default_partition.clone();
     let prefix = body.prefix.unwrap_or_else(|| "seed".to_string());
 
     let result = tokio::task::spawn_blocking(move || {
@@ -80,7 +82,7 @@ pub async fn seed(
                 continue;
             }
             let arn = format!(
-                "arn:aws:secretsmanager:{region}:{account}:secret:{name}-{}",
+                "arn:{partition}:secretsmanager:{region}:{account}:secret:{name}-{}",
                 Uuid::new_v4().simple()
             );
             // Realistic-shaped credential blob — small JSON like what

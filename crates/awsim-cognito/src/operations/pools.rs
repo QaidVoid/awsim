@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use rand::Rng;
 use serde_json::{Value, json};
 use tracing::info;
@@ -18,10 +18,6 @@ fn now_epoch() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
-}
-
-fn pool_arn(region: &str, account_id: &str, pool_id: &str) -> String {
-    format!("arn:aws:cognito-idp:{region}:{account_id}:userpool/{pool_id}")
 }
 
 /// Generate a random 52-char alphanumeric client secret.
@@ -130,7 +126,7 @@ pub fn create_user_pool(
 
     let random = &Uuid::new_v4().to_string()[..8];
     let pool_id = format!("{0}_{1}", ctx.region, random);
-    let arn = pool_arn(&ctx.region, &ctx.account_id, &pool_id);
+    let arn = arn::build(ctx, "cognito-idp", format!("userpool/{pool_id}"));
     let now = now_epoch();
 
     // Parse policies from input

@@ -272,6 +272,111 @@ async fn ssm_put_parameter_arn_uses_context() {
     assert_arns_pinned(&out, "SSM GetParameter");
 }
 
+const PARTITION: &str = "aws-cn";
+
+/// Like [`ctx`] but with a non-default partition, to prove that a
+/// configured `AWSIM_PARTITION` propagates into emitted ARNs.
+fn ctx_part(service: &str, partition: &str) -> RequestContext {
+    let mut c = RequestContext::new_with_account(service, REGION, ACCT);
+    c.partition = partition.to_string();
+    c
+}
+
+/// Assert every collected ARN carries the expected partition segment
+/// (`arn:<partition>:...`).
+fn assert_arns_partition(value: &Value, label: &str, partition: &str) {
+    let mut arns = Vec::new();
+    collect_arns(value, &mut arns);
+    assert!(
+        !arns.is_empty(),
+        "{label} returned no ARNs to validate: {value}"
+    );
+    for arn in &arns {
+        let parts: Vec<&str> = arn.splitn(6, ':').collect();
+        assert!(
+            parts.len() == 6,
+            "{label} ARN `{arn}` is malformed: not enough segments"
+        );
+        assert_eq!(
+            parts[1], partition,
+            "{label}: ARN `{arn}` carries wrong partition (expected {partition})"
+        );
+    }
+}
+
+/// A non-default `AWSIM_PARTITION` (China `aws-cn` here) must surface in
+/// every ARN a service emits, across the construction sites swept onto
+/// the `arn::build*` helpers.
+#[tokio::test]
+async fn arns_honor_non_default_partition() {
+    let sns = awsim_sns::SnsService::new();
+    let out = sns
+        .handle(
+            "CreateTopic",
+            json!({"Name": "p-topic"}),
+            &ctx_part(sns.service_name(), PARTITION),
+        )
+        .await
+        .unwrap();
+    assert_arns_partition(&out, "SNS CreateTopic", PARTITION);
+
+    let ddb = awsim_dynamodb::DynamoDbService::new();
+    let out = ddb
+        .handle(
+            "CreateTable",
+            json!({
+                "TableName": "t",
+                "AttributeDefinitions": [{"AttributeName": "PK", "AttributeType": "S"}],
+                "KeySchema": [{"AttributeName": "PK", "KeyType": "HASH"}],
+                "BillingMode": "PAY_PER_REQUEST",
+            }),
+            &ctx_part(ddb.service_name(), PARTITION),
+        )
+        .await
+        .unwrap();
+    assert_arns_partition(&out, "DynamoDB CreateTable", PARTITION);
+
+    let kms = awsim_kms::KmsService::new();
+    let out = kms
+        .handle(
+            "CreateKey",
+            json!({}),
+            &ctx_part(kms.service_name(), PARTITION),
+        )
+        .await
+        .unwrap();
+    assert_arns_partition(&out, "KMS CreateKey", PARTITION);
+
+    let sm = awsim_secretsmanager::SecretsManagerService::new();
+    let out = sm
+        .handle(
+            "CreateSecret",
+            json!({"Name": "p-secret", "SecretString": "x"}),
+            &ctx_part(sm.service_name(), PARTITION),
+        )
+        .await
+        .unwrap();
+    assert_arns_partition(&out, "SecretsManager CreateSecret", PARTITION);
+
+    let ssm = awsim_ssm::SsmService::new();
+    ssm.handle(
+        "PutParameter",
+        json!({"Name": "p-param", "Value": "v", "Type": "String"}),
+        &ctx_part(ssm.service_name(), PARTITION),
+    )
+    .await
+    .unwrap();
+    let out = ssm
+        .handle(
+            "GetParameter",
+            json!({"Name": "p-param"}),
+            &ctx_part(ssm.service_name(), PARTITION),
+        )
+        .await
+        .unwrap();
+    assert_arns_partition(&out, "SSM GetParameter", PARTITION);
+}
+
 #[test]
 fn unused_block_on_silenced() {
     // Suppress dead-code lint on the sync executor when no helper

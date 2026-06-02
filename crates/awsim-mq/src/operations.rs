@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use awsim_core::arn;
 use awsim_core::idempotency::{Lookup, hash_request, validate_token};
 use awsim_core::pagination::{cap_max_results, paginate};
 use awsim_core::{AwsError, RequestContext};
@@ -42,14 +43,11 @@ fn validate_broker_name(name: &str) -> Result<(), AwsError> {
 }
 
 fn broker_arn(ctx: &RequestContext, id: &str) -> String {
-    format!("arn:aws:mq:{}:{}:broker:{}", ctx.region, ctx.account_id, id)
+    arn::build(ctx, "mq", format!("broker:{id}"))
 }
 
 fn config_arn(ctx: &RequestContext, id: &str) -> String {
-    format!(
-        "arn:aws:mq:{}:{}:configuration:{}",
-        ctx.region, ctx.account_id, id
-    )
+    arn::build(ctx, "mq", format!("configuration:{id}"))
 }
 
 fn broker_summary(b: &Broker) -> Value {

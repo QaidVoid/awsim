@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 use tracing::info;
 
@@ -58,10 +58,7 @@ pub fn create_cluster(
         .unwrap_or("default")
         .to_string();
 
-    let arn = format!(
-        "arn:aws:ecs:{}:{}:cluster/{}",
-        ctx.region, ctx.account_id, name
-    );
+    let arn = arn::build(ctx, "ecs", format!("cluster/{name}"));
 
     if state.clusters.contains_key(&name) {
         // Idempotent: return existing

@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 use tracing::info;
 
@@ -352,10 +352,7 @@ pub fn register_task_definition(
     let revision = {
         let mut revisions = state.task_definitions.entry(family.clone()).or_default();
         let rev = revisions.len() as u32 + 1;
-        let arn = format!(
-            "arn:aws:ecs:{}:{}:task-definition/{}:{}",
-            ctx.region, ctx.account_id, family, rev
-        );
+        let arn = arn::build(ctx, "ecs", format!("task-definition/{family}:{rev}"));
         let td = TaskDefinition {
             family: family.clone(),
             revision: rev,

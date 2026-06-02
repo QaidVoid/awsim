@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 use tracing::info;
 
@@ -111,10 +111,7 @@ pub fn create_service(
     })?;
 
     let cluster_arn = cluster.arn.clone();
-    let service_arn = format!(
-        "arn:aws:ecs:{}:{}:service/{}/{}",
-        ctx.region, ctx.account_id, cluster_name, service_name
-    );
+    let service_arn = arn::build(ctx, "ecs", format!("service/{cluster_name}/{service_name}"));
 
     let tags = crate::operations::tags::parse_tags(input.get("tags"));
     let propagate_tags = input["propagateTags"].as_str().map(str::to_string);

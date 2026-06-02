@@ -3,7 +3,7 @@ use crate::{
     ids::now_iso8601,
     state::{IamState, OidcProvider},
 };
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
 use super::super::operations::tags::parse_tags;
@@ -58,10 +58,7 @@ pub fn create_open_id_connect_provider(
         .or_else(|| url_clean.strip_prefix("http://"))
         .unwrap_or(url_clean);
 
-    let arn = format!(
-        "arn:aws:iam::{}:oidc-provider/{}",
-        ctx.account_id, url_without_scheme
-    );
+    let arn = arn::build_global(ctx, "iam", format!("oidc-provider/{url_without_scheme}"));
 
     if state.oidc_providers.contains_key(&arn) {
         return Err(entity_already_exists("OIDCProvider", url));

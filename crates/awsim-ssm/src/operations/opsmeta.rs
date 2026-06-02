@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
 use crate::state::{SsmOpsMetadata, SsmState};
@@ -13,11 +13,10 @@ fn now_epoch_secs() -> u64 {
 }
 
 fn build_arn(ctx: &RequestContext, resource_id: &str) -> String {
-    format!(
-        "arn:aws:ssm:{}:{}:opsmetadata/{}",
-        ctx.region,
-        ctx.account_id,
-        resource_id.trim_start_matches('/')
+    arn::build(
+        ctx,
+        "ssm",
+        format!("opsmetadata/{}", resource_id.trim_start_matches('/')),
     )
 }
 

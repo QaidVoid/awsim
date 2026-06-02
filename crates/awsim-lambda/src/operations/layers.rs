@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
 use crate::{
@@ -53,10 +53,7 @@ pub fn publish_layer_version(
         ));
     };
 
-    let layer_arn = format!(
-        "arn:aws:lambda:{}:{}:layer:{}",
-        ctx.region, ctx.account_id, layer_name
-    );
+    let layer_arn = arn::build(ctx, "lambda", format!("layer:{layer_name}"));
 
     let mut versions = state.layers.entry(layer_name.to_string()).or_default();
 

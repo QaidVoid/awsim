@@ -31,7 +31,7 @@ pub fn create_db_parameter_group(
         return Err(db_parameter_group_already_exists(name));
     }
 
-    let arn = parameter_group_arn(&ctx.region, &ctx.account_id, name);
+    let arn = parameter_group_arn(&ctx.partition, &ctx.region, &ctx.account_id, name);
     let pg = DbParameterGroup {
         name: name.to_string(),
         arn,

@@ -263,7 +263,7 @@ pub fn create_db_instance(
         None => default_license_model(engine).map(str::to_string),
     };
 
-    let arn = instance_arn(&ctx.region, &ctx.account_id, identifier);
+    let arn = instance_arn(&ctx.partition, &ctx.region, &ctx.account_id, identifier);
     let address = instance_endpoint(identifier, &ctx.region);
     let port = default_port(engine);
 
@@ -467,7 +467,7 @@ pub fn create_db_instance_read_replica(
     let instance_class = opt_str(input, "DBInstanceClass")
         .unwrap_or(&source.instance_class)
         .to_string();
-    let arn = instance_arn(&ctx.region, &ctx.account_id, identifier);
+    let arn = instance_arn(&ctx.partition, &ctx.region, &ctx.account_id, identifier);
     let address = instance_endpoint(identifier, &ctx.region);
     let port = default_port(&source.engine);
 

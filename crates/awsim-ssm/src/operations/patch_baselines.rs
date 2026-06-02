@@ -221,7 +221,7 @@ pub fn register_default_patch_baseline(
 pub fn get_default_patch_baseline(
     state: &SsmState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let os = input["OperatingSystem"]
         .as_str()
@@ -234,7 +234,8 @@ pub fn get_default_patch_baseline(
         .map(|v| v.value().clone())
         .unwrap_or_else(|| {
             format!(
-                "arn:aws:ssm:us-east-1::patchbaseline/pb-default-{}",
+                "arn:{}:ssm:us-east-1::patchbaseline/pb-default-{}",
+                ctx.partition,
                 os.to_lowercase()
             )
         });

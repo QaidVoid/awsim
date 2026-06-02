@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
 use crate::state::EventBridgeState;
@@ -10,7 +10,7 @@ use crate::state::EventBridgeState;
 pub fn describe_event_source(
     _state: &EventBridgeState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let name = input["Name"]
         .as_str()
@@ -18,7 +18,7 @@ pub fn describe_event_source(
 
     Ok(json!({
         "Name": name,
-        "Arn": format!("arn:aws:events:::event-source/{}", name),
+        "Arn": arn::build_partition(ctx, "events", format!("event-source/{name}")),
         "State": "ACTIVE",
         "CreatedBy": "aws",
         "CreationTime": "0",
@@ -51,10 +51,7 @@ pub fn put_partner_event_source(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Name is required"))?;
 
-    let arn = format!(
-        "arn:aws:events:{}:{}:event-source/{}",
-        ctx.region, ctx.account_id, name
-    );
+    let arn = arn::build(ctx, "events", format!("event-source/{name}"));
 
     Ok(json!({ "EventSourceArn": arn }))
 }

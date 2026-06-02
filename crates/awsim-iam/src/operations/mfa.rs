@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
 use crate::{
@@ -36,7 +36,7 @@ pub fn create_virtual_mfa_device(
     let path = normalize_path(opt_str(input, "Path"));
     let tags = parse_tags(input)?;
 
-    let serial_number = format!("arn:aws:iam::{}:mfa{}{}", ctx.account_id, path, device_name);
+    let serial_number = arn::build_global(ctx, "iam", format!("mfa{path}{device_name}"));
 
     if state.virtual_mfa_devices.contains_key(&serial_number) {
         return Err(entity_already_exists("VirtualMFADevice", device_name));

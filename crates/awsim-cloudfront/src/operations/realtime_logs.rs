@@ -45,6 +45,7 @@ pub fn create_realtime_log_config(
         })
         .unwrap_or_default();
 
+    // Stub: placeholder account and partition; this op has no RequestContext.
     let arn = format!("arn:aws:cloudfront::123456789012:realtime-log-config/{name}");
     let cfg = RealtimeLogConfig {
         arn: arn.clone(),

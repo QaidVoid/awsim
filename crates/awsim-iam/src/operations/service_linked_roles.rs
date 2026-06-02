@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
@@ -49,7 +49,7 @@ pub fn create_service_linked_role(
     );
 
     let role_id = new_role_id();
-    let arn = format!("arn:aws:iam::{}:role{}{}", ctx.account_id, path, role_name);
+    let arn = arn::build_global(ctx, "iam", format!("role{path}{role_name}"));
 
     let role = Role {
         role_name: role_name.clone(),

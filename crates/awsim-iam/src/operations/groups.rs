@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
@@ -36,10 +36,7 @@ pub fn create_group(
     }
 
     let group_id = new_group_id();
-    let arn = format!(
-        "arn:aws:iam::{}:group{}{}",
-        ctx.account_id, path, group_name
-    );
+    let arn = arn::build_global(ctx, "iam", format!("group{path}{group_name}"));
 
     let group = Group {
         group_name: group_name.to_string(),

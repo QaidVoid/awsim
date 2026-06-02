@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
 use crate::state::{EventBridgeState, Replay};
@@ -109,10 +109,7 @@ pub fn start_replay(
         ));
     }
 
-    let arn = format!(
-        "arn:aws:events:{}:{}:replay/{}",
-        ctx.region, ctx.account_id, name
-    );
+    let arn = arn::build(ctx, "events", format!("replay/{name}"));
 
     let now = now_iso8601();
     let replay = Replay {

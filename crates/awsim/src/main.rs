@@ -1399,6 +1399,7 @@ async fn async_main() -> Result<()> {
         store: secrets_store.clone(),
         default_account: cli.account_id.clone(),
         default_region: cli.region.clone(),
+        default_partition: cli.partition.clone(),
     });
     let seed_secrets_router: axum::Router<()> = axum::Router::new()
         .route(
@@ -1410,6 +1411,7 @@ async fn async_main() -> Result<()> {
         store: sqs_store.clone(),
         default_account: cli.account_id.clone(),
         default_region: cli.region.clone(),
+        default_partition: cli.partition.clone(),
         default_port: cli.port,
     });
     let seed_sqs_router: axum::Router<()> = axum::Router::new()

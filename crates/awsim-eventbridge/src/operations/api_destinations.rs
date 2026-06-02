@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
 use crate::state::{ApiDestination, EventBridgeState};
@@ -51,10 +51,7 @@ pub fn create_api_destination(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "HttpMethod is required"))?;
 
-    let arn = format!(
-        "arn:aws:events:{}:{}:api-destination/{}",
-        ctx.region, ctx.account_id, name
-    );
+    let arn = arn::build(ctx, "events", format!("api-destination/{name}"));
 
     let now = now_iso8601();
     let dest = ApiDestination {

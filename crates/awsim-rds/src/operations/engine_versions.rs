@@ -249,8 +249,14 @@ const CUSTOM_ENGINE_FAMILIES: &[&str] = &[
     "custom-sqlserver-web",
 ];
 
-fn custom_engine_version_arn(region: &str, account: &str, engine: &str, version: &str) -> String {
-    format!("arn:aws:rds:{region}:{account}:engine-version:{engine}:{version}")
+fn custom_engine_version_arn(
+    partition: &str,
+    region: &str,
+    account: &str,
+    engine: &str,
+    version: &str,
+) -> String {
+    format!("arn:{partition}:rds:{region}:{account}:engine-version:{engine}:{version}")
 }
 
 fn custom_engine_version_to_value(cev: &DbCustomEngineVersion) -> Value {
@@ -307,7 +313,13 @@ pub fn create_custom_db_engine_version(
         ));
     }
 
-    let arn = custom_engine_version_arn(&ctx.region, &ctx.account_id, engine, engine_version);
+    let arn = custom_engine_version_arn(
+        &ctx.partition,
+        &ctx.region,
+        &ctx.account_id,
+        engine,
+        engine_version,
+    );
     let cev = DbCustomEngineVersion {
         engine: engine.to_string(),
         engine_version: engine_version.to_string(),

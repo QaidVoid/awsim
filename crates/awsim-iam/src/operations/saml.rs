@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
 use crate::{
@@ -31,7 +31,7 @@ pub fn create_saml_provider(
     let saml_metadata_document = require_str(input, "SAMLMetadataDocument")?;
     let tags = parse_tags(input)?;
 
-    let arn = format!("arn:aws:iam::{}:saml-provider/{}", ctx.account_id, name);
+    let arn = arn::build_global(ctx, "iam", format!("saml-provider/{name}"));
 
     if state.saml_providers.contains_key(&arn) {
         return Err(entity_already_exists("SAMLProvider", name));

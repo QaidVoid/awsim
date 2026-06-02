@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 use tracing::info;
 
@@ -38,10 +38,7 @@ pub fn create_event_bus(
         ));
     }
 
-    let arn = format!(
-        "arn:aws:events:{}:{}:event-bus/{}",
-        ctx.region, ctx.account_id, name
-    );
+    let arn = arn::build(ctx, "events", format!("event-bus/{name}"));
 
     let bus = EventBus::new(name.to_string(), arn.clone());
     state.event_buses.insert(name.to_string(), bus);
@@ -180,7 +177,7 @@ pub fn put_permission(
     let principal_value = if principal == "*" {
         json!("*")
     } else {
-        json!({ "AWS": format!("arn:aws:iam::{principal}:root") })
+        json!({ "AWS": format!("arn:{}:iam::{principal}:root", ctx.partition) })
     };
     stmts.push(json!({
         "Sid": statement_id,
@@ -279,10 +276,7 @@ pub fn list_event_buses(
 /// Called lazily on first access.
 pub fn ensure_default_bus(state: &EventBridgeState, ctx: &RequestContext) {
     if !state.event_buses.contains_key("default") {
-        let arn = format!(
-            "arn:aws:events:{}:{}:event-bus/default",
-            ctx.region, ctx.account_id
-        );
+        let arn = arn::build(ctx, "events", "event-bus/default");
         state.event_buses.insert(
             "default".to_string(),
             EventBus::new("default".to_string(), arn),

@@ -577,7 +577,7 @@ pub fn create_stack(
     validate_capabilities(&parsed, &template_body, &supplied_capabilities)?;
 
     let now = now_iso8601();
-    let stack_id = stack_arn(&ctx.region, &ctx.account_id, &stack_name);
+    let stack_id = stack_arn(&ctx.partition, &ctx.region, &ctx.account_id, &stack_name);
     let resources = build_resources(&parsed, &now);
     let events = build_events(&resources, &stack_id, &stack_name, &now);
 

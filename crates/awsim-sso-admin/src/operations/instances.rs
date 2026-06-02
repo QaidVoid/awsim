@@ -8,7 +8,7 @@ pub fn list_instances(
     _input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    state.ensure_default_instance(&ctx.account_id, &ctx.region);
+    state.ensure_default_instance(&ctx.partition, &ctx.account_id, &ctx.region);
 
     let instances: Vec<Value> = state
         .instances

@@ -59,6 +59,7 @@ pub fn create_rule(
     let actions = parse_actions(input, "Actions")?;
 
     let arn = rule_arn(
+        &ctx.partition,
         &ctx.region,
         &ctx.account_id,
         &lb_name,

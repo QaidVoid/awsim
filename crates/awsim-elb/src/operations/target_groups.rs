@@ -110,7 +110,7 @@ pub fn create_target_group(
         validate_grpc_matcher(grpc)?;
     }
 
-    let arn = tg_arn(&ctx.region, &ctx.account_id, &name);
+    let arn = tg_arn(&ctx.partition, &ctx.region, &ctx.account_id, &name);
 
     let tags = super::tags::parse_tags_input(input)?;
 

@@ -738,6 +738,10 @@ fn principal_set_matches(p: &Principal, req: &AuthzRequest) -> bool {
             entry == "*"
                 || entry == req.principal_arn
                 || entry == req.principal_account
+                // Comparison value, not an emitted ARN (normalizes a bare
+                // account principal to its root form). Partition stays literal:
+                // AuthzRequest carries no partition and this crate has no
+                // awsim-core dependency.
                 || entry == &format!("arn:aws:iam::{}:root", req.principal_account)
         })
     };

@@ -45,8 +45,13 @@ pub struct SsoAdminState {
 }
 
 impl SsoAdminState {
-    pub fn ensure_default_instance(&self, account_id: &str, _region: &str) -> Instance {
-        let arn = format!("arn:aws:sso:::instance/ssoins-{account_id}");
+    pub fn ensure_default_instance(
+        &self,
+        partition: &str,
+        account_id: &str,
+        _region: &str,
+    ) -> Instance {
+        let arn = format!("arn:{partition}:sso:::instance/ssoins-{account_id}");
         if let Some(i) = self.instances.get(&arn) {
             return i.clone();
         }

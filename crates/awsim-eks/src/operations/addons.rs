@@ -48,8 +48,8 @@ fn validate_configuration_values(value: &str) -> Result<(), AwsError> {
     Ok(())
 }
 
-fn addon_arn(region: &str, account: &str, cluster: &str, addon: &str) -> String {
-    format!("arn:aws:eks:{region}:{account}:addon/{cluster}/{addon}")
+fn addon_arn(partition: &str, region: &str, account: &str, cluster: &str, addon: &str) -> String {
+    format!("arn:{partition}:eks:{region}:{account}:addon/{cluster}/{addon}")
 }
 
 fn serialize_addon(a: &Addon) -> Value {
@@ -120,7 +120,13 @@ pub fn create_addon(
     let addon = Addon {
         cluster_name: cluster_name.to_string(),
         addon_name: addon_name.to_string(),
-        addon_arn: addon_arn(&ctx.region, &ctx.account_id, cluster_name, addon_name),
+        addon_arn: addon_arn(
+            &ctx.partition,
+            &ctx.region,
+            &ctx.account_id,
+            cluster_name,
+            addon_name,
+        ),
         addon_version: input["addonVersion"]
             .as_str()
             .unwrap_or("v1.0.0-eksbuild.1")

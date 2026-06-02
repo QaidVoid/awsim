@@ -15,7 +15,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler};
+use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler, arn};
 use serde_json::Value;
 use tracing::{debug, warn};
 
@@ -267,6 +267,8 @@ impl DynamoDbService {
             let table_name = format!("{}-{}-{}", input.id_prefix, t, Uuid::new_v4().simple());
             let table = state::Table {
                 name: table_name.clone(),
+                // Partition left literal: the seed input carries account+region
+                // but no partition, and no RequestContext reaches this path.
                 arn: format!(
                     "arn:aws:dynamodb:{}:{}:table/{table_name}",
                     input.region, input.account
@@ -811,7 +813,6 @@ impl ServiceHandler for DynamoDbService {
     }
 
     fn iam_resource(&self, operation: &str, input: &Value, ctx: &RequestContext) -> Option<String> {
-        let prefix = format!("arn:aws:dynamodb:{}:{}", ctx.region, ctx.account_id);
         match operation {
             "ListTables"
             | "DescribeEndpoints"
@@ -827,7 +828,11 @@ impl ServiceHandler for DynamoDbService {
                     Some(stream_arn.to_string())
                 } else {
                     let table = input.get("TableName").and_then(|v| v.as_str())?;
-                    Some(format!("{prefix}:table/{table}/stream/*"))
+                    Some(arn::build(
+                        ctx,
+                        "dynamodb",
+                        format!("table/{table}/stream/*"),
+                    ))
                 }
             }
             "DescribeBackup" | "DeleteBackup" | "RestoreTableFromBackup" => {
@@ -835,7 +840,11 @@ impl ServiceHandler for DynamoDbService {
                     Some(arn.to_string())
                 } else {
                     let table = input.get("TableName").and_then(|v| v.as_str())?;
-                    Some(format!("{prefix}:table/{table}/backup/*"))
+                    Some(arn::build(
+                        ctx,
+                        "dynamodb",
+                        format!("table/{table}/backup/*"),
+                    ))
                 }
             }
             "DescribeExport" => input
@@ -852,7 +861,7 @@ impl ServiceHandler for DynamoDbService {
                 .map(|s| s.to_string()),
             _ => {
                 let table = input.get("TableName").and_then(|v| v.as_str())?;
-                Some(format!("{prefix}:table/{table}"))
+                Some(arn::build(ctx, "dynamodb", format!("table/{table}")))
             }
         }
     }

@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 use tracing::info;
 
@@ -58,10 +58,7 @@ pub fn put_rule(
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
 
-    let arn = format!(
-        "arn:aws:events:{}:{}:rule/{}/{}",
-        ctx.region, ctx.account_id, bus_name, name
-    );
+    let arn = arn::build(ctx, "events", format!("rule/{bus_name}/{name}"));
 
     // AWS rejects mutations to a managed rule unless the caller is
     // the owning service. External callers (no ManagedBy on the

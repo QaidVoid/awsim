@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
 use crate::{
@@ -70,10 +70,7 @@ pub fn add_permission(
     let source_arn = input.get("SourceArn").and_then(|v| v.as_str());
     let source_account = opt_str(input, "SourceAccount");
 
-    let function_arn = format!(
-        "arn:aws:lambda:{}:{}:function:{}",
-        ctx.region, ctx.account_id, name
-    );
+    let function_arn = arn::build(ctx, "lambda", format!("function:{name}"));
 
     let mut condition = serde_json::Map::new();
     if let Some(arn) = source_arn {
@@ -100,7 +97,7 @@ pub fn add_permission(
     } else if principal.starts_with("arn:aws:iam::") {
         json!({ "AWS": principal })
     } else if principal.len() == 12 && principal.chars().all(|c| c.is_ascii_digit()) {
-        json!({ "AWS": format!("arn:aws:iam::{principal}:root") })
+        json!({ "AWS": format!("arn:{}:iam::{principal}:root", ctx.partition) })
     } else {
         json!({ "Service": principal })
     };

@@ -73,7 +73,7 @@ pub fn delete_alias(
 pub fn list_aliases(
     state: &KmsState,
     _input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let aliases: Vec<Value> = state
         .aliases
@@ -81,7 +81,10 @@ pub fn list_aliases(
         .map(|entry| {
             let alias_name = entry.key().clone();
             let target_key_id = entry.value().clone();
-            let alias_arn = format!("arn:aws:kms:us-east-1:000000000000:{alias_name}");
+            let alias_arn = format!(
+                "arn:{}:kms:us-east-1:000000000000:{alias_name}",
+                ctx.partition
+            );
             json!({
                 "AliasName": alias_name,
                 "AliasArn": alias_arn,

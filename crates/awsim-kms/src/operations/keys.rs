@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -46,10 +46,7 @@ pub fn create_key(
     let initial_enabled = initial_state == "Enabled";
 
     let key_id = Uuid::new_v4().to_string();
-    let arn = format!(
-        "arn:aws:kms:{}:{}:key/{}",
-        ctx.region, ctx.account_id, key_id
-    );
+    let arn = arn::build(ctx, "kms", format!("key/{key_id}"));
     let secret = random_secret(32);
     let creation_date = now_epoch_f64();
 

@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
 use crate::state::{Archive, EventBridgeState};
@@ -41,10 +41,7 @@ pub fn create_archive(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "EventSourceArn is required"))?;
 
-    let arn = format!(
-        "arn:aws:events:{}:{}:archive/{}",
-        ctx.region, ctx.account_id, name
-    );
+    let arn = arn::build(ctx, "events", format!("archive/{name}"));
 
     let archive = Archive {
         name: name.to_string(),

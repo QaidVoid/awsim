@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use awsim_core::{
-    AccountRegionStore, AwsError, KmsKeyLookup, Protocol, RequestContext, ServiceHandler,
+    AccountRegionStore, AwsError, KmsKeyLookup, Protocol, RequestContext, ServiceHandler, arn,
 };
 use serde_json::Value;
 use tracing::debug;
@@ -238,17 +238,11 @@ impl ServiceHandler for SnsService {
             | "VerifySMSSandboxPhoneNumber" => Some("*".to_string()),
             "CreateTopic" => {
                 let name = input.get("Name").and_then(|v| v.as_str())?;
-                Some(format!(
-                    "arn:aws:sns:{}:{}:{}",
-                    ctx.region, ctx.account_id, name
-                ))
+                Some(arn::build(ctx, "sns", name))
             }
             "CreatePlatformApplication" => {
                 let name = input.get("Name").and_then(|v| v.as_str())?;
-                Some(format!(
-                    "arn:aws:sns:{}:{}:app/{}",
-                    ctx.region, ctx.account_id, name
-                ))
+                Some(arn::build(ctx, "sns", format!("app/{name}")))
             }
             _ => {
                 if let Some(arn) = input.get("TopicArn").and_then(|v| v.as_str()) {

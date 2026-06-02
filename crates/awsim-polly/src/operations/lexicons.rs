@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
 use crate::state::{Lexicon, PollyState};
@@ -61,7 +61,7 @@ pub fn get_lexicon(
             "Alphabet": "ipa",
             "LanguageCode": "en-US",
             "LastModified": lex.last_modified,
-            "LexiconArn": format!("arn:aws:polly:{}:{}:lexicon/{}", ctx.region, ctx.account_id, lex.name),
+            "LexiconArn": arn::build(ctx, "polly", format!("lexicon/{}", lex.name)),
             "LexemesCount": 0,
             "Size": lex.content.len(),
         }
@@ -84,7 +84,7 @@ pub fn list_lexicons(
                     "Alphabet": "ipa",
                     "LanguageCode": "en-US",
                     "LastModified": l.last_modified,
-                    "LexiconArn": format!("arn:aws:polly:{}:{}:lexicon/{}", ctx.region, ctx.account_id, l.name),
+                    "LexiconArn": arn::build(ctx, "polly", format!("lexicon/{}", l.name)),
                     "LexemesCount": 0,
                     "Size": l.content.len(),
                 }

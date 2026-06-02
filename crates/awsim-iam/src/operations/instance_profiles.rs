@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
 use crate::{
@@ -52,10 +52,7 @@ pub fn create_instance_profile(
     let ip = InstanceProfile {
         instance_profile_name: name.to_string(),
         instance_profile_id: new_instance_profile_id(),
-        arn: format!(
-            "arn:aws:iam::{}:instance-profile{}{}",
-            ctx.account_id, path, name
-        ),
+        arn: arn::build_global(ctx, "iam", format!("instance-profile{path}{name}")),
         path,
         create_date: now_iso8601(),
         roles: Vec::new(),

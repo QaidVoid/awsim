@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use awsim_core::{AwsError, KmsKeyLookup, RequestContext};
+use awsim_core::{AwsError, KmsKeyLookup, RequestContext, arn};
 use serde_json::{Value, json};
 use tracing::info;
 
@@ -38,7 +38,7 @@ pub fn create_topic(
         }
     }
 
-    let arn = format!("arn:aws:sns:{}:{}:{}", ctx.region, ctx.account_id, name);
+    let arn = arn::build(ctx, "sns", name);
 
     // Return existing if already present
     if state.topics.contains_key(&arn) {

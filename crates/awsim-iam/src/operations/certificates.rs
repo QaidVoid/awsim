@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
 use crate::{
@@ -48,10 +48,7 @@ pub fn upload_server_certificate(
     }
 
     let cert_id = new_server_certificate_id();
-    let arn = format!(
-        "arn:aws:iam::{}:server-certificate{}{}",
-        ctx.account_id, path, name
-    );
+    let arn = arn::build_global(ctx, "iam", format!("server-certificate{path}{name}"));
 
     let cert = ServerCertificate {
         server_certificate_name: name.to_string(),

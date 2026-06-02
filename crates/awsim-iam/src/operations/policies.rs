@@ -92,8 +92,8 @@ fn policy_to_value(p: &Policy) -> Value {
     v
 }
 
-fn build_policy_arn(account_id: &str, path: &str, policy_name: &str) -> String {
-    format!("arn:aws:iam::{}:policy{}{}", account_id, path, policy_name)
+fn build_policy_arn(partition: &str, account_id: &str, path: &str, policy_name: &str) -> String {
+    format!("arn:{partition}:iam::{account_id}:policy{path}{policy_name}")
 }
 
 // ── Managed policy CRUD ─────────────────────────────────────────────────────
@@ -119,7 +119,7 @@ pub fn create_policy(
     }
     validate_policy_document(policy_document)?;
 
-    let arn = build_policy_arn(&ctx.account_id, &path, policy_name);
+    let arn = build_policy_arn(&ctx.partition, &ctx.account_id, &path, policy_name);
 
     if state.policies.contains_key(&arn) {
         return Err(entity_already_exists("Policy", policy_name));

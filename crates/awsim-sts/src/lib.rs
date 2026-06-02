@@ -1,6 +1,6 @@
 use std::sync::{Arc, OnceLock};
 
-use awsim_core::{AwsError, Protocol, RequestContext, ServiceHandler};
+use awsim_core::{AwsError, Protocol, RequestContext, ServiceHandler, arn};
 use serde_json::{Value, json};
 use tracing::debug;
 
@@ -89,20 +89,20 @@ impl StsService {
             .and_then(|k| self.sessions.lookup(k))
         {
             let assumed_arn = format!(
-                "arn:aws:sts::{}:assumed-role/{}/{}",
-                session.account_id, session.role_name, session.session_name
+                "arn:{}:sts::{}:assumed-role/{}/{}",
+                ctx.partition, session.account_id, session.role_name, session.session_name
             );
             (session.assumed_role_id, assumed_arn, session.account_id)
         } else {
             match ctx.access_key.as_deref() {
                 Some(key) if !key.is_empty() => (
                     key.to_string(),
-                    format!("arn:aws:iam::{}:user/{}", ctx.account_id, key),
+                    arn::build_global(ctx, "iam", format!("user/{key}")),
                     ctx.account_id.clone(),
                 ),
                 _ => (
                     ctx.account_id.clone(),
-                    format!("arn:aws:iam::{}:root", ctx.account_id),
+                    arn::build_global(ctx, "iam", "root"),
                     ctx.account_id.clone(),
                 ),
             }
@@ -149,6 +149,7 @@ impl StsService {
         let session_tags = extract_session_tags(input);
         let transitive_tag_keys = extract_transitive_tag_keys(input);
         let (credentials, assumed_role_user, session) = generate_assumed_role_output(
+            &ctx.partition,
             role_arn,
             session_name,
             &ctx.account_id,
@@ -235,6 +236,7 @@ impl StsService {
         let inline_policy = extract_inline_session_policy(input);
         let policy_arns = extract_session_policy_arns(input);
         let (credentials, assumed_role_user, session) = generate_assumed_role_output(
+            &ctx.partition,
             role_arn,
             session_name,
             &ctx.account_id,
@@ -269,7 +271,7 @@ impl StsService {
         debug!(target_principal = %target_principal, "AssumeRoot");
 
         let credentials = generate_credentials(duration);
-        let source_identity = format!("arn:aws:iam::{}:root", ctx.account_id);
+        let source_identity = arn::build_global(ctx, "iam", "root");
 
         Ok(json!({
             "Credentials": credentials,
@@ -292,7 +294,7 @@ impl StsService {
         debug!(name = %name, duration, "GetFederationToken");
 
         let credentials = generate_credentials(duration);
-        let federated_user_arn = format!("arn:aws:sts::{}:federated-user/{}", ctx.account_id, name);
+        let federated_user_arn = arn::build_global(ctx, "sts", format!("federated-user/{name}"));
         let federated_user_id = format!("{}:{}", ctx.account_id, name);
 
         Ok(json!({
@@ -435,6 +437,7 @@ impl StsService {
         let inline_policy = extract_inline_session_policy(input);
         let policy_arns = extract_session_policy_arns(input);
         let (credentials, assumed_role_user, session) = generate_assumed_role_output(
+            &ctx.partition,
             role_arn,
             &session_name,
             &ctx.account_id,
@@ -780,8 +783,8 @@ fn evaluate_trust_policy(
     // unauthenticated callers fall through as the account root, mirroring
     // GetCallerIdentity's existing behaviour.
     let principal_arn = match ctx.access_key.as_deref() {
-        Some(k) if !k.is_empty() => format!("arn:aws:iam::{}:user/{}", ctx.account_id, k),
-        _ => format!("arn:aws:iam::{}:root", ctx.account_id),
+        Some(k) if !k.is_empty() => arn::build_global(ctx, "iam", format!("user/{k}")),
+        _ => arn::build_global(ctx, "iam", "root"),
     };
 
     // Trust policies key off these condition variables for cross-account
@@ -1031,6 +1034,7 @@ fn generate_credentials(duration_seconds: u64) -> Value {
 /// the assumed-role principal.
 #[allow(clippy::too_many_arguments)]
 fn generate_assumed_role_output(
+    partition: &str,
     role_arn: &str,
     session_name: &str,
     account_id: &str,
@@ -1045,7 +1049,7 @@ fn generate_assumed_role_output(
 
     let role_name = sessions::role_name_from_arn(role_arn);
     let assumed_role_arn =
-        format!("arn:aws:sts::{account_id}:assumed-role/{role_name}/{session_name}");
+        format!("arn:{partition}:sts::{account_id}:assumed-role/{role_name}/{session_name}");
 
     let credentials = generate_credentials(duration_seconds);
     let access_key = credentials["AccessKeyId"]

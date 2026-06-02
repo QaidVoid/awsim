@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
 use crate::state::{CloudTrailState, Trail, TrailStatus, now_secs};
@@ -14,20 +14,17 @@ pub fn create_trail(
     let bucket = input["S3BucketName"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "S3BucketName is required"))?;
-    let arn = format!(
-        "arn:aws:cloudtrail:{}:{}:trail/{}",
-        ctx.region, ctx.account_id, name
-    );
+    let trail_arn = arn::build(ctx, "cloudtrail", format!("trail/{name}"));
 
     let trail = Trail {
         name: name.to_string(),
-        arn: arn.clone(),
+        arn: trail_arn,
         s3_bucket_name: bucket.to_string(),
         s3_key_prefix: input["S3KeyPrefix"].as_str().map(String::from),
         sns_topic_name: input["SnsTopicName"].as_str().map(String::from),
         sns_topic_arn: input["SnsTopicName"]
             .as_str()
-            .map(|t| format!("arn:aws:sns:{}:{}:{}", ctx.region, ctx.account_id, t)),
+            .map(|t| arn::build(ctx, "sns", t)),
         include_global_service_events: input["IncludeGlobalServiceEvents"]
             .as_bool()
             .unwrap_or(true),

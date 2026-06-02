@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
@@ -36,7 +36,7 @@ pub fn create_user(
     }
 
     let user_id = new_user_id();
-    let arn = format!("arn:aws:iam::{}:user{}{}", ctx.account_id, path, user_name);
+    let arn = arn::build_global(ctx, "iam", format!("user{path}{user_name}"));
 
     let user = User {
         user_name: user_name.to_string(),

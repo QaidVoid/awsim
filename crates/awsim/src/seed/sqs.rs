@@ -36,6 +36,7 @@ pub struct SeedSqsState {
     pub store: AccountRegionStore<SqsState>,
     pub default_account: String,
     pub default_region: String,
+    pub default_partition: String,
     pub default_port: u16,
 }
 
@@ -75,6 +76,7 @@ pub async fn seed(
         .account
         .unwrap_or_else(|| state.default_account.clone());
     let region = body.region.unwrap_or_else(|| state.default_region.clone());
+    let partition = state.default_partition.clone();
     let prefix = body.prefix.unwrap_or_else(|| "seed".to_string());
     let port = state.default_port;
     let messages_per_queue = body.messages_per_queue;
@@ -98,7 +100,7 @@ pub async fn seed(
                 continue;
             }
             let url = format!("http://localhost:{port}/{account}/{name}");
-            let arn = format!("arn:aws:sqs:{region}:{account}:{name}");
+            let arn = format!("arn:{partition}:sqs:{region}:{account}:{name}");
             let mut queue = Queue::new(
                 name.clone(),
                 url,

@@ -578,7 +578,7 @@ impl ServiceHandler for IamService {
     }
 
     fn iam_resource(&self, operation: &str, input: &Value, ctx: &RequestContext) -> Option<String> {
-        let prefix = format!("arn:aws:iam::{}", ctx.account_id);
+        let prefix = format!("arn:{}:iam::{}", ctx.partition, ctx.account_id);
         match operation {
             "ListUsers"
             | "ListGroups"

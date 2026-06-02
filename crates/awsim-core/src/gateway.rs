@@ -413,10 +413,12 @@ pub async fn dispatch_request(
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0);
-    let principal_arn = meta
-        .access_key
-        .as_ref()
-        .map(|ak| format!("arn:aws:iam::{}:access-key/{}", meta.account_id, ak));
+    let principal_arn = meta.access_key.as_ref().map(|ak| {
+        format!(
+            "arn:{}:iam::{}:access-key/{}",
+            state.default_partition, meta.account_id, ak
+        )
+    });
 
     let event = RequestEvent {
         id: request_id.clone(),

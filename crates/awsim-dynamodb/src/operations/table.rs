@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 use tracing::info;
 
@@ -418,10 +418,7 @@ pub fn create_table(
     }
     validate_key_schema_against_attrs(&attribute_definitions, &owners)?;
 
-    let arn = format!(
-        "arn:aws:dynamodb:{}:{}:table/{}",
-        ctx.region, ctx.account_id, table_name
-    );
+    let arn = arn::build(ctx, "dynamodb", format!("table/{table_name}"));
 
     // Parse optional StreamSpecification.
     let (stream_enabled, stream_arn, stream_view_type) = {
@@ -440,9 +437,10 @@ pub fn create_table(
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs();
-                let stream_arn = format!(
-                    "arn:aws:dynamodb:{}:{}:table/{}/stream/{}",
-                    ctx.region, ctx.account_id, table_name, timestamp
+                let stream_arn = arn::build(
+                    ctx,
+                    "dynamodb",
+                    format!("table/{table_name}/stream/{timestamp}"),
                 );
                 (true, Some(stream_arn), Some(view_type))
             } else {
@@ -713,9 +711,10 @@ pub fn update_table(
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs();
-            table.stream_arn = Some(format!(
-                "arn:aws:dynamodb:{}:{}:table/{}/stream/{}",
-                ctx.region, ctx.account_id, table.name, timestamp
+            table.stream_arn = Some(arn::build(
+                ctx,
+                "dynamodb",
+                format!("table/{}/stream/{timestamp}", table.name),
             ));
             table.stream_view_type = Some(view_type);
             table.stream_enabled = true;
@@ -1211,7 +1210,7 @@ pub fn create_global_table(
             }]
         });
 
-    let arn = format!("arn:aws:dynamodb::{}:global-table/{}", ctx.account_id, name);
+    let arn = arn::build_global(ctx, "dynamodb", format!("global-table/{name}"));
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1546,13 +1545,11 @@ pub fn import_table(
         .to_string();
 
     let now = now_epoch_f64();
-    let table_arn = format!(
-        "arn:aws:dynamodb:{}:{}:table/{}",
-        ctx.region, ctx.account_id, table_name
-    );
-    let import_arn = format!(
-        "arn:aws:dynamodb:{}:{}:table/{}/import/{:016.0}",
-        ctx.region, ctx.account_id, table_name, now
+    let table_arn = arn::build(ctx, "dynamodb", format!("table/{table_name}"));
+    let import_arn = arn::build(
+        ctx,
+        "dynamodb",
+        format!("table/{table_name}/import/{now:016.0}"),
     );
 
     let record = crate::state::ImportRecord {

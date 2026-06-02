@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
 use crate::sqlite_store::SqliteStore;
@@ -61,9 +61,10 @@ pub fn create_backup(
         .unwrap_or(0);
 
     let now = now_secs_f64();
-    let backup_arn = format!(
-        "arn:aws:dynamodb:{}:{}:table/{}/backup/{:016.0}",
-        ctx.region, ctx.account_id, table_name, now
+    let backup_arn = arn::build(
+        ctx,
+        "dynamodb",
+        format!("table/{table_name}/backup/{now:016.0}"),
     );
 
     let record = BackupRecord {
@@ -231,10 +232,7 @@ pub fn restore_table_from_backup(
     }
 
     let now = now_secs_f64();
-    let new_arn = format!(
-        "arn:aws:dynamodb:{}:{}:table/{}",
-        ctx.region, ctx.account_id, target_name
-    );
+    let new_arn = arn::build(ctx, "dynamodb", format!("table/{target_name}"));
 
     // Schema preference order:
     //   1. Schema snapshot captured at backup time — survives even
@@ -378,10 +376,7 @@ pub fn restore_table_to_point_in_time(
     }
 
     let now = now_secs_f64();
-    let new_arn = format!(
-        "arn:aws:dynamodb:{}:{}:table/{}",
-        ctx.region, ctx.account_id, target_name
-    );
+    let new_arn = arn::build(ctx, "dynamodb", format!("table/{target_name}"));
 
     let new_table = Table {
         name: target_name.to_string(),

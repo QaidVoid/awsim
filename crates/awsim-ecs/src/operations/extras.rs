@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use awsim_core::tags::{TagOpts, validate_aws_tag_keys, validate_aws_tags};
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
 use crate::state::EcsState;
@@ -151,7 +151,7 @@ pub fn put_cluster_capacity_providers(
 pub fn describe_capacity_providers(
     state: &EcsState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let requested: Vec<&str> = input["capacityProviders"]
         .as_array()
@@ -161,13 +161,13 @@ pub fn describe_capacity_providers(
     // Default system providers always available
     let mut providers: Vec<Value> = vec![
         json!({
-            "capacityProviderArn": "arn:aws:ecs:::capacity-provider/FARGATE",
+            "capacityProviderArn": arn::build_partition(ctx, "ecs", "capacity-provider/FARGATE"),
             "name": "FARGATE",
             "status": "ACTIVE",
             "updateStatus": "DELETE_COMPLETE",
         }),
         json!({
-            "capacityProviderArn": "arn:aws:ecs:::capacity-provider/FARGATE_SPOT",
+            "capacityProviderArn": arn::build_partition(ctx, "ecs", "capacity-provider/FARGATE_SPOT"),
             "name": "FARGATE_SPOT",
             "status": "ACTIVE",
             "updateStatus": "DELETE_COMPLETE",
@@ -204,7 +204,7 @@ pub fn describe_capacity_providers(
 pub fn put_account_setting(
     state: &EcsState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let name = input["name"]
         .as_str()
@@ -222,7 +222,7 @@ pub fn put_account_setting(
         "setting": {
             "name": name,
             "value": value,
-            "principalArn": "arn:aws:iam::000000000000:root",
+            "principalArn": format!("arn:{}:iam::000000000000:root", ctx.partition),
         }
     }))
 }
@@ -230,7 +230,7 @@ pub fn put_account_setting(
 pub fn list_account_settings(
     state: &EcsState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let filter_name = input["name"].as_str();
     let effective_settings = input["effectiveSettings"].as_bool().unwrap_or(false);
@@ -260,7 +260,7 @@ pub fn list_account_settings(
                 json!({
                     "name": name,
                     "value": val,
-                    "principalArn": "arn:aws:iam::000000000000:root",
+                    "principalArn": format!("arn:{}:iam::000000000000:root", ctx.partition),
                 })
             })
             .collect()
@@ -273,7 +273,7 @@ pub fn list_account_settings(
                 json!({
                     "name": e.key(),
                     "value": e.value(),
-                    "principalArn": "arn:aws:iam::000000000000:root",
+                    "principalArn": format!("arn:{}:iam::000000000000:root", ctx.partition),
                 })
             })
             .collect()
@@ -304,7 +304,7 @@ pub fn discover_poll_endpoint(
 pub fn update_container_agent(
     state: &EcsState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let cluster_name = input["cluster"].as_str().unwrap_or("default");
     let name = if cluster_name.starts_with("arn:") {
@@ -324,7 +324,7 @@ pub fn update_container_agent(
 
     Ok(json!({
         "containerInstance": {
-            "containerInstanceArn": format!("arn:aws:ecs:us-east-1:000000000000:container-instance/{}/stub-instance", name),
+            "containerInstanceArn": format!("arn:{}:ecs:us-east-1:000000000000:container-instance/{}/stub-instance", ctx.partition, name),
             "ec2InstanceId": "i-stub",
             "agentConnected": true,
             "runningTasksCount": 0,

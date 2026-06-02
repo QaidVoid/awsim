@@ -22,6 +22,7 @@ fn function_to_value(f: &CloudFrontFunction) -> Value {
             "Runtime": f.runtime,
         },
         "FunctionMetadata": {
+            // Stub: placeholder account and partition; no RequestContext here.
             "FunctionARN": format!("arn:aws:cloudfront::123456789012:function/{}", f.name),
             "Stage": f.stage,
             "CreatedTime": f.created_at,

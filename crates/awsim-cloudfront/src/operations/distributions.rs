@@ -171,7 +171,7 @@ pub fn create_distribution(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let id = new_distribution_id();
-    let arn = distribution_arn(&ctx.account_id, &id);
+    let arn = distribution_arn(&ctx.partition, &ctx.account_id, &id);
     let domain_name = distribution_domain(&id);
     let config = parse_config(input);
     let etag = new_etag();

@@ -260,6 +260,7 @@ pub async fn handle_s3_event(
             "s3SchemaVersion": "1.0",
             "bucket": {
                 "name": bucket_name,
+                // Partition left literal: InternalEvent carries no partition.
                 "arn": format!("arn:aws:s3:::{}", bucket_name),
             },
             "object": {

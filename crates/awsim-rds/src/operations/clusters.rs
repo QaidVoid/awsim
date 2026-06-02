@@ -86,7 +86,7 @@ pub fn create_db_cluster(
         .unwrap_or_else(|| default_engine_version(engine))
         .to_string();
 
-    let arn = cluster_arn(&ctx.region, &ctx.account_id, identifier);
+    let arn = cluster_arn(&ctx.partition, &ctx.region, &ctx.account_id, identifier);
     let endpoint = cluster_endpoint(identifier, &ctx.region);
     let reader_endpoint = cluster_reader_endpoint(identifier, &ctx.region);
 
@@ -273,10 +273,10 @@ fn cluster_identifier_from_arn(arn: &str) -> Option<String> {
     Some(parts[5].to_string())
 }
 
-fn global_cluster_arn(account: &str, identifier: &str) -> String {
+fn global_cluster_arn(partition: &str, account: &str, identifier: &str) -> String {
     // AWS global cluster ARNs intentionally omit the region segment:
     // `arn:aws:rds::<account>:global-cluster:<id>`.
-    format!("arn:aws:rds::{account}:global-cluster:{identifier}")
+    format!("arn:{partition}:rds::{account}:global-cluster:{identifier}")
 }
 
 fn global_cluster_to_value(c: &DbGlobalCluster) -> Value {
@@ -350,7 +350,7 @@ pub fn create_global_cluster(
 
     let cluster = DbGlobalCluster {
         identifier: identifier.to_string(),
-        arn: global_cluster_arn(&ctx.account_id, identifier),
+        arn: global_cluster_arn(&ctx.partition, &ctx.account_id, identifier),
         engine,
         engine_version,
         status: "available".to_string(),

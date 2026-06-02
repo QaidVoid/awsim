@@ -111,7 +111,13 @@ pub fn create_listener(
 
     let default_actions = parse_actions(input, "DefaultActions")?;
 
-    let arn = listener_arn(&ctx.region, &ctx.account_id, &lb_name, &lb_rand);
+    let arn = listener_arn(
+        &ctx.partition,
+        &ctx.region,
+        &ctx.account_id,
+        &lb_name,
+        &lb_rand,
+    );
 
     let listener = Listener {
         arn: arn.clone(),

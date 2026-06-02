@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
 use crate::state::{Connection, EventBridgeState};
@@ -128,10 +128,7 @@ pub fn create_connection(
     let auth_params = &input["AuthParameters"];
     validate_auth_parameters(auth_type, auth_params)?;
 
-    let arn = format!(
-        "arn:aws:events:{}:{}:connection/{}",
-        ctx.region, ctx.account_id, name
-    );
+    let arn = arn::build(ctx, "events", format!("connection/{name}"));
 
     let now = now_iso8601();
     let connection = Connection {

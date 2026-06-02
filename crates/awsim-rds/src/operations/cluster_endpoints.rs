@@ -126,7 +126,7 @@ pub fn create_db_cluster_endpoint(
 
     let ep = DbClusterEndpoint {
         endpoint_identifier: endpoint_id.to_string(),
-        arn: cluster_endpoint_arn(&ctx.region, &ctx.account_id, endpoint_id),
+        arn: cluster_endpoint_arn(&ctx.partition, &ctx.region, &ctx.account_id, endpoint_id),
         cluster_identifier: cluster_id.to_string(),
         endpoint_type: endpoint_type.to_string(),
         endpoint: cluster_custom_endpoint(endpoint_id, &ctx.region),

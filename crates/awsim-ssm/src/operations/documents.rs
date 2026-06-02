@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -14,10 +14,7 @@ fn now_epoch_secs() -> u64 {
 }
 
 fn build_document_arn(ctx: &RequestContext, name: &str) -> String {
-    format!(
-        "arn:aws:ssm:{}:{}:document/{}",
-        ctx.region, ctx.account_id, name
-    )
+    arn::build(ctx, "ssm", format!("document/{name}"))
 }
 
 fn document_description(doc: &SsmDocument) -> Value {

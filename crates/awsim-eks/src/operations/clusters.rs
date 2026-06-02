@@ -1,4 +1,4 @@
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
 use crate::state::{Cluster, EksState, now_secs};
@@ -32,10 +32,7 @@ pub fn create_cluster(
     }
     validate_cluster_logging(&input["logging"])?;
 
-    let arn = format!(
-        "arn:aws:eks:{}:{}:cluster/{}",
-        ctx.region, ctx.account_id, name
-    );
+    let arn = arn::build(ctx, "eks", format!("cluster/{name}"));
     let cluster = Cluster {
         name: name.to_string(),
         arn: arn.clone(),

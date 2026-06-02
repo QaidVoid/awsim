@@ -221,8 +221,8 @@ pub fn replicate_key(
 
     let replica_key_id = Uuid::new_v4().to_string();
     let replica_arn = format!(
-        "arn:aws:kms:{}:{}:key/{}",
-        replica_region, ctx.account_id, replica_key_id
+        "arn:{}:kms:{}:{}:key/{}",
+        ctx.partition, replica_region, ctx.account_id, replica_key_id
     );
 
     // Return stub metadata for the replica key
