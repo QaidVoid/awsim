@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use awsim_core::tags::{TagOpts, validate_aws_tag_keys, validate_aws_tags};
 use awsim_core::{
     AccountRegionStore, AwsError, Protocol, RequestContext, RouteDefinition, ServiceHandler,
     clamp_max_results_strict, paginate,
@@ -551,6 +552,7 @@ impl ServiceHandler for QldbService {
                         ),
                     ));
                 }
+                validate_aws_tags(&input["Tags"], &TagOpts::aws_default())?;
                 let tags: HashMap<String, String> = input
                     .get("Tags")
                     .and_then(|v| v.as_object())
@@ -954,6 +956,7 @@ impl ServiceHandler for QldbService {
                     .get("AggregationEnabled")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
+                validate_aws_tags(&input["Tags"], &TagOpts::aws_default())?;
                 let tags: HashMap<String, String> = input
                     .get("Tags")
                     .and_then(|v| v.as_object())
@@ -1080,9 +1083,9 @@ impl ServiceHandler for QldbService {
                     .or_else(|| input.get("ResourceArn"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                let new_tags: HashMap<String, String> = input
-                    .get("Tags")
-                    .or_else(|| input.get("tags"))
+                let raw_tags = input.get("Tags").or_else(|| input.get("tags"));
+                validate_aws_tags(raw_tags.unwrap_or(&Value::Null), &TagOpts::aws_default())?;
+                let new_tags: HashMap<String, String> = raw_tags
                     .and_then(|v| v.as_object())
                     .map(|o| {
                         o.iter()
@@ -1099,9 +1102,9 @@ impl ServiceHandler for QldbService {
                     .or_else(|| input.get("ResourceArn"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                let keys: Vec<String> = input
-                    .get("TagKeys")
-                    .or_else(|| input.get("tagKeys"))
+                let raw_keys = input.get("TagKeys").or_else(|| input.get("tagKeys"));
+                validate_aws_tag_keys(raw_keys.unwrap_or(&Value::Null))?;
+                let keys: Vec<String> = raw_keys
                     .and_then(|v| v.as_array())
                     .map(|a| {
                         a.iter()
@@ -1935,6 +1938,30 @@ mod tests {
             .unwrap();
         assert!(resp["Tags"]["team"].is_null());
         assert_eq!(resp["Tags"]["env"], "test");
+    }
+
+    #[test]
+    fn tag_resource_rejects_reserved_aws_prefix() {
+        let svc = QldbService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateLedger",
+            json!({
+                "Name": "reserved-tag",
+                "PermissionsMode": "ALLOW_ALL",
+                "DeletionProtection": false,
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let arn = "arn:aws:qldb:us-east-1:000000000000:ledger/reserved-tag";
+        let err = block_on(svc.handle(
+            "TagResource",
+            json!({ "resourceArn": arn, "Tags": { "aws:reserved": "no" } }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.status.as_u16(), 400);
     }
 
     #[test]

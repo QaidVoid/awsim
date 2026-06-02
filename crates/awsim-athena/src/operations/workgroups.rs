@@ -1,3 +1,4 @@
+use awsim_core::tags::{TagOpts, validate_aws_tags};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 use tracing::info;
@@ -32,6 +33,8 @@ pub fn create_workgroup(
             format!("WorkGroup already exists: {name}"),
         ));
     }
+
+    validate_aws_tags(&input["Tags"], &TagOpts::aws_default())?;
 
     let description = input["Description"].as_str().map(|s| s.to_string());
     let output_location = input["Configuration"]["ResultConfiguration"]["OutputLocation"]
@@ -257,5 +260,21 @@ mod engine_version_tests {
         let ev = &got["WorkGroup"]["Configuration"]["EngineVersion"];
         assert_eq!(ev["SelectedEngineVersion"], "AUTO");
         assert_eq!(ev["EffectiveEngineVersion"], "Athena engine version 3");
+    }
+
+    #[test]
+    fn create_workgroup_rejects_reserved_aws_prefixed_user_tag() {
+        let state = AthenaState::default();
+        let err = create_workgroup(
+            &state,
+            &json!({
+                "Name": "wg-tags",
+                "Tags": [{ "Key": "aws:reserved", "Value": "v" }]
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(!state.workgroups.contains_key("wg-tags"));
     }
 }

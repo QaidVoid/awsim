@@ -1,3 +1,4 @@
+use awsim_core::tags::{TagCharset, TagOpts, validate_aws_tag_keys, validate_aws_tags};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 use tracing::info;
@@ -54,6 +55,14 @@ pub fn tag_resource(
         .as_object()
         .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "tags is required"))?;
 
+    validate_aws_tags(
+        &input["tags"],
+        &TagOpts {
+            charset: TagCharset::Permissive,
+            ..TagOpts::aws_default()
+        },
+    )?;
+
     let name = log_group_from_arn(resource_arn);
     let mut group = state.log_groups.get_mut(name).ok_or_else(|| {
         AwsError::not_found(
@@ -83,6 +92,8 @@ pub fn untag_resource(
     let tag_keys = input["tagKeys"]
         .as_array()
         .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "tagKeys is required"))?;
+
+    validate_aws_tag_keys(&input["tagKeys"])?;
 
     let name = log_group_from_arn(resource_arn);
     let mut group = state.log_groups.get_mut(name).ok_or_else(|| {

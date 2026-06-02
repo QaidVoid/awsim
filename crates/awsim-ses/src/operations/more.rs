@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use awsim_core::tags::{TagOpts, validate_aws_tag_keys, validate_aws_tags};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -479,6 +480,7 @@ pub fn create_configuration_set(
     let name = input["ConfigurationSetName"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidParameter", "ConfigurationSetName is required")
     })?;
+    validate_aws_tags(&input["Tags"], &TagOpts::aws_default())?;
     let sending_enabled = input["SendingOptions"]["SendingEnabled"]
         .as_bool()
         .unwrap_or(true);
@@ -1220,6 +1222,7 @@ pub fn tag_resource(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let arn = input["ResourceArn"].as_str().unwrap_or("");
+    validate_aws_tags(&input["Tags"], &TagOpts::aws_default())?;
     let tags = input["Tags"].as_array().cloned().unwrap_or_default();
     let mut entry = state.identity_tags.entry(arn.to_string()).or_default();
     for tag in tags {
@@ -1236,6 +1239,7 @@ pub fn untag_resource(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let arn = input["ResourceArn"].as_str().unwrap_or("");
+    validate_aws_tag_keys(&input["TagKeys"])?;
     let keys = input["TagKeys"].as_array().cloned().unwrap_or_default();
     if let Some(mut entry) = state.identity_tags.get_mut(arn) {
         for k in keys {
@@ -1854,5 +1858,45 @@ mod vdm_options_tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "NotFoundException");
+    }
+}
+
+#[cfg(test)]
+mod tag_validation_tests {
+    use super::*;
+
+    fn ctx() -> awsim_core::RequestContext {
+        awsim_core::RequestContext::new("ses", "us-east-1")
+    }
+
+    #[test]
+    fn tag_resource_rejects_reserved_aws_prefix() {
+        let state = SesState::default();
+        let err = tag_resource(
+            &state,
+            &json!({
+                "ResourceArn": "arn:aws:ses:us-east-1:000000000000:identity/example.com",
+                "Tags": [{ "Key": "aws:reserved", "Value": "v" }],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn create_configuration_set_rejects_reserved_aws_prefix() {
+        let state = SesState::default();
+        let err = create_configuration_set(
+            &state,
+            &json!({
+                "ConfigurationSetName": "cs",
+                "Tags": [{ "Key": "aws:reserved", "Value": "v" }],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(state.configuration_sets.get("cs").is_none());
     }
 }

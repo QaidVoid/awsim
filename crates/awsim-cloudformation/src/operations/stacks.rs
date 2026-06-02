@@ -1,3 +1,4 @@
+use awsim_core::tags::{TagOpts, validate_aws_tag_keys, validate_aws_tags};
 use awsim_core::{AwsError, InternalEvent, RequestContext};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -560,6 +561,7 @@ pub fn create_stack(
         .to_string();
 
     let parameters = parse_parameters(input);
+    validate_aws_tags(&input["Tags"], &TagOpts::aws_default())?;
     let tags = parse_tags(input);
 
     // Validate and parse template
@@ -1073,6 +1075,7 @@ pub fn tag_resource(state: &CloudFormationState, input: &Value) -> Result<Value,
     // Extract the stack name from the ARN (last segment after the final '/')
     let stack_name = resource_arn.split('/').nth(1).unwrap_or(resource_arn);
 
+    validate_aws_tags(&input["Tags"], &TagOpts::aws_default())?;
     let new_tags = parse_tags(input);
 
     let mut entry = state.stack_tags.entry(stack_name.to_string()).or_default();
@@ -1088,6 +1091,7 @@ pub fn untag_resource(state: &CloudFormationState, input: &Value) -> Result<Valu
     let resource_arn = require_str(input, "ResourceArn")?;
     let stack_name = resource_arn.split('/').nth(1).unwrap_or(resource_arn);
 
+    validate_aws_tag_keys(&input["TagKeys"])?;
     let tag_keys: Vec<&str> = match input.get("TagKeys") {
         Some(Value::Array(arr)) => arr.iter().filter_map(|v| v.as_str()).collect(),
         Some(Value::Object(obj)) => {
@@ -1381,6 +1385,53 @@ mod capabilities_tests {
         let merged = effective_resource_tags(&stack_tags, &properties);
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0]["Key"], "good");
+    }
+
+    #[test]
+    fn create_stack_rejects_reserved_aws_prefix_tag() {
+        let state = CloudFormationState::default();
+        let err = create_stack(
+            &state,
+            &json!({
+                "StackName": "s",
+                "TemplateBody": MINIMAL_TEMPLATE,
+                "Tags": [{ "Key": "aws:billing", "Value": "x" }],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("aws:"));
+    }
+
+    #[test]
+    fn tag_resource_rejects_reserved_aws_prefix_tag() {
+        let state = CloudFormationState::default();
+        let err = tag_resource(
+            &state,
+            &json!({
+                "ResourceArn": "arn:aws:cloudformation:us-east-1:123456789012:stack/s/abc",
+                "Tags": [{ "Key": "aws:internal", "Value": "x" }],
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("aws:"));
+    }
+
+    #[test]
+    fn untag_resource_rejects_reserved_aws_prefix_key() {
+        let state = CloudFormationState::default();
+        let err = untag_resource(
+            &state,
+            &json!({
+                "ResourceArn": "arn:aws:cloudformation:us-east-1:123456789012:stack/s/abc",
+                "TagKeys": ["aws:internal"],
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("aws:"));
     }
 
     #[test]

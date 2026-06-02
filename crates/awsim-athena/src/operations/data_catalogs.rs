@@ -1,3 +1,4 @@
+use awsim_core::tags::{TagOpts, validate_aws_tags};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 use tracing::info;
@@ -85,6 +86,8 @@ pub fn create_data_catalog(
             format!("DataCatalog already exists: {name}"),
         ));
     }
+
+    validate_aws_tags(&input["Tags"], &TagOpts::aws_default())?;
 
     let description = input["Description"].as_str().map(|s| s.to_string());
     let parameters = input.get("Parameters").cloned().unwrap_or(json!({}));

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use awsim_core::tags::{TagOpts, validate_aws_tag_keys, validate_aws_tags};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -213,6 +214,7 @@ fn create_namespace_inner(
     namespace_type: &str,
 ) -> Result<Value, AwsError> {
     let name = require_str(input, "Name")?.to_string();
+    validate_aws_tags(&input["Tags"], &TagOpts::aws_default())?;
     let id = new_id('n');
     let properties = namespace_properties(namespace_type, &name, &id, input.get("Properties"));
     let n = Namespace {
@@ -401,6 +403,7 @@ fn create_service_inner(
             format!("Namespace {namespace_id} not found"),
         ));
     }
+    validate_aws_tags(&input["Tags"], &TagOpts::aws_default())?;
     let id = new_id('s');
     let svc_type = if input.get("DnsConfig").is_some() {
         "DNS"
@@ -1175,6 +1178,7 @@ pub fn tag_resource(
 ) -> Result<Value, AwsError> {
     let arn = require_str(input, "ResourceARN")?;
     let arn = validate_tag_arn(state, arn)?;
+    validate_aws_tags(&input["Tags"], &TagOpts::aws_default())?;
     let tags = input
         .get("Tags")
         .and_then(Value::as_array)
@@ -1185,12 +1189,6 @@ pub fn tag_resource(
             t.get("Key").and_then(Value::as_str),
             t.get("Value").and_then(Value::as_str),
         ) {
-            if k.starts_with("aws:") {
-                return Err(AwsError::bad_request(
-                    "InvalidInput",
-                    format!("Tag key `{k}` may not use the reserved `aws:` prefix."),
-                ));
-            }
             entry.insert(k.to_string(), v.to_string());
         }
     }
@@ -1204,6 +1202,7 @@ pub fn untag_resource(
 ) -> Result<Value, AwsError> {
     let arn = require_str(input, "ResourceARN")?;
     let arn = validate_tag_arn(state, arn)?;
+    validate_aws_tag_keys(&input["TagKeys"])?;
     let keys = input
         .get("TagKeys")
         .and_then(Value::as_array)
@@ -1291,7 +1290,30 @@ mod tag_tests {
             &ctx(),
         )
         .unwrap_err();
-        assert_eq!(err.code, "InvalidInput");
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn create_service_rejects_reserved_tag_prefix() {
+        let state = ServiceDiscoveryState::default();
+        create_http_namespace(&state, &json!({ "Name": "ns" }), &ctx()).unwrap();
+        let ns_id = state
+            .namespaces
+            .iter()
+            .map(|e| e.value().id.clone())
+            .next()
+            .unwrap();
+        let err = create_service(
+            &state,
+            &json!({
+                "Name": "svc",
+                "NamespaceId": ns_id,
+                "Tags": [{ "Key": "aws:internal", "Value": "x" }],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
     }
 }
 

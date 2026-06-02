@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use awsim_core::tags::{TagOpts, validate_aws_tag_keys, validate_aws_tags};
 use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 use tracing::info;
@@ -452,6 +453,7 @@ pub fn create_table(
     };
 
     // Parse optional tags from CreateTable input
+    validate_aws_tags(&input["Tags"], &TagOpts::aws_default())?;
     let tags = {
         let mut map = std::collections::HashMap::new();
         if let Some(tag_arr) = input.get("Tags").and_then(|v| v.as_array()) {
@@ -1034,6 +1036,8 @@ pub fn tag_resource(
 ) -> Result<Value, AwsError> {
     let resource_arn = require_str(input, "ResourceArn")?;
 
+    validate_aws_tags(&input["Tags"], &TagOpts::aws_default())?;
+
     // Find the table by ARN.
     let table_name = state
         .tables
@@ -1075,6 +1079,8 @@ pub fn untag_resource(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let resource_arn = require_str(input, "ResourceArn")?;
+
+    validate_aws_tag_keys(&input["TagKeys"])?;
 
     let table_name = state
         .tables
@@ -2333,5 +2339,21 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.code, "ValidationException");
         assert!(err.message.contains("maximum is 255"));
+    }
+
+    #[test]
+    fn tag_resource_rejects_reserved_aws_prefix() {
+        let state = state_with_table("t");
+        let err = tag_resource(
+            &state,
+            &json!({
+                "ResourceArn": "arn:aws:dynamodb:us-east-1:000000000000:table/t",
+                "Tags": [{ "Key": "aws:internal", "Value": "x" }],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("aws:"));
     }
 }

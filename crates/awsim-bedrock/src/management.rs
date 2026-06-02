@@ -1,3 +1,4 @@
+use awsim_core::tags::{TagCharset, TagOpts, validate_aws_tag_keys, validate_aws_tags};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 use tracing::info;
@@ -693,6 +694,14 @@ pub fn tag_resource(state: &BedrockState, input: &Value) -> Result<Value, AwsErr
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "resourceARN is required"))?;
 
+    validate_aws_tags(
+        &input["tags"],
+        &TagOpts {
+            charset: TagCharset::Permissive,
+            ..TagOpts::aws_default()
+        },
+    )?;
+
     let new_tags = input["tags"]
         .as_array()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "tags is required"))?;
@@ -711,6 +720,8 @@ pub fn untag_resource(state: &BedrockState, input: &Value) -> Result<Value, AwsE
     let resource_arn = input["resourceARN"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "resourceARN is required"))?;
+
+    validate_aws_tag_keys(&input["tagKeys"])?;
 
     let tag_keys = input["tagKeys"]
         .as_array()
@@ -744,4 +755,41 @@ pub fn list_tags_for_resource(state: &BedrockState, input: &Value) -> Result<Val
         .unwrap_or_default();
 
     Ok(json!({ "tags": tags }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tag_resource_rejects_reserved_prefix() {
+        let state = BedrockState::default();
+        let input = json!({
+            "resourceARN": "arn:aws:bedrock:us-east-1:123456789012:guardrail/abc",
+            "tags": [{ "key": "aws:internal", "value": "x" }],
+        });
+        let err = tag_resource(&state, &input).unwrap_err();
+        assert!(state.tags.is_empty());
+        assert!(err.message.to_lowercase().contains("aws:"));
+    }
+
+    #[test]
+    fn tag_resource_accepts_valid_tags() {
+        let state = BedrockState::default();
+        let input = json!({
+            "resourceARN": "arn:aws:bedrock:us-east-1:123456789012:guardrail/abc",
+            "tags": [{ "key": "Owner", "value": "alice" }],
+        });
+        assert!(tag_resource(&state, &input).is_ok());
+    }
+
+    #[test]
+    fn untag_resource_rejects_reserved_prefix() {
+        let state = BedrockState::default();
+        let input = json!({
+            "resourceARN": "arn:aws:bedrock:us-east-1:123456789012:guardrail/abc",
+            "tagKeys": ["aws:internal"],
+        });
+        assert!(untag_resource(&state, &input).is_err());
+    }
 }

@@ -285,6 +285,26 @@ mod tests {
         assert_eq!(tags2["tags"].as_object().unwrap().len(), 1);
     }
 
+    #[test]
+    fn test_tag_log_group_rejects_reserved_prefix() {
+        let svc = CloudWatchLogsService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateLogGroup",
+            json!({ "logGroupName": "/reserved/group" }),
+            &ctx,
+        ))
+        .unwrap();
+
+        let err = block_on(svc.handle(
+            "TagLogGroup",
+            json!({ "logGroupName": "/reserved/group", "tags": { "aws:foo": "bar" } }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
     // -----------------------------------------------------------------------
     // Log Streams
     // -----------------------------------------------------------------------

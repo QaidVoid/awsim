@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use awsim_core::tags::{TagCharset, TagOpts, validate_aws_tag_keys, validate_aws_tags};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 use tracing::{info, warn};
@@ -25,6 +26,14 @@ pub fn create_log_group(
             format!("Log group already exists: {name}"),
         ));
     }
+
+    validate_aws_tags(
+        &input["tags"],
+        &TagOpts {
+            charset: TagCharset::Permissive,
+            ..TagOpts::aws_default()
+        },
+    )?;
 
     let arn = format!(
         "arn:aws:logs:{}:{}:log-group:{}",
@@ -387,6 +396,14 @@ pub fn tag_log_group(
         .as_object()
         .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "tags is required"))?;
 
+    validate_aws_tags(
+        &input["tags"],
+        &TagOpts {
+            charset: TagCharset::Permissive,
+            ..TagOpts::aws_default()
+        },
+    )?;
+
     let mut group = state.log_groups.get_mut(name).ok_or_else(|| {
         AwsError::not_found(
             "ResourceNotFoundException",
@@ -419,6 +436,8 @@ pub fn untag_log_group(
     let keys = input["tags"].as_array().ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "tags (key list) is required")
     })?;
+
+    validate_aws_tag_keys(&input["tags"])?;
 
     let mut group = state.log_groups.get_mut(name).ok_or_else(|| {
         AwsError::not_found(

@@ -1,3 +1,4 @@
+use awsim_core::tags::{TagOpts, validate_aws_tag_keys, validate_aws_tags};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -1857,6 +1858,7 @@ pub fn tag_resource(
 ) -> Result<Value, AwsError> {
     let arn = require_str(input, "ResourceArn")?;
     let arn = require_known_arn(state, arn)?;
+    validate_aws_tags(&input["Tags"], &TagOpts::aws_default())?;
     let tags = input.get("Tags").and_then(Value::as_array).ok_or_else(|| {
         AwsError::bad_request("InvalidParameterValueException", "Tags must be a list")
     })?;
@@ -1883,6 +1885,7 @@ pub fn untag_resource(
 ) -> Result<Value, AwsError> {
     let arn = require_str(input, "ResourceArn")?;
     let arn = require_known_arn(state, arn)?;
+    validate_aws_tag_keys(&input["TagKeys"])?;
     let keys = input
         .get("TagKeys")
         .and_then(Value::as_array)
@@ -2848,6 +2851,32 @@ mod tests {
         .unwrap();
         let listed = list_tags(&state, &json!({ "ResourceArn": arn }), &ctx()).unwrap();
         assert!(listed["TagList"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn tag_resource_rejects_reserved_aws_prefix() {
+        let state = MemoryDbState::default();
+        create_cluster(
+            &state,
+            &json!({
+                "ClusterName": "reserved-tag-cluster",
+                "NodeType": "db.r6g.large",
+                "ACLName": "open-access",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let arn = "arn:aws:memorydb:us-east-1:000000000000:cluster/reserved-tag-cluster";
+        let err = tag_resource(
+            &state,
+            &json!({
+                "ResourceArn": arn,
+                "Tags": [{ "Key": "aws:internal", "Value": "x" }],
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
     }
 
     #[test]

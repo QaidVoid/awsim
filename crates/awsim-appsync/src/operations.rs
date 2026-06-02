@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use awsim_core::tags::{TagOpts, validate_aws_tag_keys, validate_aws_tags};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 use tracing::info;
@@ -1031,6 +1032,8 @@ pub fn tag_resource(state: &AppSyncState, input: &Value) -> Result<Value, AwsErr
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "resourceArn is required"))?;
 
+    validate_aws_tags(&input["tags"], &TagOpts::aws_default())?;
+
     let mut entry = state.tags.entry(resource_arn.to_string()).or_default();
 
     if let Some(tags) = input["tags"].as_object() {
@@ -1048,6 +1051,8 @@ pub fn untag_resource(state: &AppSyncState, input: &Value) -> Result<Value, AwsE
     let resource_arn = input["resourceArn"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "resourceArn is required"))?;
+
+    validate_aws_tag_keys(&input["tagKeys"])?;
 
     if let Some(mut entry) = state.tags.get_mut(resource_arn)
         && let Some(keys) = input["tagKeys"].as_array()
@@ -1217,4 +1222,29 @@ fn extract_type_name(definition: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tag_resource_rejects_reserved_aws_prefix() {
+        let state = AppSyncState::default();
+        let input = json!({
+            "resourceArn": "arn:aws:appsync:us-east-1:000000000000:apis/abc",
+            "tags": { "aws:internal": "nope" }
+        });
+        assert!(tag_resource(&state, &input).is_err());
+    }
+
+    #[test]
+    fn tag_resource_accepts_valid_tags() {
+        let state = AppSyncState::default();
+        let input = json!({
+            "resourceArn": "arn:aws:appsync:us-east-1:000000000000:apis/abc",
+            "tags": { "env": "prod" }
+        });
+        assert!(tag_resource(&state, &input).is_ok());
+    }
 }
