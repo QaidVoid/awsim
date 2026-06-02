@@ -2,7 +2,7 @@ use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
 use crate::state::{Archive, EventBridgeState};
-use crate::util::now_iso8601;
+use crate::util::{now_epoch, now_iso8601};
 
 fn archive_to_value(a: &Archive) -> Value {
     json!({
@@ -52,6 +52,7 @@ pub fn create_archive(
         retention_days: input["RetentionDays"].as_u64().unwrap_or(0) as u32,
         state: "ENABLED".to_string(),
         creation_time: now_iso8601(),
+        created_epoch: now_epoch(),
     };
 
     state.archives.insert(name.to_string(), archive);

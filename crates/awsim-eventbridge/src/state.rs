@@ -116,6 +116,10 @@ pub struct Archive {
     pub retention_days: u32,
     pub state: String,
     pub creation_time: String,
+    /// Creation time as whole seconds since the UNIX epoch. Drives
+    /// retention expiry in `sweep_expired_archives`; the `creation_time`
+    /// ISO string is display-only and is never parsed back.
+    pub created_epoch: u64,
 }
 
 /// An API destination connection (auth config).
@@ -196,6 +200,34 @@ impl EventBridgeState {
                 .collect();
             for name in to_remove {
                 bus.rules.remove(&name);
+                removed += 1;
+            }
+        }
+        removed
+    }
+
+    /// Drop every archive whose retention window has elapsed relative to
+    /// `now_epoch`. An archive expires once
+    /// `created_epoch + retention_days * 86400 < now_epoch`. A
+    /// `retention_days` of 0 means indefinite retention (AWS semantics)
+    /// and is never swept. Returns the number of archives removed.
+    pub fn sweep_expired_archives(&self, now_epoch: u64) -> usize {
+        let expired: Vec<String> = self
+            .archives
+            .iter()
+            .filter(|entry| {
+                let a = entry.value();
+                if a.retention_days == 0 {
+                    return false;
+                }
+                let ttl = a.retention_days as u64 * 86_400;
+                a.created_epoch.saturating_add(ttl) < now_epoch
+            })
+            .map(|entry| entry.key().clone())
+            .collect();
+        let mut removed = 0usize;
+        for name in expired {
+            if self.archives.remove(&name).is_some() {
                 removed += 1;
             }
         }
@@ -284,5 +316,38 @@ mod cleanup_tests {
             ),
         );
         assert_eq!(state.cleanup_managed_by("nobody.amazonaws.com"), 0);
+    }
+
+    fn archive(name: &str, retention_days: u32, created_epoch: u64) -> Archive {
+        Archive {
+            name: name.into(),
+            arn: format!("arn:aws:events:us-east-1:000000000000:archive/{name}"),
+            event_source_arn: "arn:aws:events:us-east-1:000000000000:event-bus/default".into(),
+            description: String::new(),
+            event_pattern: None,
+            retention_days,
+            state: "ENABLED".into(),
+            creation_time: String::new(),
+            created_epoch,
+        }
+    }
+
+    #[test]
+    fn sweep_removes_only_expired_archives() {
+        let state = EventBridgeState::default();
+        // Both created 10 days ago; `now` is 5 days past the 1-day archive.
+        let now = 10_000_000u64;
+        let created = now - 10 * 86_400;
+        state
+            .archives
+            .insert("expired".into(), archive("expired", 1, created));
+        state
+            .archives
+            .insert("forever".into(), archive("forever", 0, created));
+
+        let removed = state.sweep_expired_archives(now);
+        assert_eq!(removed, 1);
+        assert!(!state.archives.contains_key("expired"));
+        assert!(state.archives.contains_key("forever"));
     }
 }

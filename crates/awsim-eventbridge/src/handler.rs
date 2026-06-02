@@ -11,6 +11,7 @@ use crate::operations::{
     targets,
 };
 use crate::state::EventBridgeState;
+use crate::util::now_epoch;
 
 /// The EventBridge service handler.
 pub struct EventBridgeService {
@@ -132,6 +133,17 @@ impl ServiceHandler for EventBridgeService {
             "ListReplays" => replays::list_replays(&state, &input, ctx),
 
             _ => Err(AwsError::unknown_operation(operation)),
+        }
+    }
+
+    /// Expire archives whose retention window has elapsed. Computes the
+    /// current epoch once and sweeps every account/region state. The
+    /// sweep is absolute-time based and idempotent, so repeated ticks
+    /// (or missed ones) converge on the same result.
+    async fn tick(&self) {
+        let now = now_epoch();
+        for (_, state) in self.store.iter_all() {
+            state.sweep_expired_archives(now);
         }
     }
 }

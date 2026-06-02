@@ -1,5 +1,16 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Current UNIX time in whole seconds since the epoch. Used as the
+/// machine-readable creation stamp for resources (e.g. archives) where
+/// the ISO 8601 `creation_time` string is display-only and must not be
+/// parsed back. Returns 0 if the clock is somehow before the epoch.
+pub fn now_epoch() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 /// Format the current UTC time as an ISO 8601 string suitable for the
 /// EventBridge timestamp fields (CreationTime, LastModifiedTime,
 /// ReplayStartTime, …). Example: `2026-05-04T09:00:00.000Z`.
