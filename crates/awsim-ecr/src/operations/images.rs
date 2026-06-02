@@ -203,6 +203,17 @@ pub fn put_image(state: &EcrState, input: &Value, ctx: &RequestContext) -> Resul
 
     let image_json = image_to_json(&img, repo_name, &ctx.account_id);
     repo.images.push(img);
+    drop(repo);
+
+    // Enqueue cross-region/account replication for this newly-put image
+    // per the registry's replication rules (no-op when none configured).
+    crate::operations::registry::enqueue_replication_for_image(
+        state,
+        &ctx.account_id,
+        &ctx.region,
+        repo_name,
+        &digest,
+    );
 
     info!(repository = %repo_name, digest = %digest, "Put ECR image");
 
@@ -428,6 +439,80 @@ pub fn describe_images(
     };
 
     Ok(json!({ "imageDetails": details }))
+}
+
+// ---------------------------------------------------------------------------
+// DescribeImageReplicationStatus
+// ---------------------------------------------------------------------------
+
+/// Report the replication status of a single image to each destination.
+///
+/// AWS keys this off the image's identity in the source repository and
+/// returns one `replicationStatuses[]` entry per destination
+/// (`region` + `registryId` + `status`). The status mirrors the
+/// in-flight [`crate::state::ReplicationTask`] state machine
+/// (PENDING -> IN_PROGRESS -> COMPLETE); destinations with no enqueued
+/// task simply do not appear.
+pub fn describe_image_replication_status(
+    state: &EcrState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let repo_name = input["repositoryName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "repositoryName is required")
+    })?;
+    let image_id = &input["imageId"];
+    let tag = image_id["imageTag"].as_str();
+    let digest = image_id["imageDigest"].as_str();
+
+    let repo = state.repositories.get(repo_name).ok_or_else(|| {
+        AwsError::bad_request(
+            "RepositoryNotFoundException",
+            format!("The repository with name '{repo_name}' does not exist"),
+        )
+    })?;
+
+    let image = repo
+        .images
+        .iter()
+        .find(|img| {
+            if let Some(t) = tag {
+                img.image_tag.as_deref() == Some(t)
+            } else if let Some(d) = digest {
+                img.image_digest == d
+            } else {
+                false
+            }
+        })
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "ImageNotFoundException",
+                format!("The image requested does not exist in the repository '{repo_name}'"),
+            )
+        })?;
+
+    let image_digest = image.image_digest.clone();
+    drop(repo);
+
+    let statuses: Vec<Value> = state
+        .replication_tasks
+        .iter()
+        .filter(|t| t.source_repo == repo_name && t.image_digest == image_digest)
+        .map(|t| {
+            json!({
+                "region": t.dest_region,
+                "registryId": t.dest_account,
+                "status": t.status,
+            })
+        })
+        .collect();
+
+    Ok(json!({
+        "repositoryName": repo_name,
+        "imageId": { "imageDigest": image_digest },
+        "registryId": ctx.account_id,
+        "replicationStatuses": statuses,
+    }))
 }
 
 #[cfg(test)]

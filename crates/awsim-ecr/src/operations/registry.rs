@@ -5,7 +5,66 @@ use serde_json::{Value, json};
 
 use crate::state::{
     EcrState, PullThroughCacheRule, RegistryScanningConfiguration, ReplicationConfiguration,
+    ReplicationTask,
 };
+
+fn now_epoch_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Walk the configured replication rules and enqueue one PENDING
+/// [`ReplicationTask`] per `(destination rule x image_digest)` that
+/// targets a different account/region than the source. Enqueue is
+/// idempotent: a task already present (same dedup key) is left as-is so
+/// repeated config reads or PutImage replays do not reset its progress.
+///
+/// `src_account`/`src_region` are the source registry's coordinates;
+/// destinations equal to the source are skipped (AWS rejects them too).
+pub(crate) fn enqueue_replication_for_image(
+    state: &EcrState,
+    src_account: &str,
+    src_region: &str,
+    source_repo: &str,
+    image_digest: &str,
+) {
+    let rules = state.replication_config.read().unwrap().rules.clone();
+    let now = now_epoch_millis();
+    for rule in &rules {
+        let Some(dests) = rule.get("destinations").and_then(Value::as_array) else {
+            continue;
+        };
+        for dest in dests {
+            let dest_region = dest.get("region").and_then(Value::as_str).unwrap_or("");
+            if dest_region.is_empty() {
+                continue;
+            }
+            let dest_account = dest
+                .get("registryId")
+                .and_then(Value::as_str)
+                .unwrap_or(src_account);
+            // A destination identical to the source is a no-op.
+            if dest_account == src_account && dest_region == src_region {
+                continue;
+            }
+            let key =
+                ReplicationTask::dedup_key(dest_account, dest_region, source_repo, image_digest);
+            state
+                .replication_tasks
+                .entry(key)
+                .or_insert_with(|| ReplicationTask {
+                    source_repo: source_repo.to_string(),
+                    dest_account: dest_account.to_string(),
+                    dest_region: dest_region.to_string(),
+                    image_digest: image_digest.to_string(),
+                    status: "PENDING".to_string(),
+                    enqueued_at: now,
+                });
+        }
+    }
+}
 
 fn now_epoch_str() -> String {
     SystemTime::now()
@@ -310,7 +369,7 @@ pub fn put_registry_scanning_configuration(
 pub fn put_replication_configuration(
     state: &EcrState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let rules: Vec<Value> = input["replicationConfiguration"]["rules"]
         .as_array()
@@ -320,6 +379,25 @@ pub fn put_replication_configuration(
     *state.replication_config.write().unwrap() = ReplicationConfiguration {
         rules: rules.clone(),
     };
+
+    // A new config replicates every image already in the registry.
+    // enqueue_replication_for_image dedups, so re-applying the same
+    // config does not re-enqueue or reset in-flight tasks.
+    let existing: Vec<(String, String)> = state
+        .repositories
+        .iter()
+        .flat_map(|repo| {
+            let name = repo.key().clone();
+            repo.value()
+                .images
+                .iter()
+                .map(|img| (name.clone(), img.image_digest.clone()))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    for (repo_name, digest) in existing {
+        enqueue_replication_for_image(state, &ctx.account_id, &ctx.region, &repo_name, &digest);
+    }
 
     Ok(json!({
         "replicationConfiguration": {

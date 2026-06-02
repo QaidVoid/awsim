@@ -21,12 +21,24 @@ pub struct ContainerImage {
 }
 
 /// A layer upload session.
+///
+/// Parts are streamed to a temporary `_uploads/<upload_id>` blob rather
+/// than buffered in memory; the session carries only the running byte
+/// count (for Content-Range contiguity checks) and an incremental
+/// `Sha256` hasher so CompleteLayerUpload can finalize the digest
+/// without re-reading the payload. When no `BodyStore` is configured the
+/// session falls back to an in-memory `part_data` buffer.
 #[derive(Debug, Clone)]
 pub struct LayerUpload {
     #[allow(dead_code)]
     pub upload_id: String,
     #[allow(dead_code)]
     pub repository_name: String,
+    /// Total bytes received so far; equals the next `partFirstByte`.
+    pub bytes_received: u64,
+    /// Running digest over the concatenated parts.
+    pub hasher: sha2::Sha256,
+    /// In-memory accumulation used only when no `BodyStore` is present.
     pub part_data: Vec<u8>,
 }
 
@@ -82,6 +94,41 @@ pub struct ReplicationConfiguration {
     pub rules: Vec<serde_json::Value>,
 }
 
+/// An enqueued cross-region/cross-account image replication job.
+///
+/// Created (PENDING) when a replication rule applies to a newly-put
+/// image, then advanced by the service tick to IN_PROGRESS and finally
+/// COMPLETE, at which point the image manifest and its layer bindings
+/// are copied into the destination account/region state. Tasks are kept
+/// in memory only and are intentionally not snapshotted: an in-flight
+/// task simply restarts (or is dropped) on restart.
+#[derive(Debug, Clone)]
+pub struct ReplicationTask {
+    pub source_repo: String,
+    pub dest_account: String,
+    pub dest_region: String,
+    pub image_digest: String,
+    pub status: String,
+    /// Epoch milliseconds when the task was enqueued. The tick advances
+    /// state off absolute elapsed time (now - enqueued_at) so it stays
+    /// idempotent across repeated calls.
+    pub enqueued_at: u64,
+}
+
+impl ReplicationTask {
+    /// Stable dedup key for the `replication_tasks` map. Repeated config
+    /// reads or PutImage replays must map to the same key so a task is
+    /// enqueued at most once per (destination, repo, image) tuple.
+    pub fn dedup_key(
+        dest_account: &str,
+        dest_region: &str,
+        source_repo: &str,
+        image_digest: &str,
+    ) -> String {
+        format!("{dest_account}|{dest_region}|{source_repo}|{image_digest}")
+    }
+}
+
 /// Per-account/region ECR state.
 #[derive(Debug)]
 pub struct EcrState {
@@ -93,6 +140,10 @@ pub struct EcrState {
     pub registry_policy: dashmap::DashMap<String, String>,
     pub registry_scanning_config: std::sync::RwLock<RegistryScanningConfiguration>,
     pub replication_config: std::sync::RwLock<ReplicationConfiguration>,
+    /// In-flight replication jobs keyed by a dedup composite of
+    /// destination account/region + source repo + image digest, so a
+    /// repeated config read or PutImage replay does not re-enqueue.
+    pub replication_tasks: DashMap<String, ReplicationTask>,
     pub account_settings: DashMap<String, String>,
     pub body_store: OnceLock<Arc<BodyStore>>,
     pub port: std::sync::atomic::AtomicU16,
@@ -109,6 +160,7 @@ impl Default for EcrState {
                 RegistryScanningConfiguration::default(),
             ),
             replication_config: std::sync::RwLock::new(ReplicationConfiguration::default()),
+            replication_tasks: DashMap::new(),
             account_settings: DashMap::new(),
             body_store: OnceLock::new(),
             port: std::sync::atomic::AtomicU16::new(4566),

@@ -164,3 +164,123 @@ async fn layer_round_trip_with_persistence() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[tokio::test]
+async fn two_part_upload_digest_matches_concat_and_temp_removed() {
+    use sha2::{Digest, Sha256};
+
+    let root = tmp_dir("two-part");
+    let svc = EcrService::with_data_dir(&root);
+    let ctx = ctx();
+
+    svc.handle(
+        "CreateRepository",
+        json!({ "repositoryName": "multi-part" }),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    let init = svc
+        .handle(
+            "InitiateLayerUpload",
+            json!({ "repositoryName": "multi-part" }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+    let upload_id = init["uploadId"].as_str().unwrap().to_string();
+
+    // Two contiguous parts. Use bytes that stay valid UTF-8 round-trips.
+    let part1: Vec<u8> = (0..512).map(|i| (i % 91 + 32) as u8).collect();
+    let part2: Vec<u8> = (0..300).map(|i| ((i * 7) % 91 + 32) as u8).collect();
+    let part1_str = String::from_utf8(part1.clone()).unwrap();
+    let part2_str = String::from_utf8(part2.clone()).unwrap();
+
+    let r1 = svc
+        .handle(
+            "UploadLayerPart",
+            json!({
+                "repositoryName": "multi-part",
+                "uploadId": upload_id,
+                "partFirstByte": 0,
+                "partLastByte": part1.len() as u64 - 1,
+                "layerPartBlob": part1_str,
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+    assert_eq!(r1["lastByteReceived"].as_u64().unwrap(), part1.len() as u64);
+
+    let r2 = svc
+        .handle(
+            "UploadLayerPart",
+            json!({
+                "repositoryName": "multi-part",
+                "uploadId": upload_id,
+                "partFirstByte": part1.len() as u64,
+                "partLastByte": part1.len() as u64 + part2.len() as u64 - 1,
+                "layerPartBlob": part2_str,
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        r2["lastByteReceived"].as_u64().unwrap(),
+        (part1.len() + part2.len()) as u64
+    );
+
+    // The temp upload blob should exist while the upload is in progress.
+    let temp_path = root.join("ecr").join("_uploads").join(&upload_id);
+    assert!(temp_path.exists(), "temp upload blob missing mid-upload");
+
+    let complete = svc
+        .handle(
+            "CompleteLayerUpload",
+            json!({
+                "repositoryName": "multi-part",
+                "uploadId": upload_id,
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+    let digest = complete["layerDigest"].as_str().unwrap().to_string();
+
+    // Digest equals sha256 of the concatenated parts.
+    let mut hasher = Sha256::new();
+    hasher.update(&part1);
+    hasher.update(&part2);
+    let expected = format!("sha256:{:x}", hasher.finalize());
+    assert_eq!(digest, expected, "digest must match concat sha256");
+
+    // The temp `_uploads/<id>` blob is gone after completion.
+    assert!(
+        !temp_path.exists(),
+        "temp upload blob still present after CompleteLayerUpload"
+    );
+
+    // The finalized layer is available under its digest.
+    let avail = svc
+        .handle(
+            "BatchCheckLayerAvailability",
+            json!({
+                "repositoryName": "multi-part",
+                "layerDigests": [digest.clone()],
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+    let layers = avail["layers"].as_array().unwrap();
+    assert_eq!(layers.len(), 1);
+    assert_eq!(layers[0]["layerAvailability"], "AVAILABLE");
+    assert_eq!(
+        layers[0]["layerSize"].as_u64().unwrap(),
+        (part1.len() + part2.len()) as u64
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}

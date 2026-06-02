@@ -11,6 +11,9 @@ use crate::state::{EcrState, Layer, LayerUpload};
 
 const DEFAULT_LAYER_MEDIA_TYPE: &str = "application/vnd.docker.image.rootfs.diff.tar.gzip";
 const ECR_LAYER_GROUP: &str = "ecr";
+/// Bucket under the `ecr` group that holds in-progress upload temp
+/// blobs, keyed by uploadId, before CompleteLayerUpload finalizes them.
+const UPLOADS_BUCKET: &str = "_uploads";
 
 fn now_epoch_str() -> String {
     SystemTime::now()
@@ -725,6 +728,8 @@ pub fn initiate_layer_upload(
         LayerUpload {
             upload_id: upload_id.clone(),
             repository_name: repo_name.to_string(),
+            bytes_received: 0,
+            hasher: Sha256::new(),
             part_data: Vec::new(),
         },
     );
@@ -763,7 +768,7 @@ pub fn upload_layer_part(
     // partFirstByte + len(layerPartBlob) - 1. Mismatches return
     // InvalidLayerPartException so the client can recover by resuming
     // from `lastByteReceived`.
-    let current = upload.part_data.len() as u64;
+    let current = upload.bytes_received;
     let supplied_first = input.get("partFirstByte").and_then(Value::as_u64);
     let supplied_last = input.get("partLastByte").and_then(Value::as_u64);
     if let Some(first) = supplied_first
@@ -791,8 +796,21 @@ pub fn upload_layer_part(
         }
     }
 
-    upload.part_data.extend_from_slice(part_data);
-    let last_byte = upload.part_data.len() as u64;
+    // Stream the part to a temporary `_uploads/<upload_id>` blob instead
+    // of buffering it. Keep an in-memory fallback only when no body
+    // store is configured, mirroring complete_layer_upload's fallback.
+    match state.body_store() {
+        Some(bs) => {
+            if let Err(e) = bs.append_blob(ECR_LAYER_GROUP, UPLOADS_BUCKET, upload_id, part_data) {
+                warn!(upload = %upload_id, error = %e, "Failed to append ECR layer part; buffering in-memory");
+                upload.part_data.extend_from_slice(part_data);
+            }
+        }
+        None => upload.part_data.extend_from_slice(part_data),
+    }
+    upload.hasher.update(part_data);
+    upload.bytes_received += part_data.len() as u64;
+    let last_byte = upload.bytes_received;
 
     Ok(json!({
         "registryId": ctx.account_id,
@@ -824,21 +842,34 @@ pub fn complete_layer_upload(
         )
     })?;
 
-    let bytes = upload.part_data;
-    let mut hasher = Sha256::new();
-    hasher.update(&bytes);
-    let layer_digest = format!("sha256:{:x}", hasher.finalize());
-    let size = bytes.len() as u64;
+    // Finalize the digest from the carried streaming hasher; the bytes
+    // themselves live in the temp `_uploads/<upload_id>` blob (or the
+    // in-memory fallback when no body store is configured).
+    let layer_digest = format!("sha256:{:x}", upload.hasher.clone().finalize());
+    let size = upload.bytes_received;
 
     let body = match state.body_store() {
-        Some(bs) => match bs.write_blob(ECR_LAYER_GROUP, repo_name, &layer_digest, &bytes) {
-            Ok(path) => Body::OnDisk(path),
-            Err(e) => {
-                warn!(repo = repo_name, digest = %layer_digest, error = %e, "Failed to persist ECR layer; falling back to in-memory");
-                Body::InMemory(bytes)
+        Some(bs) => {
+            // Read the streamed temp blob and move it into the
+            // digest-keyed blob the crate serves layers from, then drop
+            // the temp upload. Fall back to in-memory if the temp blob
+            // is unreadable (e.g. an append failed mid-upload).
+            let bytes = bs
+                .read_blob(ECR_LAYER_GROUP, UPLOADS_BUCKET, upload_id)
+                .unwrap_or_else(|_| upload.part_data.clone());
+            let body = match bs.write_blob(ECR_LAYER_GROUP, repo_name, &layer_digest, &bytes) {
+                Ok(path) => Body::OnDisk(path),
+                Err(e) => {
+                    warn!(repo = repo_name, digest = %layer_digest, error = %e, "Failed to persist ECR layer; falling back to in-memory");
+                    Body::InMemory(bytes)
+                }
+            };
+            if let Err(e) = bs.delete_blob(ECR_LAYER_GROUP, UPLOADS_BUCKET, upload_id) {
+                warn!(upload = %upload_id, error = %e, "Failed to remove ECR layer upload temp blob");
             }
-        },
-        None => Body::InMemory(bytes),
+            body
+        }
+        None => Body::InMemory(upload.part_data),
     };
 
     let layer = Layer {
