@@ -861,11 +861,16 @@ fn evaluate_intrinsic(expr: &str, source: &Value) -> Option<Value> {
         }
         "IsTimestamp" => {
             let raw = resolve_intrinsic_arg_str(args.first()?, source)?;
-            // Loose ISO-8601 with optional offset: YYYY-MM-DDTHH:MM:SS(.fff)?(Z|±HH:MM)
-            let re = regex::Regex::new(
-                r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$",
-            )
-            .ok()?;
+            // Loose ISO-8601 with optional offset: YYYY-MM-DDTHH:MM:SS(.fff)?(Z|±HH:MM).
+            // Compiled once and reused; recompiling on every call was the
+            // only per-invocation regex build in the interpreter.
+            static TS_REGEX: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+            let re = TS_REGEX.get_or_init(|| {
+                regex::Regex::new(
+                    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$",
+                )
+                .expect("IsTimestamp regex is valid")
+            });
             Some(Value::Bool(re.is_match(&raw)))
         }
         _ => None,
@@ -1111,13 +1116,69 @@ fn apply_result_path(input: &Value, result: &Value, result_path: Option<&str>) -
 }
 
 /// Simple reference path resolver (supports `$.field.subfield` notation).
+/// Bounded cache of parsed reference-path segments. AWS state machines
+/// reuse the same JSONPath strings across every state and every Map item,
+/// so caching the split avoids re-parsing on each resolve. The hard
+/// capacity plus insertion-order eviction keep a long-running process
+/// with many distinct paths from growing the cache without bound.
+struct PathSegmentCache {
+    map: std::collections::HashMap<String, std::sync::Arc<Vec<String>>>,
+    order: std::collections::VecDeque<String>,
+    cap: usize,
+}
+
+impl PathSegmentCache {
+    fn get_or_parse(&mut self, path: &str) -> std::sync::Arc<Vec<String>> {
+        if let Some(v) = self.map.get(path) {
+            return std::sync::Arc::clone(v);
+        }
+        let segs: Vec<String> = path
+            .trim_start_matches('$')
+            .trim_start_matches('.')
+            .split('.')
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .collect();
+        let arc = std::sync::Arc::new(segs);
+        if self.order.len() >= self.cap
+            && let Some(old) = self.order.pop_front()
+        {
+            self.map.remove(&old);
+        }
+        self.map
+            .insert(path.to_string(), std::sync::Arc::clone(&arc));
+        self.order.push_back(path.to_string());
+        arc
+    }
+}
+
+static PATH_CACHE: std::sync::OnceLock<std::sync::Mutex<PathSegmentCache>> =
+    std::sync::OnceLock::new();
+
+/// Cache capacity for parsed reference-path segments.
+const PATH_CACHE_CAP: usize = 256;
+
+fn cached_segments(path: &str) -> std::sync::Arc<Vec<String>> {
+    PATH_CACHE
+        .get_or_init(|| {
+            std::sync::Mutex::new(PathSegmentCache {
+                map: std::collections::HashMap::new(),
+                order: std::collections::VecDeque::new(),
+                cap: PATH_CACHE_CAP,
+            })
+        })
+        .lock()
+        .unwrap()
+        .get_or_parse(path)
+}
+
 fn resolve_reference_path(value: &Value, path: &str) -> Value {
-    let path = path.trim_start_matches('$').trim_start_matches('.');
-    if path.is_empty() {
+    let segments = cached_segments(path);
+    if segments.is_empty() {
         return value.clone();
     }
     let mut current = value;
-    for segment in path.split('.') {
+    for segment in segments.iter() {
         current = &current[segment];
     }
     current.clone()
@@ -1295,6 +1356,35 @@ mod tests {
 
     fn run(def: &str, input: &str) -> ExecResult {
         execute_typed(def, input, "2024-01-01T00:00:00Z", false)
+    }
+
+    #[test]
+    fn path_cache_parses_segments_and_resolves() {
+        let v = json!({ "a": { "b": 7 } });
+        assert_eq!(resolve_reference_path(&v, "$.a.b"), json!(7));
+        assert_eq!(resolve_reference_path(&v, "$"), v);
+        // Repeated lookups return the same cached segments.
+        let s1 = cached_segments("$.a.b");
+        let s2 = cached_segments("$.a.b");
+        assert_eq!(*s1, vec!["a".to_string(), "b".to_string()]);
+        assert!(std::sync::Arc::ptr_eq(&s1, &s2));
+    }
+
+    #[test]
+    fn path_cache_evicts_beyond_capacity() {
+        let mut cache = PathSegmentCache {
+            map: std::collections::HashMap::new(),
+            order: std::collections::VecDeque::new(),
+            cap: 3,
+        };
+        for i in 0..10 {
+            cache.get_or_parse(&format!("$.p{i}"));
+            assert!(cache.map.len() <= 3, "cache exceeded capacity");
+            assert!(cache.order.len() <= 3);
+        }
+        // The earliest entries were evicted; the most recent remain.
+        assert!(cache.map.contains_key("$.p9"));
+        assert!(!cache.map.contains_key("$.p0"));
     }
 
     fn run_express(def: &str, input: &str) -> ExecResult {
