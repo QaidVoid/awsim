@@ -4,12 +4,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use awsim_core::arn;
 use awsim_core::idempotency::{Lookup, hash_request, validate_token};
 use awsim_core::pagination::{cap_max_results, paginate};
+use awsim_core::tags::{TagOpts, dedupe_or_reject, reject_aws_prefix_on_write, validate};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
 use crate::state::{Broker, BrokerUser, Configuration, MqState, user_key};
 
-fn now() -> f64 {
+pub(crate) fn now() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -25,6 +26,38 @@ fn require_str<'a>(input: &'a Value, key: &str) -> Result<&'a str, AwsError> {
 
 fn new_id() -> String {
     format!("b-{}", &uuid::Uuid::new_v4().simple().to_string()[..16])
+}
+
+/// Seconds a freshly-created broker spends in `CREATION_IN_PROGRESS`
+/// before it promotes to `RUNNING`. Defaults to `0` so describes (and
+/// the existing test suite) see `RUNNING` immediately; set
+/// `AWSIM_MQ_CREATE_DELAY_SECS` to exercise the transitional path.
+fn create_delay_secs() -> f64 {
+    std::env::var("AWSIM_MQ_CREATE_DELAY_SECS")
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|d| *d > 0.0)
+        .unwrap_or(0.0)
+}
+
+/// Seconds a rebooting broker spends in `REBOOT_IN_PROGRESS`. AWS
+/// reboots take minutes; we keep it short so a poll loop settles fast
+/// while still exercising the transitional state.
+const REBOOT_DELAY_SECS: f64 = 2.0;
+
+/// Promote a transitional broker to `RUNNING` once its absolute
+/// deadline has passed. Idempotent: a settled broker (`state_at` is
+/// `None`) is left untouched, and a deadline in the past flips the
+/// state exactly once. Returns `true` when the broker changed.
+pub(crate) fn promote_if_due(b: &mut Broker, now: f64) -> bool {
+    match b.state_at {
+        Some(deadline) if now >= deadline => {
+            b.broker_state = "RUNNING".to_string();
+            b.state_at = None;
+            true
+        }
+        _ => false,
+    }
 }
 
 /// Validate broker name per AWS MQ regex: 1-50 alphanumeric + `_-`.
@@ -268,7 +301,10 @@ pub fn create_broker(
         broker_id: id.clone(),
         broker_arn: broker_arn(ctx, &id),
         broker_name: name,
-        broker_state: "RUNNING".to_string(),
+        // Brokers come up `CREATION_IN_PROGRESS` and settle to
+        // `RUNNING` once `state_at` elapses. With the default delay of
+        // `0` the very next describe (or tick) promotes synchronously.
+        broker_state: "CREATION_IN_PROGRESS".to_string(),
         broker_instance_type: host.clone(),
         deployment_mode: input
             .get("DeploymentMode")
@@ -318,6 +354,7 @@ pub fn create_broker(
             .and_then(|v| v.as_str())
             .map(String::from),
         pending: HashMap::new(),
+        state_at: Some(now() + create_delay_secs()),
     };
     let result = json!({ "BrokerId": id, "BrokerArn": b.broker_arn });
     state.brokers.insert(id.clone(), b);
@@ -414,6 +451,16 @@ pub fn describe_broker(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let id = require_str(input, "BrokerId")?;
+    // Polling DescribeBroker also drives the state machine: a broker
+    // whose transition deadline has elapsed promotes to `RUNNING`
+    // here, so callers that poll without a running tick loop still see
+    // the broker settle.
+    {
+        let mut b = state.brokers.get_mut(id).ok_or_else(|| {
+            AwsError::not_found("NotFoundException", format!("Broker {id} not found"))
+        })?;
+        promote_if_due(&mut b, now());
+    }
     let b = state.brokers.get(id).ok_or_else(|| {
         AwsError::not_found("NotFoundException", format!("Broker {id} not found"))
     })?;
@@ -564,7 +611,10 @@ pub fn reboot_broker(
             _ => {}
         }
     }
-    b.broker_state = "RUNNING".to_string();
+    // The broker bounces through `REBOOT_IN_PROGRESS`; a tick or the
+    // next describe past `state_at` flips it back to `RUNNING`.
+    b.broker_state = "REBOOT_IN_PROGRESS".to_string();
+    b.state_at = Some(now() + REBOOT_DELAY_SECS);
     Ok(json!({}))
 }
 
@@ -768,6 +818,15 @@ pub fn create_configuration(
             description,
             data: String::new(),
         }],
+        tags: input
+            .get("Tags")
+            .and_then(|v| v.as_object())
+            .map(|o| {
+                o.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default(),
     };
     let result = json!({
         "Id": c.configuration_id,
@@ -997,4 +1056,103 @@ pub fn list_configurations(
         resp["NextToken"] = json!(t);
     }
     Ok(resp)
+}
+
+/// Run `f` against the tags map of whichever resource the ARN names.
+/// MQ tags both brokers (`arn:...:broker:b-...`) and configurations
+/// (`arn:...:configuration:...`); we resolve by exact ARN match so we
+/// never have to reparse the partition/account segments.
+fn with_resource_tags<T>(
+    state: &MqState,
+    arn: &str,
+    f: impl FnOnce(&mut HashMap<String, String>) -> T,
+) -> Result<T, AwsError> {
+    if let Some(mut b) = state
+        .brokers
+        .iter_mut()
+        .find(|e| e.value().broker_arn == arn)
+    {
+        return Ok(f(&mut b.tags));
+    }
+    if let Some(mut c) = state
+        .configurations
+        .iter_mut()
+        .find(|e| e.value().configuration_arn == arn)
+    {
+        return Ok(f(&mut c.tags));
+    }
+    Err(AwsError::not_found(
+        "NotFoundException",
+        format!("Resource {arn} not found"),
+    ))
+}
+
+fn resource_arn(input: &Value) -> Result<String, AwsError> {
+    // The REST layer merges the `{resourceArn}` path segment into the
+    // input under that exact key.
+    require_str(input, "resourceArn").map(str::to_string)
+}
+
+/// `CreateTags`. Validates the supplied tag map (AWS limits +
+/// reserved-prefix rule) then merges it into the target resource's
+/// tags. AWS uses an upsert: existing keys are overwritten.
+pub fn create_tags(
+    state: &MqState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let arn = resource_arn(input)?;
+    let tags = input.get("Tags").cloned().unwrap_or(json!({}));
+    let map = tags.as_object().ok_or_else(|| {
+        AwsError::bad_request("BadRequestException", "Tags must be a JSON object.")
+    })?;
+    let pairs: Vec<(String, String)> = map
+        .iter()
+        .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+        .collect();
+    dedupe_or_reject(&pairs)?;
+    reject_aws_prefix_on_write(&pairs.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>())?;
+    validate(&pairs, &TagOpts::aws_default())?;
+
+    with_resource_tags(state, &arn, |t| {
+        for (k, v) in pairs {
+            t.insert(k, v);
+        }
+    })?;
+    Ok(json!({}))
+}
+
+/// `DeleteTags`. Removes the supplied `tagKeys`. AWS rejects the
+/// reserved `aws:` prefix and silently ignores keys that aren't set.
+pub fn delete_tags(
+    state: &MqState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let arn = resource_arn(input)?;
+    let keys: Vec<String> = input
+        .get("tagKeys")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    reject_aws_prefix_on_write(&keys)?;
+
+    with_resource_tags(state, &arn, |t| {
+        for k in &keys {
+            t.remove(k);
+        }
+    })?;
+    Ok(json!({}))
+}
+
+/// `ListTags`. Returns the resource's tags as a `{ "Tags": {...} }`
+/// map, matching the AWS MQ response shape.
+pub fn list_tags(state: &MqState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
+    let arn = resource_arn(input)?;
+    let tags = with_resource_tags(state, &arn, |t| t.clone())?;
+    Ok(json!({ "Tags": tags }))
 }

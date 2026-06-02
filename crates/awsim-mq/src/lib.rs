@@ -1,6 +1,8 @@
 //! Amazon MQ emulator. Brokers, broker users, and configuration metadata.
-//! Emulator never spins up real ActiveMQ/RabbitMQ — broker state is always
-//! `RUNNING` immediately after CreateBroker.
+//! The emulator never spins up real ActiveMQ/RabbitMQ. A broker comes up
+//! `CREATION_IN_PROGRESS` and settles to `RUNNING` once its transition
+//! deadline elapses (driven by `tick` or by polling `DescribeBroker`); the
+//! default create delay is `0`, so it promotes on the first describe.
 
 mod operations;
 pub mod state;
@@ -172,6 +174,24 @@ impl ServiceHandler for MqService {
                 operation: "DescribeConfigurationRevision",
                 required_query_param: None,
             },
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/v1/tags/{resourceArn}",
+                operation: "CreateTags",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/v1/tags/{resourceArn}",
+                operation: "DeleteTags",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v1/tags/{resourceArn}",
+                operation: "ListTags",
+                required_query_param: None,
+            },
         ]
     }
 
@@ -202,7 +222,25 @@ impl ServiceHandler for MqService {
                 operations::describe_configuration_revision(&state, &input, ctx)
             }
             "ListConfigurations" => operations::list_configurations(&state, &input, ctx),
+            "CreateTags" => operations::create_tags(&state, &input, ctx),
+            "DeleteTags" => operations::delete_tags(&state, &input, ctx),
+            "ListTags" => operations::list_tags(&state, &input, ctx),
             _ => Err(AwsError::unknown_operation(operation)),
+        }
+    }
+
+    /// Drive the broker state machine. Any broker whose transition
+    /// deadline (`state_at`) has elapsed flips to `RUNNING`. Absolute
+    /// wall-clock gated and idempotent, so a missed or repeated tick
+    /// never loses or double-applies state. `DescribeBroker` runs the
+    /// same promotion on poll, so callers that don't run a tick loop
+    /// still observe the broker settle.
+    async fn tick(&self) {
+        let now = operations::now();
+        for (_, state) in self.store.iter_all() {
+            for mut entry in state.brokers.iter_mut() {
+                operations::promote_if_due(entry.value_mut(), now);
+            }
         }
     }
 
@@ -1035,5 +1073,108 @@ mod tests {
         );
         assert_eq!(desc["Configurations"]["Current"]["Id"], json!("c-abc"));
         assert_eq!(desc["DataReplicationMode"], json!("NONE"));
+    }
+
+    #[test]
+    fn tags_round_trip_create_list_delete() {
+        let svc = MqService::new();
+        let ctx = ctx();
+        let r = block_on(svc.handle(
+            "CreateBroker",
+            json!({
+                "BrokerName": "tagged",
+                "EngineType": "RABBITMQ",
+                "EngineVersion": "3.13",
+                "HostInstanceType": "mq.t3.micro",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let arn = r["BrokerArn"].as_str().unwrap().to_string();
+
+        // CreateTags merges (upsert) into the broker's tag map.
+        block_on(svc.handle(
+            "CreateTags",
+            json!({ "resourceArn": arn, "Tags": { "Owner": "alice", "Cost": "eng" } }),
+            &ctx,
+        ))
+        .unwrap();
+        let listed = block_on(svc.handle("ListTags", json!({ "resourceArn": arn }), &ctx)).unwrap();
+        assert_eq!(listed["Tags"]["Owner"], json!("alice"));
+        assert_eq!(listed["Tags"]["Cost"], json!("eng"));
+
+        // DeleteTags removes only the named keys.
+        block_on(svc.handle(
+            "DeleteTags",
+            json!({ "resourceArn": arn, "tagKeys": ["Cost"] }),
+            &ctx,
+        ))
+        .unwrap();
+        let after = block_on(svc.handle("ListTags", json!({ "resourceArn": arn }), &ctx)).unwrap();
+        assert_eq!(after["Tags"]["Owner"], json!("alice"));
+        assert!(after["Tags"].get("Cost").is_none());
+    }
+
+    #[test]
+    fn create_tags_rejects_reserved_aws_prefix() {
+        let svc = MqService::new();
+        let ctx = ctx();
+        let r = block_on(svc.handle(
+            "CreateBroker",
+            json!({
+                "BrokerName": "reserved-tags",
+                "EngineType": "RABBITMQ",
+                "EngineVersion": "3.13",
+                "HostInstanceType": "mq.t3.micro",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let arn = r["BrokerArn"].as_str().unwrap().to_string();
+        let err = block_on(svc.handle(
+            "CreateTags",
+            json!({ "resourceArn": arn, "Tags": { "aws:internal": "x" } }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn list_tags_on_unknown_arn_is_not_found() {
+        let svc = MqService::new();
+        let ctx = ctx();
+        let err = block_on(svc.handle(
+            "ListTags",
+            json!({ "resourceArn": "arn:aws:mq:us-east-1:000000000000:broker:b-missing" }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "NotFoundException");
+    }
+
+    #[test]
+    fn configuration_arn_is_taggable() {
+        let svc = MqService::new();
+        let ctx = ctx();
+        let c = block_on(svc.handle(
+            "CreateConfiguration",
+            json!({
+                "Name": "tag-cfg",
+                "EngineType": "RABBITMQ",
+                "EngineVersion": "3.13",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        let arn = c["Arn"].as_str().unwrap().to_string();
+        block_on(svc.handle(
+            "CreateTags",
+            json!({ "resourceArn": arn, "Tags": { "Team": "platform" } }),
+            &ctx,
+        ))
+        .unwrap();
+        let listed = block_on(svc.handle("ListTags", json!({ "resourceArn": arn }), &ctx)).unwrap();
+        assert_eq!(listed["Tags"]["Team"], json!("platform"));
     }
 }

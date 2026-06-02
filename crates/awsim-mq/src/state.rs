@@ -82,6 +82,14 @@ pub struct Broker {
     /// promotes the entries into the live fields and clears this map.
     #[serde(default)]
     pub pending: std::collections::HashMap<String, serde_json::Value>,
+    /// Epoch-seconds deadline at which a transitional `broker_state`
+    /// (`CREATION_IN_PROGRESS`, `REBOOT_IN_PROGRESS`) flips to
+    /// `RUNNING`. `None` once the broker has settled. The deadline is
+    /// absolute wall-clock time so `tick`/`DescribeBroker` promotion
+    /// stays idempotent regardless of how many polls land. A deadline
+    /// of `0` (the create default) promotes on the very next describe.
+    #[serde(default)]
+    pub state_at: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,6 +128,10 @@ pub struct Configuration {
     /// to an earlier config; we mirror that.
     #[serde(default)]
     pub revisions: Vec<ConfigurationRevision>,
+    /// Resource tags. Configuration ARNs are taggable just like broker
+    /// ARNs via the shared `/v1/tags/{resourceArn}` surface.
+    #[serde(default)]
+    pub tags: std::collections::HashMap<String, String>,
 }
 
 /// A single revision of a `Configuration`. AWS stores the broker's
