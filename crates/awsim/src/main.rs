@@ -2111,6 +2111,9 @@ fn spawn_event_router(state: &AppState) {
                         "eventbridge:TargetInvocation" => {
                             integrations::handle_eventbridge_target(&services, &event).await;
                         }
+                        "ses:EmailEvent" => {
+                            integrations::handle_ses_event(&services, &event).await;
+                        }
                         "cognito:LambdaTrigger" => {
                             integrations::handle_cognito_trigger(&services, &event).await;
                         }

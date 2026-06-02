@@ -548,6 +548,76 @@ pub async fn handle_dynamodb_stream(
 
 /// Handle an `eventbridge:TargetInvocation` event by dispatching to the
 /// appropriate service (Lambda, SQS, or SNS) based on the target ARN.
+/// Fan out a `ses:EmailEvent` to its configured event-destination
+/// target. SES configuration-set event destinations forward send /
+/// delivery / bounce notifications to SNS, Kinesis Firehose, or
+/// CloudWatch metrics; this re-dispatches to the in-process handler
+/// named in `detail.destination.kind`.
+pub async fn handle_ses_event(
+    services: &HashMap<String, Arc<dyn ServiceHandler>>,
+    event: &InternalEvent,
+) {
+    let dest = &event.detail["destination"];
+    let event_type = event.detail["eventType"].as_str().unwrap_or("SEND");
+    let body = event.detail.to_string();
+    match dest["kind"].as_str() {
+        Some("sns") => {
+            if let Some(sns) = services.get("sns") {
+                let arn = dest["arn"].as_str().unwrap_or("");
+                let input = serde_json::json!({ "TopicArn": arn, "Message": body });
+                let ctx = RequestContext::new_with_account("sns", &event.region, &event.account_id);
+                match sns.handle("Publish", input, &ctx).await {
+                    Ok(_) => info!(topic = %arn, "SES->SNS event delivered"),
+                    Err(e) => {
+                        warn!(topic = %arn, error = %e.message, "SES->SNS event delivery failed")
+                    }
+                }
+            }
+        }
+        Some("firehose") => {
+            if let Some(fh) = services.get("firehose") {
+                let name = dest["arn"]
+                    .as_str()
+                    .and_then(|a| a.rsplit_once("deliverystream/").map(|(_, n)| n))
+                    .unwrap_or("");
+                use base64::Engine as _;
+                let data = base64::engine::general_purpose::STANDARD.encode(&body);
+                let input =
+                    serde_json::json!({ "DeliveryStreamName": name, "Record": { "Data": data } });
+                let ctx =
+                    RequestContext::new_with_account("firehose", &event.region, &event.account_id);
+                match fh.handle("PutRecord", input, &ctx).await {
+                    Ok(_) => info!(stream = %name, "SES->Firehose event delivered"),
+                    Err(e) => {
+                        warn!(stream = %name, error = %e.message, "SES->Firehose event delivery failed")
+                    }
+                }
+            }
+        }
+        Some("cloudwatch") => {
+            // CloudWatch metrics registers under the "monitoring" key.
+            if let Some(cw) = services.get("monitoring") {
+                let input = serde_json::json!({
+                    "Namespace": "AWS/SES",
+                    "MetricData": [{ "MetricName": event_type, "Value": 1.0, "Unit": "Count" }],
+                });
+                let ctx = RequestContext::new_with_account(
+                    "monitoring",
+                    &event.region,
+                    &event.account_id,
+                );
+                match cw.handle("PutMetricData", input, &ctx).await {
+                    Ok(_) => info!(metric = %event_type, "SES->CloudWatch metric delivered"),
+                    Err(e) => {
+                        warn!(metric = %event_type, error = %e.message, "SES->CloudWatch metric failed")
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 pub async fn handle_eventbridge_target(
     services: &HashMap<String, Arc<dyn ServiceHandler>>,
     event: &InternalEvent,

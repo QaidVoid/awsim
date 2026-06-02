@@ -92,6 +92,16 @@ pub struct EventDestination {
     pub name: String,
     pub enabled: bool,
     pub matching_event_types: Vec<String>,
+    /// `SnsDestination.TopicArn` — set when this destination forwards to
+    /// an SNS topic.
+    pub sns_topic_arn: Option<String>,
+    /// `KinesisFirehoseDestination.DeliveryStreamArn` — set when this
+    /// destination forwards to a Firehose delivery stream.
+    pub firehose_delivery_stream_arn: Option<String>,
+    /// `CloudWatchDestination.DimensionConfigurations` stored verbatim;
+    /// presence (or absence of any other target) selects the CloudWatch
+    /// metrics destination.
+    pub cloudwatch_dimensions: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Clone)]

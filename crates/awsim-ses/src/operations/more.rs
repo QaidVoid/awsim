@@ -696,6 +696,22 @@ pub fn list_configuration_sets(
     Ok(json!({ "ConfigurationSets": names }))
 }
 
+/// AWS SES configuration-set event-destination `MatchingEventTypes`
+/// enum. Unknown values are rejected at create time so a misspelled
+/// type fails loudly instead of silently swallowing every event.
+const VALID_EVENT_TYPES: &[&str] = &[
+    "SEND",
+    "REJECT",
+    "BOUNCE",
+    "COMPLAINT",
+    "DELIVERY",
+    "OPEN",
+    "CLICK",
+    "RENDERING_FAILURE",
+    "DELIVERY_DELAY",
+    "SUBSCRIPTION",
+];
+
 pub fn create_configuration_set_event_destination(
     state: &SesState,
     input: &Value,
@@ -712,13 +728,44 @@ pub fn create_configuration_set_event_destination(
                 .collect()
         })
         .unwrap_or_default();
-    if let Some(mut cs) = state.configuration_sets.get_mut(cs_name) {
-        cs.event_destinations.push(EventDestination {
-            name: dest_name.to_string(),
-            enabled: event_dest["Enabled"].as_bool().unwrap_or(true),
-            matching_event_types: event_types,
-        });
+    for t in &event_types {
+        if !VALID_EVENT_TYPES.contains(&t.as_str()) {
+            return Err(AwsError::bad_request(
+                "BadRequestException",
+                format!("Invalid event type: {t}"),
+            ));
+        }
     }
+
+    // Parse the target sub-object. AWS allows exactly one of these per
+    // event destination; we store whichever is present so the send path
+    // can fan out to it.
+    let sns_topic_arn = event_dest["SnsDestination"]["TopicArn"]
+        .as_str()
+        .map(String::from);
+    let firehose_delivery_stream_arn =
+        event_dest["KinesisFirehoseDestination"]["DeliveryStreamArn"]
+            .as_str()
+            .map(String::from);
+    let cloudwatch_dimensions = event_dest["CloudWatchDestination"]["DimensionConfigurations"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+
+    let mut cs = state.configuration_sets.get_mut(cs_name).ok_or_else(|| {
+        AwsError::not_found(
+            "NotFoundException",
+            format!("Configuration set does not exist: {cs_name}"),
+        )
+    })?;
+    cs.event_destinations.push(EventDestination {
+        name: dest_name.to_string(),
+        enabled: event_dest["Enabled"].as_bool().unwrap_or(true),
+        matching_event_types: event_types,
+        sns_topic_arn,
+        firehose_delivery_stream_arn,
+        cloudwatch_dimensions,
+    });
     Ok(json!({}))
 }
 
@@ -748,11 +795,22 @@ pub fn get_configuration_set_event_destinations(
             cs.event_destinations
                 .iter()
                 .map(|d| {
-                    json!({
+                    let mut obj = json!({
                         "Name": d.name,
                         "Enabled": d.enabled,
                         "MatchingEventTypes": d.matching_event_types,
-                    })
+                    });
+                    if let Some(arn) = &d.sns_topic_arn {
+                        obj["SnsDestination"] = json!({ "TopicArn": arn });
+                    }
+                    if let Some(arn) = &d.firehose_delivery_stream_arn {
+                        obj["KinesisFirehoseDestination"] = json!({ "DeliveryStreamArn": arn });
+                    }
+                    if !d.cloudwatch_dimensions.is_empty() {
+                        obj["CloudWatchDestination"] =
+                            json!({ "DimensionConfigurations": d.cloudwatch_dimensions });
+                    }
+                    obj
                 })
                 .collect()
         })
@@ -1898,5 +1956,141 @@ mod tag_validation_tests {
         .unwrap_err();
         assert_eq!(err.code, "ValidationException");
         assert!(state.configuration_sets.get("cs").is_none());
+    }
+}
+
+#[cfg(test)]
+mod event_destination_tests {
+    use super::*;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("ses", "us-east-1")
+    }
+
+    fn make_cs(state: &SesState) {
+        create_configuration_set(state, &json!({ "ConfigurationSetName": "cs" }), &ctx()).unwrap();
+    }
+
+    #[test]
+    fn create_persists_sns_target_and_round_trips() {
+        let state = SesState::default();
+        make_cs(&state);
+        create_configuration_set_event_destination(
+            &state,
+            &json!({
+                "ConfigurationSetName": "cs",
+                "EventDestinationName": "d1",
+                "EventDestination": {
+                    "Enabled": true,
+                    "MatchingEventTypes": ["SEND", "DELIVERY"],
+                    "SnsDestination": { "TopicArn": "arn:aws:sns:us-east-1:000000000000:t" },
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let out = get_configuration_set_event_destinations(
+            &state,
+            &json!({ "ConfigurationSetName": "cs" }),
+            &ctx(),
+        )
+        .unwrap();
+        let d = &out["EventDestinations"][0];
+        assert_eq!(d["Name"], "d1");
+        assert_eq!(
+            d["SnsDestination"]["TopicArn"],
+            "arn:aws:sns:us-east-1:000000000000:t"
+        );
+        assert_eq!(d["MatchingEventTypes"][0], "SEND");
+    }
+
+    #[test]
+    fn create_persists_firehose_and_cloudwatch_targets() {
+        let state = SesState::default();
+        make_cs(&state);
+        create_configuration_set_event_destination(
+            &state,
+            &json!({
+                "ConfigurationSetName": "cs",
+                "EventDestinationName": "fh",
+                "EventDestination": {
+                    "MatchingEventTypes": ["BOUNCE"],
+                    "KinesisFirehoseDestination": {
+                        "DeliveryStreamArn": "arn:aws:firehose:us-east-1:000000000000:deliverystream/s1",
+                        "IamRoleArn": "arn:aws:iam::000000000000:role/r",
+                    },
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        create_configuration_set_event_destination(
+            &state,
+            &json!({
+                "ConfigurationSetName": "cs",
+                "EventDestinationName": "cw",
+                "EventDestination": {
+                    "MatchingEventTypes": ["OPEN"],
+                    "CloudWatchDestination": {
+                        "DimensionConfigurations": [
+                            { "DimensionName": "ses:configuration-set", "DimensionValueSource": "MESSAGE_TAG", "DefaultDimensionValue": "cs" }
+                        ]
+                    },
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let out = get_configuration_set_event_destinations(
+            &state,
+            &json!({ "ConfigurationSetName": "cs" }),
+            &ctx(),
+        )
+        .unwrap();
+        let dests = out["EventDestinations"].as_array().unwrap();
+        assert_eq!(dests.len(), 2);
+        let fh = dests.iter().find(|d| d["Name"] == "fh").unwrap();
+        assert_eq!(
+            fh["KinesisFirehoseDestination"]["DeliveryStreamArn"],
+            "arn:aws:firehose:us-east-1:000000000000:deliverystream/s1"
+        );
+        let cw = dests.iter().find(|d| d["Name"] == "cw").unwrap();
+        assert_eq!(
+            cw["CloudWatchDestination"]["DimensionConfigurations"][0]["DimensionName"],
+            "ses:configuration-set"
+        );
+    }
+
+    #[test]
+    fn create_rejects_unknown_event_type() {
+        let state = SesState::default();
+        make_cs(&state);
+        let err = create_configuration_set_event_destination(
+            &state,
+            &json!({
+                "ConfigurationSetName": "cs",
+                "EventDestinationName": "bad",
+                "EventDestination": { "MatchingEventTypes": ["FOO"] },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "BadRequestException");
+    }
+
+    #[test]
+    fn create_returns_not_found_for_missing_configuration_set() {
+        let state = SesState::default();
+        let err = create_configuration_set_event_destination(
+            &state,
+            &json!({
+                "ConfigurationSetName": "nope",
+                "EventDestinationName": "d1",
+                "EventDestination": { "MatchingEventTypes": ["SEND"] },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "NotFoundException");
     }
 }

@@ -15,6 +15,70 @@ fn now_epoch() -> u64 {
         .as_secs()
 }
 
+/// Publish `ses:EmailEvent` records onto the internal event bus for
+/// every enabled event destination whose `MatchingEventTypes` covers a
+/// just-occurred event. A synthetic accept-and-deliver maps to the
+/// `SEND` and `DELIVERY` event types; the binary's event router fans
+/// each record out to the configured SNS topic, Firehose stream, or
+/// CloudWatch namespace named in the detail.
+///
+/// No-op when the request carries no bus (unit tests, internal delivery
+/// contexts that set `event_bus: None` to avoid feedback loops) or when
+/// the send named no configuration set.
+pub(crate) fn emit_send_events(
+    ctx: &RequestContext,
+    state: &SesState,
+    cs_name: Option<&str>,
+    email: &SentEmail,
+) {
+    let Some(bus) = ctx.event_bus.as_ref() else {
+        return;
+    };
+    let Some(name) = cs_name else {
+        return;
+    };
+    let Some(cs) = state.configuration_sets.get(name) else {
+        return;
+    };
+    let mail = json!({
+        "messageId": email.message_id,
+        "source": email.from,
+        "destination": email.to,
+        "tags": email
+            .tags
+            .iter()
+            .map(|(k, v)| json!({ "name": k, "value": v }))
+            .collect::<Vec<_>>(),
+    });
+    for event_type in ["SEND", "DELIVERY"] {
+        for d in &cs.event_destinations {
+            if !d.enabled || !d.matching_event_types.iter().any(|t| t == event_type) {
+                continue;
+            }
+            let destination = if let Some(arn) = &d.sns_topic_arn {
+                json!({ "kind": "sns", "arn": arn })
+            } else if let Some(arn) = &d.firehose_delivery_stream_arn {
+                json!({ "kind": "firehose", "arn": arn })
+            } else {
+                json!({ "kind": "cloudwatch", "dimensions": d.cloudwatch_dimensions })
+            };
+            bus.publish(awsim_core::events::InternalEvent {
+                source: "ses".into(),
+                event_type: "ses:EmailEvent".into(),
+                region: ctx.region.clone(),
+                account_id: ctx.account_id.clone(),
+                detail: json!({
+                    "configurationSetName": name,
+                    "destinationName": d.name,
+                    "eventType": event_type,
+                    "destination": destination,
+                    "mail": mail,
+                }),
+            });
+        }
+    }
+}
+
 /// Returns an error when the recipient is opted out — either globally
 /// via `UnsubscribeAll`, or for the named topic via a `TopicPreferences`
 /// entry whose `SubscriptionStatus` is `OPT_OUT`. Recipients with no
@@ -164,6 +228,7 @@ pub fn send_templated_email(
     if let Some(store) = state.sqlite() {
         store.put_email(&ctx.account_id, &ctx.region, &email)?;
     }
+    emit_send_events(ctx, state, email.configuration_set_name.as_deref(), &email);
     Ok(json!({ "MessageId": message_id }))
 }
 
@@ -272,6 +337,7 @@ pub fn send_bulk_templated_email(
         if let Some(store) = state.sqlite() {
             store.put_email(&ctx.account_id, &ctx.region, &email)?;
         }
+        emit_send_events(ctx, state, email.configuration_set_name.as_deref(), &email);
         statuses.push(json!({ "Status": "Success", "MessageId": message_id }));
     }
 
@@ -395,6 +461,7 @@ pub fn send_raw_email(
     if let Some(store) = state.sqlite() {
         store.put_email(&ctx.account_id, &ctx.region, &email)?;
     }
+    emit_send_events(ctx, state, email.configuration_set_name.as_deref(), &email);
     Ok(json!({ "MessageId": message_id }))
 }
 
@@ -782,6 +849,7 @@ pub fn send_email(
     if let Some(store) = state.sqlite() {
         store.put_email(&ctx.account_id, &ctx.region, &email)?;
     }
+    emit_send_events(ctx, state, email.configuration_set_name.as_deref(), &email);
 
     Ok(json!({ "MessageId": message_id }))
 }
@@ -1616,5 +1684,105 @@ mod list_management_suppression_tests {
         )
         .unwrap();
         assert!(resp["MessageId"].is_string());
+    }
+}
+
+#[cfg(test)]
+mod event_emission_tests {
+    use super::*;
+    use crate::state::{ConfigurationSet, EventDestination};
+
+    fn cs_with_dest(state: &SesState, dest: EventDestination) {
+        state.configuration_sets.insert(
+            "cs".to_string(),
+            ConfigurationSet {
+                name: "cs".to_string(),
+                sending_enabled: true,
+                event_destinations: vec![dest],
+                ..Default::default()
+            },
+        );
+    }
+
+    fn ctx_with_bus() -> (RequestContext, awsim_core::events::EventBus) {
+        let bus = awsim_core::events::EventBus::new();
+        let mut ctx = RequestContext::new("ses", "us-east-1");
+        ctx.event_bus = Some(bus.clone());
+        (ctx, bus)
+    }
+
+    fn send_input() -> Value {
+        json!({
+            "FromEmailAddress": "from@example.com",
+            "Destination": { "ToAddresses": ["to@example.com"] },
+            "ConfigurationSetName": "cs",
+            "Content": { "Simple": { "Subject": { "Data": "hi" }, "Body": { "Text": { "Data": "yo" } } } },
+        })
+    }
+
+    #[test]
+    fn send_email_emits_event_to_matching_sns_destination() {
+        let state = SesState::default();
+        cs_with_dest(
+            &state,
+            EventDestination {
+                name: "d1".into(),
+                enabled: true,
+                matching_event_types: vec!["SEND".into()],
+                sns_topic_arn: Some("arn:aws:sns:us-east-1:000000000000:t".into()),
+                firehose_delivery_stream_arn: None,
+                cloudwatch_dimensions: vec![],
+            },
+        );
+        let (ctx, bus) = ctx_with_bus();
+        let mut rx = bus.subscribe();
+        send_email(&state, &send_input(), &ctx).unwrap();
+        let ev = rx.try_recv().expect("expected one ses:EmailEvent");
+        assert_eq!(ev.event_type, "ses:EmailEvent");
+        assert_eq!(ev.detail["destination"]["kind"], "sns");
+        assert_eq!(ev.detail["eventType"], "SEND");
+        assert_eq!(ev.detail["configurationSetName"], "cs");
+        // Only SEND matched, so no second event.
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn destination_not_matching_event_type_emits_nothing() {
+        let state = SesState::default();
+        cs_with_dest(
+            &state,
+            EventDestination {
+                name: "d1".into(),
+                enabled: true,
+                matching_event_types: vec!["BOUNCE".into()],
+                sns_topic_arn: Some("arn:aws:sns:us-east-1:000000000000:t".into()),
+                firehose_delivery_stream_arn: None,
+                cloudwatch_dimensions: vec![],
+            },
+        );
+        let (ctx, bus) = ctx_with_bus();
+        let mut rx = bus.subscribe();
+        send_email(&state, &send_input(), &ctx).unwrap();
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn disabled_destination_emits_nothing() {
+        let state = SesState::default();
+        cs_with_dest(
+            &state,
+            EventDestination {
+                name: "d1".into(),
+                enabled: false,
+                matching_event_types: vec!["SEND".into(), "DELIVERY".into()],
+                sns_topic_arn: Some("arn:aws:sns:us-east-1:000000000000:t".into()),
+                firehose_delivery_stream_arn: None,
+                cloudwatch_dimensions: vec![],
+            },
+        );
+        let (ctx, bus) = ctx_with_bus();
+        let mut rx = bus.subscribe();
+        send_email(&state, &send_input(), &ctx).unwrap();
+        assert!(rx.try_recv().is_err());
     }
 }
