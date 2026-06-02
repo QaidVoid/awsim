@@ -681,6 +681,99 @@ pub async fn handle_ses_receipt_action(
     }
 }
 
+/// Apply a `servicediscovery:DnsChange` to the embedded Route53. Cloud
+/// Map keeps a Route53 record set per DNS service; this finds (or
+/// creates) the hosted zone for the namespace by name, then UPSERTs each
+/// record carrying the full instance value set. Uses Route53's public
+/// operations so no Route53 internals are touched.
+pub async fn handle_servicediscovery_dns(
+    services: &HashMap<String, Arc<dyn ServiceHandler>>,
+    event: &InternalEvent,
+) {
+    let Some(route53) = services.get("route53") else {
+        return;
+    };
+    let zone_name = event.detail["zone_name"].as_str().unwrap_or("");
+    if zone_name.is_empty() {
+        return;
+    }
+    let ctx = RequestContext::new_with_account("route53", &event.region, &event.account_id);
+
+    // Find the namespace's hosted zone by name, creating it on first use.
+    let listed = route53
+        .handle(
+            "ListHostedZonesByName",
+            serde_json::json!({ "DNSName": zone_name }),
+            &ctx,
+        )
+        .await;
+    let existing = listed.ok().and_then(|r| {
+        r["HostedZones"]
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(|z| z["Id"].as_str().map(String::from))
+    });
+    let zone_id = match existing {
+        Some(id) => id,
+        None => {
+            let created = route53
+                .handle(
+                    "CreateHostedZone",
+                    serde_json::json!({
+                        "Name": zone_name,
+                        "CallerReference": format!("cloudmap-{}", uuid::Uuid::new_v4()),
+                    }),
+                    &ctx,
+                )
+                .await;
+            match created {
+                Ok(r) => match r["HostedZone"]["Id"].as_str() {
+                    Some(id) => id.to_string(),
+                    None => return,
+                },
+                Err(e) => {
+                    warn!(zone = %zone_name, error = %e.message, "Cloud Map zone create failed");
+                    return;
+                }
+            }
+        }
+    };
+
+    for rec in event.detail["records"].as_array().into_iter().flatten() {
+        let values: Vec<Value> = rec["values"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .map(|v| serde_json::json!({ "Value": v }))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let input = serde_json::json!({
+            "Id": zone_id,
+            "ChangeBatch": { "Changes": { "Change": [{
+                "Action": "UPSERT",
+                "ResourceRecordSet": {
+                    "Name": rec["name"],
+                    "Type": rec["type"],
+                    "TTL": rec["ttl"],
+                    "ResourceRecords": { "ResourceRecord": values },
+                }
+            }]}}
+        });
+        match route53
+            .handle("ChangeResourceRecordSets", input, &ctx)
+            .await
+        {
+            Ok(_) => {
+                info!(zone = %zone_name, record = ?rec["name"], "Cloud Map DNS record upserted")
+            }
+            Err(e) => {
+                warn!(zone = %zone_name, error = %e.message, "Cloud Map DNS upsert failed")
+            }
+        }
+    }
+}
+
 pub async fn handle_eventbridge_target(
     services: &HashMap<String, Arc<dyn ServiceHandler>>,
     event: &InternalEvent,
@@ -1451,5 +1544,67 @@ pub async fn handle_cognito_trigger(
             error = %e.message,
             "Cognito trigger → Lambda invocation failed"
         ),
+    }
+}
+
+#[cfg(test)]
+mod servicediscovery_dns_tests {
+    use super::*;
+    use awsim_core::events::InternalEvent;
+
+    #[tokio::test]
+    async fn dns_change_creates_zone_and_upserts_record() {
+        let mut services: HashMap<String, Arc<dyn ServiceHandler>> = HashMap::new();
+        let route53 = Arc::new(awsim_route53::Route53Service::new());
+        services.insert("route53".to_string(), route53.clone());
+
+        let event = InternalEvent {
+            source: "servicediscovery".to_string(),
+            event_type: "servicediscovery:DnsChange".to_string(),
+            region: "us-east-1".to_string(),
+            account_id: "000000000000".to_string(),
+            detail: serde_json::json!({
+                "zone_name": "ns.local",
+                "records": [
+                    { "name": "web.ns.local", "type": "A", "ttl": 60, "values": ["10.0.0.5", "10.0.0.6"] }
+                ],
+            }),
+        };
+        handle_servicediscovery_dns(&services, &event).await;
+
+        let ctx = RequestContext::new_with_account("route53", "us-east-1", "000000000000");
+        let zones = route53
+            .handle(
+                "ListHostedZonesByName",
+                serde_json::json!({ "DNSName": "ns.local" }),
+                &ctx,
+            )
+            .await
+            .unwrap();
+        let zone_id = zones["HostedZones"][0]["Id"].as_str().unwrap().to_string();
+        let records = route53
+            .handle(
+                "ListResourceRecordSets",
+                serde_json::json!({ "Id": zone_id }),
+                &ctx,
+            )
+            .await
+            .unwrap();
+        let a = records["ResourceRecordSets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| {
+                r["Type"] == "A" && r["Name"].as_str().unwrap_or("").starts_with("web.ns.local")
+            })
+            .expect("expected a web.ns.local A record");
+        let values: Vec<&str> = a["ResourceRecords"]["ResourceRecord"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["Value"].as_str().unwrap())
+            .collect();
+        assert!(values.contains(&"10.0.0.5"));
+        assert!(values.contains(&"10.0.0.6"));
     }
 }

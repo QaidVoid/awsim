@@ -636,7 +636,7 @@ pub fn list_services(
 pub fn register_instance(
     state: &ServiceDiscoveryState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let service_id = input
         .get("ServiceId")
@@ -687,11 +687,81 @@ pub fn register_instance(
         s.instance_count += 1;
         s.instances_revision = s.instances_revision.saturating_add(1);
     }
+    emit_dns_records(state, ctx, &service_id);
     let mut targets = HashMap::new();
     targets.insert("INSTANCE".to_string(), instance_id);
     targets.insert("SERVICE".to_string(), service_id);
     let op_id = record_operation(state, "REGISTER_INSTANCE", targets);
     Ok(json!({ "OperationId": op_id }))
+}
+
+/// Publish a `servicediscovery:DnsChange` describing the full desired
+/// record set for a DNS service after an instance change. AWS Cloud Map
+/// keeps a matching Route53 record (e.g. `web.ns.local`) listing every
+/// instance value; we emit the complete set (all instances) so the
+/// binary's router can UPSERT it into the embedded Route53 in one shot.
+/// No-op for HTTP namespaces, services without a DnsConfig, or requests
+/// that carry no event bus (unit tests).
+fn emit_dns_records(state: &ServiceDiscoveryState, ctx: &RequestContext, service_id: &str) {
+    let Some(bus) = ctx.event_bus.as_ref() else {
+        return;
+    };
+    let Some(svc) = state.services.get(service_id).map(|s| s.clone()) else {
+        return;
+    };
+    let Some(dns_config) = svc.dns_config.clone() else {
+        return;
+    };
+    let Some(ns) = state.namespaces.get(&svc.namespace_id).map(|n| n.clone()) else {
+        return;
+    };
+    if !ns.r#type.starts_with("DNS") {
+        return;
+    }
+
+    let dns_records = dns_config
+        .get("DnsRecords")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let fqdn = format!("{}.{}", svc.name, ns.name);
+    let mut records = Vec::new();
+    for spec in &dns_records {
+        let rtype = spec.get("Type").and_then(Value::as_str).unwrap_or("");
+        let ttl = spec.get("TTL").and_then(Value::as_u64).unwrap_or(60);
+        let attr = match rtype {
+            "A" => "AWS_INSTANCE_IPV4",
+            "AAAA" => "AWS_INSTANCE_IPV6",
+            "CNAME" => "AWS_INSTANCE_CNAME",
+            // SRV records need per-instance port composition; out of scope.
+            _ => continue,
+        };
+        let values: Vec<String> = state
+            .instances
+            .iter()
+            .filter(|e| e.value().service_id == service_id)
+            .filter_map(|e| e.value().attributes.get(attr).cloned())
+            .collect();
+        if values.is_empty() {
+            continue;
+        }
+        records.push(json!({
+            "name": fqdn,
+            "type": rtype,
+            "ttl": ttl,
+            "values": values,
+        }));
+    }
+    if records.is_empty() {
+        return;
+    }
+    bus.publish(awsim_core::events::InternalEvent {
+        source: "servicediscovery".to_string(),
+        event_type: "servicediscovery:DnsChange".to_string(),
+        region: ctx.region.clone(),
+        account_id: ctx.account_id.clone(),
+        detail: json!({ "zone_name": ns.name, "records": records }),
+    });
 }
 
 pub fn deregister_instance(
@@ -2526,5 +2596,84 @@ mod lifecycle_health_tests {
             .map(|i| i["InstanceId"].as_str().unwrap().to_string())
             .collect();
         assert_eq!(got, vec!["a", "b", "c"]);
+    }
+}
+
+#[cfg(test)]
+mod dns_fanout_tests {
+    use super::*;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("servicediscovery", "us-east-1")
+    }
+
+    #[test]
+    fn register_emits_dns_change_for_dns_service() {
+        let state = ServiceDiscoveryState::default();
+        create_public_dns_namespace(&state, &json!({ "Name": "ns.local" }), &ctx()).unwrap();
+        let ns_id = state.namespaces.iter().next().unwrap().id.clone();
+        let svc_id = create_service(
+            &state,
+            &json!({
+                "Name": "web",
+                "NamespaceId": ns_id,
+                "DnsConfig": { "DnsRecords": [{ "Type": "A", "TTL": 60 }] },
+            }),
+            &ctx(),
+        )
+        .unwrap()["Service"]["Id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let bus = awsim_core::events::EventBus::new();
+        let mut rx = bus.subscribe();
+        let mut ctx = ctx();
+        ctx.event_bus = Some(bus);
+        register_instance(
+            &state,
+            &json!({ "ServiceId": svc_id, "InstanceId": "i1",
+                "Attributes": { "AWS_INSTANCE_IPV4": "10.0.0.5" } }),
+            &ctx,
+        )
+        .unwrap();
+
+        let ev = rx
+            .try_recv()
+            .expect("expected a servicediscovery:DnsChange");
+        assert_eq!(ev.event_type, "servicediscovery:DnsChange");
+        assert_eq!(ev.detail["zone_name"], "ns.local");
+        let rec = &ev.detail["records"][0];
+        assert_eq!(rec["type"], "A");
+        assert_eq!(rec["name"], "web.ns.local");
+        assert_eq!(rec["values"][0], "10.0.0.5");
+    }
+
+    #[test]
+    fn register_emits_nothing_for_http_namespace() {
+        let state = ServiceDiscoveryState::default();
+        create_http_namespace(&state, &json!({ "Name": "internal" }), &ctx()).unwrap();
+        let ns_id = state.namespaces.iter().next().unwrap().id.clone();
+        let svc_id = create_service(
+            &state,
+            &json!({ "Name": "s", "NamespaceId": ns_id }),
+            &ctx(),
+        )
+        .unwrap()["Service"]["Id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let bus = awsim_core::events::EventBus::new();
+        let mut rx = bus.subscribe();
+        let mut ctx = ctx();
+        ctx.event_bus = Some(bus);
+        register_instance(
+            &state,
+            &json!({ "ServiceId": svc_id, "InstanceId": "i1",
+                "Attributes": { "AWS_INSTANCE_IPV4": "10.0.0.5" } }),
+            &ctx,
+        )
+        .unwrap();
+        assert!(rx.try_recv().is_err());
     }
 }

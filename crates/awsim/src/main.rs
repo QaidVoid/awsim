@@ -2275,6 +2275,9 @@ fn spawn_event_router(state: &AppState) {
                         "ses:ReceiptAction" => {
                             integrations::handle_ses_receipt_action(&services, &event).await;
                         }
+                        "servicediscovery:DnsChange" => {
+                            integrations::handle_servicediscovery_dns(&services, &event).await;
+                        }
                         "cognito:LambdaTrigger" => {
                             integrations::handle_cognito_trigger(&services, &event).await;
                         }
