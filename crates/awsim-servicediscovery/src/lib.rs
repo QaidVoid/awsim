@@ -63,6 +63,10 @@ impl CloudMapRegistrar for CloudMapServiceRegistrar {
             return false;
         }
         let key = format!("{service_id}:{instance_id}");
+        let weight = attributes
+            .get("AWS_INSTANCE_WEIGHT")
+            .and_then(|w| w.parse::<u64>().ok())
+            .unwrap_or(1);
         state.instances.insert(
             key,
             Instance {
@@ -70,6 +74,9 @@ impl CloudMapRegistrar for CloudMapServiceRegistrar {
                 service_id: service_id.to_string(),
                 creator_request_id: None,
                 attributes: attributes.clone(),
+                health_status: "HEALTHY".to_string(),
+                consecutive_failures: 0,
+                weight,
             },
         );
         if let Some(mut svc) = state.services.get_mut(service_id) {
@@ -183,6 +190,21 @@ impl ServiceHandler for ServiceDiscoveryService {
             "UntagResource" => operations::untag_resource(&state, &input, ctx),
             "ListTagsForResource" => operations::list_tags_for_resource(&state, &input, ctx),
             _ => Err(AwsError::unknown_operation(operation)),
+        }
+    }
+
+    /// Advance every operation's SUBMITTED -> PENDING -> SUCCESS walk
+    /// and run the simulated health prober across all tenants. Both are
+    /// cheap, lock-light scans so they comfortably fit the per-service
+    /// tick deadline.
+    async fn tick(&self) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+        for (_, state) in self.store.iter_all() {
+            operations::advance_operations(&state, now);
+            operations::probe_health(&state);
         }
     }
 

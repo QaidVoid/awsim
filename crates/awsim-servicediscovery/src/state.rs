@@ -59,12 +59,33 @@ pub struct ServiceEntry {
     pub instances_revision: u64,
 }
 
+fn default_health_status() -> String {
+    "HEALTHY".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Instance {
     pub id: String,
     pub service_id: String,
     pub creator_request_id: Option<String>,
     pub attributes: HashMap<String, String>,
+    /// Current health as seen by `DiscoverInstances` /
+    /// `GetInstancesHealthStatus`. Seeded from `AWS_INIT_HEALTH_STATUS`
+    /// (default HEALTHY) and advanced by the simulated tick prober.
+    #[serde(default = "default_health_status")]
+    pub health_status: String,
+    /// Consecutive simulated-probe failures; flips `health_status` to
+    /// UNHEALTHY once it reaches the service's `FailureThreshold`.
+    #[serde(default)]
+    pub consecutive_failures: u32,
+    /// Per-instance routing weight for `WEIGHTED` DnsConfig. Default 1,
+    /// from `AWS_INSTANCE_WEIGHT`.
+    #[serde(default = "default_weight")]
+    pub weight: u64,
+}
+
+fn default_weight() -> u64 {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,6 +98,13 @@ pub struct Operation {
     pub create_date: f64,
     pub update_date: f64,
     pub targets: HashMap<String, String>,
+    /// Epoch-seconds when the next status hop fires; `None` once the
+    /// operation reaches a terminal state.
+    #[serde(default)]
+    pub transition_at: Option<f64>,
+    /// The status this operation hops to next on the tick driver.
+    #[serde(default)]
+    pub next_status: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -106,18 +106,117 @@ fn record_operation(
     targets: HashMap<String, String>,
 ) -> String {
     let id = uuid::Uuid::new_v4().to_string();
+    let t = now();
+    // Cloud Map operations are asynchronous: they start SUBMITTED and
+    // walk SUBMITTED -> PENDING -> SUCCESS as the tick driver advances
+    // them. Callers poll GetOperation.
     let op = Operation {
         id: id.clone(),
         r#type: op_type.to_string(),
-        status: "SUCCESS".to_string(),
+        status: "SUBMITTED".to_string(),
         error_message: None,
         error_code: None,
-        create_date: now(),
-        update_date: now(),
+        create_date: t,
+        update_date: t,
         targets,
+        transition_at: Some(t),
+        next_status: Some("PENDING".to_string()),
     };
     state.operations.insert(id.clone(), op);
     id
+}
+
+/// Advance every operation one hop along SUBMITTED -> PENDING -> SUCCESS
+/// whose scheduled transition time has elapsed, bumping `update_date` on
+/// each hop. Driven by the service tick; also callable directly in
+/// tests. Terminal states (SUCCESS / FAIL) are left untouched.
+pub(crate) fn advance_operations(state: &ServiceDiscoveryState, now: f64) {
+    for mut e in state.operations.iter_mut() {
+        let op = e.value_mut();
+        let (Some(next), Some(at)) = (op.next_status.clone(), op.transition_at) else {
+            continue;
+        };
+        if now < at {
+            continue;
+        }
+        op.status = next.clone();
+        op.update_date = now;
+        match next.as_str() {
+            "SUBMITTED" => {
+                op.next_status = Some("PENDING".to_string());
+                op.transition_at = Some(now);
+            }
+            "PENDING" => {
+                op.next_status = Some("SUCCESS".to_string());
+                op.transition_at = Some(now);
+            }
+            _ => {
+                op.next_status = None;
+                op.transition_at = None;
+            }
+        }
+    }
+}
+
+/// Simulated health-check prober. AWS would open HTTP/HTTPS/TCP sockets
+/// to each instance; for hermetic, deterministic tests we instead derive
+/// health from the instance's own attributes: an instance is HEALTHY iff
+/// it carries the address attribute the check type needs (IPv4 for
+/// HTTP/HTTPS, port for TCP) and is not explicitly marked unhealthy via
+/// `AWS_INIT_HEALTH_STATUS=UNHEALTHY` or the `AWSIM_HEALTH=UNHEALTHY`
+/// test escape hatch. Failing instances flip to UNHEALTHY once they
+/// reach the service's `FailureThreshold`. Only services with a
+/// (non-custom) `HealthCheckConfig` are probed.
+pub(crate) fn probe_health(state: &ServiceDiscoveryState) {
+    let svc_checks: Vec<(String, String, u32)> = state
+        .services
+        .iter()
+        .filter_map(|e| {
+            let s = e.value();
+            let cfg = s.health_check_config.as_ref()?;
+            let ty = cfg
+                .get("Type")
+                .and_then(Value::as_str)
+                .unwrap_or("HTTP")
+                .to_string();
+            let threshold = cfg
+                .get("FailureThreshold")
+                .and_then(Value::as_u64)
+                .unwrap_or(1)
+                .max(1) as u32;
+            Some((s.id.clone(), ty, threshold))
+        })
+        .collect();
+
+    for (svc_id, check_type, threshold) in svc_checks {
+        for mut e in state
+            .instances
+            .iter_mut()
+            .filter(|e| e.value().service_id == svc_id)
+        {
+            let inst = e.value_mut();
+            let has_address = match check_type.as_str() {
+                "TCP" => inst.attributes.contains_key("AWS_INSTANCE_PORT"),
+                _ => inst.attributes.contains_key("AWS_INSTANCE_IPV4"),
+            };
+            let forced_unhealthy = inst.attributes.get("AWSIM_HEALTH").map(String::as_str)
+                == Some("UNHEALTHY")
+                || inst
+                    .attributes
+                    .get("AWS_INIT_HEALTH_STATUS")
+                    .map(String::as_str)
+                    == Some("UNHEALTHY");
+            if has_address && !forced_unhealthy {
+                inst.consecutive_failures = 0;
+                inst.health_status = "HEALTHY".to_string();
+            } else {
+                inst.consecutive_failures = inst.consecutive_failures.saturating_add(1);
+                if inst.consecutive_failures >= threshold {
+                    inst.health_status = "UNHEALTHY".to_string();
+                }
+            }
+        }
+    }
 }
 
 fn ns_to_value(n: &Namespace) -> Value {
@@ -561,6 +660,14 @@ pub fn register_instance(
         })
         .unwrap_or_default();
     validate_instance_attributes(&attrs)?;
+    let health_status = attrs
+        .get("AWS_INIT_HEALTH_STATUS")
+        .cloned()
+        .unwrap_or_else(|| "HEALTHY".to_string());
+    let weight = attrs
+        .get("AWS_INSTANCE_WEIGHT")
+        .and_then(|w| w.parse::<u64>().ok())
+        .unwrap_or(1);
     let inst = Instance {
         id: instance_id.clone(),
         service_id: service_id.clone(),
@@ -569,6 +676,9 @@ pub fn register_instance(
             .and_then(|v| v.as_str())
             .map(String::from),
         attributes: attrs,
+        health_status,
+        consecutive_failures: 0,
+        weight,
     };
     state
         .instances
@@ -681,26 +791,23 @@ pub fn discover_instances(
     };
 
     // HealthStatus filter: HEALTHY (default) | UNHEALTHY | ALL |
-    // HEALTHY_OR_ELSE_ALL. The emulator treats every instance as
-    // HEALTHY (no health-check prober yet), so the practical
-    // distinction is: ALL/HEALTHY/HEALTHY_OR_ELSE_ALL include them;
-    // UNHEALTHY filters them out.
-    let health_status = input
+    // HEALTHY_OR_ELSE_ALL, evaluated against each instance's
+    // prober-maintained health below.
+    let health_filter = input
         .get("HealthStatus")
         .and_then(Value::as_str)
         .unwrap_or("HEALTHY");
-    let include_healthy = match health_status {
-        "HEALTHY" | "ALL" | "HEALTHY_OR_ELSE_ALL" => true,
-        "UNHEALTHY" => false,
-        other => {
-            return Err(AwsError::bad_request(
-                "InvalidInput",
-                format!(
-                    "HealthStatus `{other}` must be HEALTHY, UNHEALTHY, ALL, or HEALTHY_OR_ELSE_ALL.",
-                ),
-            ));
-        }
-    };
+    if !matches!(
+        health_filter,
+        "HEALTHY" | "UNHEALTHY" | "ALL" | "HEALTHY_OR_ELSE_ALL"
+    ) {
+        return Err(AwsError::bad_request(
+            "InvalidInput",
+            format!(
+                "HealthStatus `{health_filter}` must be HEALTHY, UNHEALTHY, ALL, or HEALTHY_OR_ELSE_ALL.",
+            ),
+        ));
+    }
 
     // OptionalParameters is an attribute key/value map; an instance
     // matches if it carries every (k, v) pair in the filter. AWS uses
@@ -735,13 +842,9 @@ pub fn discover_instances(
         return Ok(json!({ "Instances": [], "InstancesRevision": 0 }));
     };
 
-    if !include_healthy {
-        // All emulator instances are HEALTHY; UNHEALTHY filter yields
-        // an empty list without scanning.
-        return Ok(json!({ "Instances": [], "InstancesRevision": svc.instances_revision }));
-    }
-
-    let items: Vec<Value> = state
+    // Gather attribute-filtered instances, then apply the health filter
+    // and (for WEIGHTED routing) a deterministic rotation.
+    let mut matched: Vec<(String, String, HashMap<String, String>)> = state
         .instances
         .iter()
         .filter(|e| e.value().service_id == svc.id)
@@ -751,15 +854,52 @@ pub fn discover_instances(
                 .iter()
                 .all(|(k, v)| inst.attributes.get(k).map(String::as_str) == Some(v.as_str()))
         })
-        .take(max_results)
         .map(|e| {
             let i = e.value();
+            (i.id.clone(), i.health_status.clone(), i.attributes.clone())
+        })
+        .collect();
+    matched.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let any_healthy = matched.iter().any(|(_, h, _)| h == "HEALTHY");
+    matched.retain(|(_, h, _)| match health_filter {
+        "HEALTHY" => h == "HEALTHY",
+        "UNHEALTHY" => h == "UNHEALTHY",
+        "ALL" => true,
+        // HEALTHY unless none are healthy, then fall back to everything.
+        _ => {
+            if any_healthy {
+                h == "HEALTHY"
+            } else {
+                true
+            }
+        }
+    });
+
+    // WEIGHTED routing rotates the result deterministically by the
+    // service's instance revision so repeated polls spread load while
+    // staying assertable in tests. MULTIVALUE leaves order stable.
+    let routing = svc
+        .dns_config
+        .as_ref()
+        .and_then(|d| d.get("RoutingPolicy"))
+        .and_then(Value::as_str)
+        .unwrap_or("MULTIVALUE");
+    if routing == "WEIGHTED" && !matched.is_empty() {
+        let off = (svc.instances_revision as usize) % matched.len();
+        matched.rotate_left(off);
+    }
+
+    let items: Vec<Value> = matched
+        .into_iter()
+        .take(max_results)
+        .map(|(id, health, attrs)| {
             json!({
-                "InstanceId": i.id,
+                "InstanceId": id,
                 "NamespaceName": ns.name,
                 "ServiceName": svc.name,
-                "HealthStatus": "HEALTHY",
-                "Attributes": i.attributes,
+                "HealthStatus": health,
+                "Attributes": attrs,
             })
         })
         .collect();
@@ -1016,7 +1156,12 @@ pub fn get_instances_health_status(
 
     let mut status = serde_json::Map::new();
     for id in page {
-        status.insert(id.clone(), Value::String("HEALTHY".into()));
+        let health = state
+            .instances
+            .get(&instance_key(&service_id, id))
+            .map(|i| i.health_status.clone())
+            .unwrap_or_else(|| "HEALTHY".to_string());
+        status.insert(id.clone(), Value::String(health));
     }
     let mut resp = json!({ "Status": status });
     if end < total {
@@ -1088,14 +1233,18 @@ pub fn update_instance_custom_health_status(
             ),
         ));
     }
-    if !state
+    let mut inst = state
         .instances
-        .contains_key(&instance_key(&service_id, &instance_id))
-    {
-        return Err(AwsError::not_found(
-            "InstanceNotFound",
-            format!("Instance {instance_id} not found"),
-        ));
+        .get_mut(&instance_key(&service_id, &instance_id))
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "InstanceNotFound",
+                format!("Instance {instance_id} not found"),
+            )
+        })?;
+    inst.health_status = status.to_string();
+    if status == "HEALTHY" {
+        inst.consecutive_failures = 0;
     }
     Ok(json!({}))
 }
@@ -1637,7 +1786,15 @@ mod revision_tests {
             );
         }
 
-        // STATUS=SUCCESS — every op in our emulator collapses to SUCCESS.
+        // Operations are async (SUBMITTED -> PENDING -> SUCCESS); drive
+        // them to the terminal SUCCESS via the tick advancer (using a
+        // realistic clock so update_date stays within the later
+        // UPDATE_DATE filter range) before asserting the STATUS filter.
+        let advance_at = now();
+        advance_operations(&state, advance_at);
+        advance_operations(&state, advance_at);
+
+        // STATUS=SUCCESS now matches every completed op.
         let resp = list_operations(
             &state,
             &json!({ "Filters": [{ "Name": "STATUS", "Values": ["SUCCESS"] }] }),
@@ -2133,5 +2290,241 @@ mod partition_tests {
             "service arn was {}",
             svc.arn
         );
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_health_tests {
+    use super::*;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("servicediscovery", "us-east-1")
+    }
+
+    fn make_ns(state: &ServiceDiscoveryState) -> String {
+        create_http_namespace(state, &json!({ "Name": "ns" }), &ctx()).unwrap();
+        state.namespaces.iter().next().unwrap().id.clone()
+    }
+
+    fn add_service(state: &ServiceDiscoveryState, ns_id: &str, name: &str, extra: Value) -> String {
+        let mut input = json!({ "Name": name, "NamespaceId": ns_id });
+        if let Some(obj) = extra.as_object() {
+            for (k, v) in obj {
+                input[k] = v.clone();
+            }
+        }
+        create_service(state, &input, &ctx()).unwrap()["Service"]["Id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn operation_walks_submitted_pending_success() {
+        let state = ServiceDiscoveryState::default();
+        let op_id =
+            create_http_namespace(&state, &json!({ "Name": "ns" }), &ctx()).unwrap()["OperationId"]
+                .as_str()
+                .unwrap()
+                .to_string();
+        let status = |s: &ServiceDiscoveryState| s.operations.get(&op_id).unwrap().status.clone();
+        let updated = |s: &ServiceDiscoveryState| s.operations.get(&op_id).unwrap().update_date;
+        assert_eq!(status(&state), "SUBMITTED");
+        let u0 = updated(&state);
+        advance_operations(&state, f64::MAX);
+        assert_eq!(status(&state), "PENDING");
+        assert!(updated(&state) >= u0);
+        advance_operations(&state, f64::MAX);
+        assert_eq!(status(&state), "SUCCESS");
+        // Terminal: further ticks are a no-op.
+        advance_operations(&state, f64::MAX);
+        assert_eq!(status(&state), "SUCCESS");
+    }
+
+    #[test]
+    fn advance_respects_transition_deadline() {
+        let state = ServiceDiscoveryState::default();
+        let op_id =
+            create_http_namespace(&state, &json!({ "Name": "ns" }), &ctx()).unwrap()["OperationId"]
+                .as_str()
+                .unwrap()
+                .to_string();
+        // A `now` before the scheduled transition leaves it SUBMITTED.
+        advance_operations(&state, 0.0);
+        assert_eq!(state.operations.get(&op_id).unwrap().status, "SUBMITTED");
+    }
+
+    #[test]
+    fn prober_flips_unhealthy_instance() {
+        let state = ServiceDiscoveryState::default();
+        let ns_id = make_ns(&state);
+        let svc_id = add_service(
+            &state,
+            &ns_id,
+            "svc",
+            json!({ "HealthCheckConfig": { "Type": "HTTP", "FailureThreshold": 1 } }),
+        );
+        register_instance(
+            &state,
+            &json!({ "ServiceId": svc_id, "InstanceId": "good",
+                "Attributes": { "AWS_INSTANCE_IPV4": "10.0.0.1" } }),
+            &ctx(),
+        )
+        .unwrap();
+        register_instance(
+            &state,
+            &json!({ "ServiceId": svc_id, "InstanceId": "bad",
+                "Attributes": { "AWS_INSTANCE_IPV4": "10.0.0.2", "AWSIM_HEALTH": "UNHEALTHY" } }),
+            &ctx(),
+        )
+        .unwrap();
+        probe_health(&state);
+        let h =
+            get_instances_health_status(&state, &json!({ "ServiceId": svc_id }), &ctx()).unwrap();
+        assert_eq!(h["Status"]["good"], "HEALTHY");
+        assert_eq!(h["Status"]["bad"], "UNHEALTHY");
+    }
+
+    #[test]
+    fn discover_filters_on_real_health() {
+        let state = ServiceDiscoveryState::default();
+        let ns_id = make_ns(&state);
+        let svc_id = add_service(
+            &state,
+            &ns_id,
+            "svc",
+            json!({ "HealthCheckConfig": { "Type": "HTTP", "FailureThreshold": 1 } }),
+        );
+        register_instance(
+            &state,
+            &json!({ "ServiceId": svc_id, "InstanceId": "good",
+                "Attributes": { "AWS_INSTANCE_IPV4": "10.0.0.1" } }),
+            &ctx(),
+        )
+        .unwrap();
+        register_instance(
+            &state,
+            &json!({ "ServiceId": svc_id, "InstanceId": "bad",
+                "Attributes": { "AWS_INSTANCE_IPV4": "10.0.0.2", "AWSIM_HEALTH": "UNHEALTHY" } }),
+            &ctx(),
+        )
+        .unwrap();
+        probe_health(&state);
+        let healthy = discover_instances(
+            &state,
+            &json!({ "NamespaceName": "ns", "ServiceName": "svc", "HealthStatus": "HEALTHY" }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(healthy["Instances"].as_array().unwrap().len(), 1);
+        assert_eq!(healthy["Instances"][0]["InstanceId"], "good");
+        let unhealthy = discover_instances(
+            &state,
+            &json!({ "NamespaceName": "ns", "ServiceName": "svc", "HealthStatus": "UNHEALTHY" }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(unhealthy["Instances"][0]["InstanceId"], "bad");
+        let all = discover_instances(
+            &state,
+            &json!({ "NamespaceName": "ns", "ServiceName": "svc", "HealthStatus": "ALL" }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(all["Instances"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn update_custom_health_status_is_readable() {
+        let state = ServiceDiscoveryState::default();
+        let ns_id = make_ns(&state);
+        let svc_id = add_service(&state, &ns_id, "svc", json!({}));
+        state
+            .services
+            .get_mut(&svc_id)
+            .unwrap()
+            .health_check_custom_config = Some(json!({ "FailureThreshold": 1 }));
+        register_instance(
+            &state,
+            &json!({ "ServiceId": svc_id, "InstanceId": "i1", "Attributes": {} }),
+            &ctx(),
+        )
+        .unwrap();
+        update_instance_custom_health_status(
+            &state,
+            &json!({ "ServiceId": svc_id, "InstanceId": "i1", "Status": "UNHEALTHY" }),
+            &ctx(),
+        )
+        .unwrap();
+        let h =
+            get_instances_health_status(&state, &json!({ "ServiceId": svc_id }), &ctx()).unwrap();
+        assert_eq!(h["Status"]["i1"], "UNHEALTHY");
+    }
+
+    #[test]
+    fn weighted_routing_rotates_by_revision() {
+        let state = ServiceDiscoveryState::default();
+        let ns_id = make_ns(&state);
+        let svc_id = add_service(
+            &state,
+            &ns_id,
+            "svc",
+            json!({ "DnsConfig": { "RoutingPolicy": "WEIGHTED",
+                "DnsRecords": [{ "Type": "A", "TTL": 60 }] } }),
+        );
+        for id in ["a", "b", "c"] {
+            register_instance(
+                &state,
+                &json!({ "ServiceId": svc_id, "InstanceId": id,
+                    "Attributes": { "AWS_INSTANCE_IPV4": "10.0.0.1" } }),
+                &ctx(),
+            )
+            .unwrap();
+        }
+        let rev = state.services.get(&svc_id).unwrap().instances_revision as usize;
+        let mut expected = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        expected.rotate_left(rev % 3);
+        let disc = discover_instances(
+            &state,
+            &json!({ "NamespaceName": "ns", "ServiceName": "svc" }),
+            &ctx(),
+        )
+        .unwrap();
+        let got: Vec<String> = disc["Instances"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["InstanceId"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn multivalue_routing_is_stable_order() {
+        let state = ServiceDiscoveryState::default();
+        let ns_id = make_ns(&state);
+        let svc_id = add_service(&state, &ns_id, "svc", json!({}));
+        for id in ["c", "a", "b"] {
+            register_instance(
+                &state,
+                &json!({ "ServiceId": svc_id, "InstanceId": id,
+                    "Attributes": { "AWS_INSTANCE_IPV4": "10.0.0.1" } }),
+                &ctx(),
+            )
+            .unwrap();
+        }
+        let disc = discover_instances(
+            &state,
+            &json!({ "NamespaceName": "ns", "ServiceName": "svc" }),
+            &ctx(),
+        )
+        .unwrap();
+        let got: Vec<String> = disc["Instances"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["InstanceId"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(got, vec!["a", "b", "c"]);
     }
 }
