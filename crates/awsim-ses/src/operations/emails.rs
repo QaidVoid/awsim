@@ -548,6 +548,54 @@ fn tags_signal_no_tls(tags: Option<&Value>) -> bool {
     })
 }
 
+/// Lightweight well-formedness check for an SES identity ARN supplied
+/// as a routing hint (FromEmailAddressIdentityArn / ReturnPathArn). The
+/// full cross-account parser lives in `lib.rs` and isn't reachable from
+/// here, so we mirror its prefix requirement: a valid SES ARN starts
+/// with `arn:aws:ses:`. Empty values are treated as absent (Ok).
+fn validate_ses_identity_arn(field: &str, value: &str) -> Result<(), AwsError> {
+    if value.is_empty() || value.starts_with("arn:aws:ses:") {
+        return Ok(());
+    }
+    Err(AwsError::bad_request(
+        "InvalidParameter",
+        format!("{field} `{value}` is not a valid SES identity ARN."),
+    ))
+}
+
+/// Reject a send when any To/Cc/Bcc recipient sits on the account-level
+/// suppression list with a reason the account currently enforces. The
+/// enabled reasons come from `account_suppression_attributes`
+/// (PutAccountSuppressionAttributes); an empty or unset list enforces
+/// nothing, matching AWS where suppression only applies to reasons the
+/// account has opted into.
+fn check_account_suppression(state: &SesState, recipient: &str) -> Result<(), AwsError> {
+    let Some(entry) = state.suppressed_destinations.get(recipient) else {
+        return Ok(());
+    };
+    let attrs = state.account_suppression_attributes.lock().unwrap();
+    let Some(attrs) = attrs.as_ref() else {
+        return Ok(());
+    };
+    let enforced = attrs["SuppressedReasons"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .any(|r| r.as_str() == Some(entry.reason.as_str()))
+        })
+        .unwrap_or(false);
+    if enforced {
+        return Err(AwsError::bad_request(
+            "MessageRejected",
+            format!(
+                "Recipient {recipient} is on the account suppression list ({})",
+                entry.reason
+            ),
+        ));
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // SendEmail
 // ---------------------------------------------------------------------------
@@ -607,6 +655,35 @@ pub fn send_email(
 
     let configuration_set_name = input["ConfigurationSetName"].as_str().map(str::to_string);
 
+    // Identity-routing hints. AWS treats these as cross-account /
+    // bounce-routing metadata; the simulator accepts them faithfully
+    // (validating the ARN-typed ones) and logs them for observability
+    // rather than inventing storage columns. Mirrors how SendRawEmail
+    // records ReturnPath / SourceArn.
+    let from_identity_arn = input["FromEmailAddressIdentityArn"].as_str();
+    let return_path = input["ReturnPath"].as_str();
+    let return_path_arn = input["ReturnPathArn"].as_str();
+    let feedback_forwarding = input["FeedbackForwardingEmailAddress"].as_str();
+    if let Some(arn) = from_identity_arn {
+        validate_ses_identity_arn("FromEmailAddressIdentityArn", arn)?;
+    }
+    if let Some(arn) = return_path_arn {
+        validate_ses_identity_arn("ReturnPathArn", arn)?;
+    }
+    if from_identity_arn.is_some()
+        || return_path.is_some()
+        || return_path_arn.is_some()
+        || feedback_forwarding.is_some()
+    {
+        info!(
+            from_identity_arn = ?from_identity_arn,
+            return_path = ?return_path,
+            return_path_arn = ?return_path_arn,
+            feedback_forwarding = ?feedback_forwarding,
+            "SES: SendEmail received identity-routing hints"
+        );
+    }
+
     // ListManagementOptions: when the caller scopes a send to a contact
     // list (and optionally a topic), each recipient is checked against
     // their subscription preferences. Unsubscribed contacts and OPT_OUT
@@ -622,6 +699,12 @@ pub fn send_email(
         for recipient in to.iter().chain(cc.iter()).chain(bcc.iter()) {
             check_topic_subscription(state, list, topic_name.as_deref(), recipient)?;
         }
+    }
+
+    // Account-level suppression: reject before fan-out when a recipient
+    // is suppressed for a reason the account enforces.
+    for recipient in to.iter().chain(cc.iter()).chain(bcc.iter()) {
+        check_account_suppression(state, recipient)?;
     }
 
     enforce_configuration_set(state, configuration_set_name.as_deref(), input)?;
@@ -1219,6 +1302,107 @@ mod tls_policy_enforcement_tests {
         let state = SesState::default();
         let err = send_email(&state, &send_input("nope", false), &ctx()).unwrap_err();
         assert_eq!(err.code, "ConfigurationSetDoesNotExist");
+    }
+
+    #[test]
+    fn send_email_accepts_routing_hint_params() {
+        let state = SesState::default();
+        let store = open_store();
+        state.set_sqlite(store);
+        let resp = send_email(
+            &state,
+            &json!({
+                "FromEmailAddress": "alice@example.com",
+                "FromEmailAddressIdentityArn": "arn:aws:ses:us-east-1:111111111111:identity/example.com",
+                "ReturnPath": "bounces@example.com",
+                "ReturnPathArn": "arn:aws:ses:us-east-1:111111111111:identity/bounces.example.com",
+                "FeedbackForwardingEmailAddress": "feedback@example.com",
+                "Destination": { "ToAddresses": ["bob@example.com"] },
+                "Content": { "Simple": { "Subject": { "Data": "hi" }, "Body": { "Text": { "Data": "hi" } } } }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(resp["MessageId"].is_string());
+    }
+
+    #[test]
+    fn send_email_rejects_malformed_from_identity_arn() {
+        let state = SesState::default();
+        let err = send_email(
+            &state,
+            &json!({
+                "FromEmailAddress": "alice@example.com",
+                "FromEmailAddressIdentityArn": "not-an-arn",
+                "Destination": { "ToAddresses": ["bob@example.com"] },
+                "Content": { "Simple": { "Subject": { "Data": "hi" }, "Body": { "Text": { "Data": "hi" } } } }
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameter");
+        assert!(err.message.contains("FromEmailAddressIdentityArn"));
+    }
+
+    #[test]
+    fn send_email_rejects_account_suppressed_recipient() {
+        let state = SesState::default();
+        let store = open_store();
+        state.set_sqlite(store);
+        crate::operations::more::put_suppressed_destination(
+            &state,
+            &json!({ "EmailAddress": "bob@example.com", "Reason": "BOUNCE" }),
+            &ctx(),
+        )
+        .unwrap();
+        crate::operations::more::put_account_suppression_attributes(
+            &state,
+            &json!({ "SuppressedReasons": ["BOUNCE"] }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = send_email(
+            &state,
+            &json!({
+                "FromEmailAddress": "alice@example.com",
+                "Destination": { "ToAddresses": ["bob@example.com"] },
+                "Content": { "Simple": { "Subject": { "Data": "hi" }, "Body": { "Text": { "Data": "hi" } } } }
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "MessageRejected");
+        assert!(err.message.contains("suppression"));
+    }
+
+    #[test]
+    fn send_email_allows_when_no_suppressed_reasons_enforced() {
+        let state = SesState::default();
+        let store = open_store();
+        state.set_sqlite(store);
+        crate::operations::more::put_suppressed_destination(
+            &state,
+            &json!({ "EmailAddress": "bob@example.com", "Reason": "BOUNCE" }),
+            &ctx(),
+        )
+        .unwrap();
+        crate::operations::more::put_account_suppression_attributes(
+            &state,
+            &json!({ "SuppressedReasons": [] }),
+            &ctx(),
+        )
+        .unwrap();
+        let resp = send_email(
+            &state,
+            &json!({
+                "FromEmailAddress": "alice@example.com",
+                "Destination": { "ToAddresses": ["bob@example.com"] },
+                "Content": { "Simple": { "Subject": { "Data": "hi" }, "Body": { "Text": { "Data": "hi" } } } }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(resp["MessageId"].is_string());
     }
 }
 
