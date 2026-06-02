@@ -313,13 +313,14 @@ pub async fn dispatch_request(
     )
     .await;
 
-    let (status, mut resp_headers, resp_body, operation, error_code) = match outcome {
+    let (status, mut resp_headers, resp_body, operation, error_code, error_message) = match outcome
+    {
         Ok(ProcessOk {
             status,
             headers,
             body,
             operation,
-        }) => (status, headers, body, Some(operation), None),
+        }) => (status, headers, body, Some(operation), None, None),
         Err((protocol, error)) => {
             warn!(
                 error_code = %error.code,
@@ -328,6 +329,7 @@ pub async fn dispatch_request(
                 "Request failed"
             );
             let err_code = error.code.clone();
+            let err_message = error.message.clone();
             let (status, resp_headers, resp_body) =
                 protocol::serialize_error(protocol, &error, &request_id);
             (
@@ -336,6 +338,7 @@ pub async fn dispatch_request(
                 ProcessBody::Bytes(resp_body),
                 None,
                 Some(err_code),
+                Some(err_message),
             )
         }
     };
@@ -470,7 +473,7 @@ pub async fn dispatch_request(
             request_parameters: None,
             response_elements: None,
             error_code,
-            error_message: None,
+            error_message,
             http_status: status_code,
         };
         state
