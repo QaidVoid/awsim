@@ -105,6 +105,7 @@ pub fn upload_part(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     for (field, algo) in &[
         ("ChecksumCrc32", "CRC32"),
         ("ChecksumCrc32c", "CRC32C"),
+        ("ChecksumCrc64Nvme", "CRC64NVME"),
         ("ChecksumSha1", "SHA1"),
         ("ChecksumSha256", "SHA256"),
     ] {

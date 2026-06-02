@@ -2599,6 +2599,7 @@ dependencies = [
  "awsim-iam-policy",
  "base64",
  "chrono",
+ "crc",
  "dashmap",
  "md-5 0.10.6",
  "serde",

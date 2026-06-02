@@ -121,8 +121,8 @@ pub fn verify_content_md5(body: &[u8], provided_b64: &str) -> Result<(), AwsErro
 /// `algorithm` is the AWS algorithm name as parsed by
 /// `parse_request_checksum` (`CRC32`, `CRC32C`, `CRC64NVME`, `SHA1`,
 /// `SHA256`). `provided_b64` is the base64 of the asserted digest.
-/// CRC32, CRC32C, and CRC64NVME pass through silently (the parse layer
-/// has already validated length); SHA1 and SHA256 are recomputed.
+/// All five (CRC32, CRC32C, CRC64NVME, SHA1, SHA256) are recomputed from
+/// the body and compared; a mismatch returns `BadDigest`.
 pub fn verify_object_checksum(
     body: &[u8],
     algorithm: &str,
@@ -147,9 +147,21 @@ pub fn verify_object_checksum(
             h.update(body);
             h.finalize().to_vec()
         }
-        // CRC32 / CRC32C: trust the caller for now. Adding these would only
-        // require a small CRC implementation; the structural checks in
-        // parse_request_checksum already prevent length-mismatch attacks.
+        // S3 transmits CRC digests big-endian.
+        "CRC32" => {
+            const C: crc::Crc<u32> = crc::Crc::<u32>::new(&crc::CRC_32_ISO_HDLC);
+            C.checksum(body).to_be_bytes().to_vec()
+        }
+        "CRC32C" => {
+            const C: crc::Crc<u32> = crc::Crc::<u32>::new(&crc::CRC_32_ISCSI);
+            C.checksum(body).to_be_bytes().to_vec()
+        }
+        "CRC64NVME" => {
+            const C: crc::Crc<u64> = crc::Crc::<u64>::new(&crc::CRC_64_NVME);
+            C.checksum(body).to_be_bytes().to_vec()
+        }
+        // Unknown algorithm name: the parse layer should never produce one,
+        // so don't reject.
         _ => return Ok(()),
     };
     if actual == provided {
@@ -464,6 +476,44 @@ mod tests {
         let b64 = BASE64.encode(h.finalize());
         assert!(verify_object_checksum(body, "SHA1", &b64).is_ok());
         assert!(verify_object_checksum(b"goodbye", "SHA1", &b64).is_err());
+    }
+
+    #[test]
+    fn checksum_crc_constants_match_catalog_check_values() {
+        // The standard CRC "check" value is the digest of b"123456789".
+        const CRC32: crc::Crc<u32> = crc::Crc::<u32>::new(&crc::CRC_32_ISO_HDLC);
+        const CRC32C: crc::Crc<u32> = crc::Crc::<u32>::new(&crc::CRC_32_ISCSI);
+        const CRC64: crc::Crc<u64> = crc::Crc::<u64>::new(&crc::CRC_64_NVME);
+        assert_eq!(CRC32.checksum(b"123456789"), 0xCBF4_3926);
+        assert_eq!(CRC32C.checksum(b"123456789"), 0xE306_9283);
+        assert_eq!(CRC64.checksum(b"123456789"), 0xAE8B_1486_0A79_9888);
+    }
+
+    #[test]
+    fn checksum_crc32_round_trip() {
+        let body = b"hello";
+        const C: crc::Crc<u32> = crc::Crc::<u32>::new(&crc::CRC_32_ISO_HDLC);
+        let b64 = BASE64.encode(C.checksum(body).to_be_bytes());
+        assert!(verify_object_checksum(body, "CRC32", &b64).is_ok());
+        assert!(verify_object_checksum(b"goodbye", "CRC32", &b64).is_err());
+    }
+
+    #[test]
+    fn checksum_crc32c_round_trip() {
+        let body = b"hello";
+        const C: crc::Crc<u32> = crc::Crc::<u32>::new(&crc::CRC_32_ISCSI);
+        let b64 = BASE64.encode(C.checksum(body).to_be_bytes());
+        assert!(verify_object_checksum(body, "CRC32C", &b64).is_ok());
+        assert!(verify_object_checksum(b"goodbye", "CRC32C", &b64).is_err());
+    }
+
+    #[test]
+    fn checksum_crc64nvme_round_trip() {
+        let body = b"hello";
+        const C: crc::Crc<u64> = crc::Crc::<u64>::new(&crc::CRC_64_NVME);
+        let b64 = BASE64.encode(C.checksum(body).to_be_bytes());
+        assert!(verify_object_checksum(body, "CRC64NVME", &b64).is_ok());
+        assert!(verify_object_checksum(b"goodbye", "CRC64NVME", &b64).is_err());
     }
 
     #[test]
