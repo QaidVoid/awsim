@@ -1,171 +1,183 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/awsim",
-    "crates/awsim-apigateway",
-    "crates/awsim-appsync",
-    "crates/awsim-athena",
-    "crates/awsim-bedrock",
-    "crates/awsim-cloudformation",
-    "crates/awsim-cloudfront",
-    "crates/awsim-cloudwatch-logs",
-    "crates/awsim-cognito",
-    "crates/awsim-core",
-    "crates/awsim-dynamodb",
-    "crates/awsim-ec2",
-    "crates/awsim-ecr",
-    "crates/awsim-ecs",
-    "crates/awsim-eventbridge",
-    "crates/awsim-elb",
-    "crates/awsim-glue",
-    "crates/awsim-iam",
-    "crates/awsim-rds",
-    "crates/awsim-kinesis",
-    "crates/awsim-kms",
-    "crates/awsim-lambda",
-    "crates/awsim-route53",
-    "crates/awsim-cloudwatch-metrics",
-    "crates/awsim-s3",
-    "crates/awsim-secretsmanager",
-    "crates/awsim-ses",
-    "crates/awsim-sns",
-    "crates/awsim-sqs",
-    "crates/awsim-ssm",
-    "crates/awsim-sts",
-    "crates/awsim-stepfunctions",
-    "crates/awsim-acm",
-    "crates/awsim-waf",
-    "crates/awsim-scheduler",
-    "crates/awsim-comprehend",
-    "crates/awsim-kendra",
-    "crates/awsim-opensearch",
-    "crates/awsim-iam-policy",
-    "crates/awsim-organizations",
-    "crates/awsim-cloudtrail",
-    "crates/awsim-eks",
-    "crates/awsim-firehose",
-    "crates/awsim-batch",
-    "crates/awsim-billing",
-    "crates/awsim-chaos",
-    "crates/awsim-sso-admin",
-    "crates/awsim-datasync",
-    "crates/awsim-polly",
-    "crates/awsim-resourcegroupstagging",
-    "crates/awsim-pipes",
-    "crates/awsim-efs",
-    "crates/awsim-backup",
-    "crates/awsim-application-autoscaling",
-    "crates/awsim-xray",
-    "crates/awsim-servicediscovery",
-    "crates/awsim-appconfig",
-    "crates/awsim-glacier",
-    "crates/awsim-mq",
-    "crates/awsim-memorydb",
-    "crates/awsim-qldb",
-    "crates/awsim-transfer",
-    "crates/awsim-pinpoint",
-    "crates/awsim-identitystore",
-    "crates/awsim-conformance",
-    "crates/awsim-enforcement-tests",
+  "crates/awsim",
+  "crates/awsim-acm",
+  "crates/awsim-apigateway",
+  "crates/awsim-appconfig",
+  "crates/awsim-application-autoscaling",
+  "crates/awsim-appsync",
+  "crates/awsim-athena",
+  "crates/awsim-backup",
+  "crates/awsim-batch",
+  "crates/awsim-bedrock",
+  "crates/awsim-billing",
+  "crates/awsim-chaos",
+  "crates/awsim-cloudformation",
+  "crates/awsim-cloudfront",
+  "crates/awsim-cloudtrail",
+  "crates/awsim-cloudwatch-logs",
+  "crates/awsim-cloudwatch-metrics",
+  "crates/awsim-cognito",
+  "crates/awsim-comprehend",
+  "crates/awsim-conformance",
+  "crates/awsim-core",
+  "crates/awsim-datasync",
+  "crates/awsim-dynamodb",
+  "crates/awsim-ec2",
+  "crates/awsim-ecr",
+  "crates/awsim-ecs",
+  "crates/awsim-efs",
+  "crates/awsim-eks",
+  "crates/awsim-elb",
+  "crates/awsim-enforcement-tests",
+  "crates/awsim-eventbridge",
+  "crates/awsim-firehose",
+  "crates/awsim-glacier",
+  "crates/awsim-glue",
+  "crates/awsim-iam",
+  "crates/awsim-iam-policy",
+  "crates/awsim-identitystore",
+  "crates/awsim-kendra",
+  "crates/awsim-kinesis",
+  "crates/awsim-kms",
+  "crates/awsim-lambda",
+  "crates/awsim-memorydb",
+  "crates/awsim-mq",
+  "crates/awsim-opensearch",
+  "crates/awsim-organizations",
+  "crates/awsim-pinpoint",
+  "crates/awsim-pipes",
+  "crates/awsim-polly",
+  "crates/awsim-qldb",
+  "crates/awsim-rds",
+  "crates/awsim-resourcegroupstagging",
+  "crates/awsim-route53",
+  "crates/awsim-s3",
+  "crates/awsim-scheduler",
+  "crates/awsim-secretsmanager",
+  "crates/awsim-servicediscovery",
+  "crates/awsim-ses",
+  "crates/awsim-sns",
+  "crates/awsim-sqs",
+  "crates/awsim-ssm",
+  "crates/awsim-sso-admin",
+  "crates/awsim-stepfunctions",
+  "crates/awsim-sts",
+  "crates/awsim-transfer",
+  "crates/awsim-waf",
+  "crates/awsim-xray",
 ]
 
 [workspace.package]
-version = "0.4.1"
+version = "0.5.0"
 edition = "2024"
-license = "MIT OR Apache-2.0"
 repository = "https://github.com/QaidVoid/awsim"
+license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
-awsim-apigateway = { path = "crates/awsim-apigateway", version = "0.4.1" }
-awsim-appsync = { path = "crates/awsim-appsync", version = "0.4.1" }
-awsim-athena = { path = "crates/awsim-athena", version = "0.4.1" }
-awsim-bedrock = { path = "crates/awsim-bedrock", version = "0.4.1" }
-awsim-cloudformation = { path = "crates/awsim-cloudformation", version = "0.4.1" }
-awsim-cloudfront = { path = "crates/awsim-cloudfront", version = "0.4.1" }
-awsim-cloudwatch-logs = { path = "crates/awsim-cloudwatch-logs", version = "0.4.1" }
-awsim-cognito = { path = "crates/awsim-cognito", version = "0.4.1" }
-awsim-core = { path = "crates/awsim-core", version = "0.4.1" }
-awsim-ec2 = { path = "crates/awsim-ec2", version = "0.4.1" }
-awsim-ecr = { path = "crates/awsim-ecr", version = "0.4.1" }
-awsim-ecs = { path = "crates/awsim-ecs", version = "0.4.1" }
-awsim-eventbridge = { path = "crates/awsim-eventbridge", version = "0.4.1" }
-awsim-elb = { path = "crates/awsim-elb", version = "0.4.1" }
-awsim-glue = { path = "crates/awsim-glue", version = "0.4.1" }
-awsim-dynamodb = { path = "crates/awsim-dynamodb", version = "0.4.1" }
-awsim-iam = { path = "crates/awsim-iam", version = "0.4.1" }
-awsim-iam-policy = { path = "crates/awsim-iam-policy", version = "0.4.1" }
-awsim-rds = { path = "crates/awsim-rds", version = "0.4.1" }
-awsim-kinesis = { path = "crates/awsim-kinesis", version = "0.4.1" }
-awsim-kms = { path = "crates/awsim-kms", version = "0.4.1" }
-awsim-lambda = { path = "crates/awsim-lambda", version = "0.4.1" }
-awsim-route53 = { path = "crates/awsim-route53", version = "0.4.1" }
-awsim-cloudwatch-metrics = { path = "crates/awsim-cloudwatch-metrics", version = "0.4.1" }
-awsim-secretsmanager = { path = "crates/awsim-secretsmanager", version = "0.4.1" }
-awsim-s3 = { path = "crates/awsim-s3", version = "0.4.1" }
-awsim-ses = { path = "crates/awsim-ses", version = "0.4.1" }
-awsim-sns = { path = "crates/awsim-sns", version = "0.4.1" }
-awsim-sqs = { path = "crates/awsim-sqs", version = "0.4.1" }
-awsim-ssm = { path = "crates/awsim-ssm", version = "0.4.1" }
-awsim-sts = { path = "crates/awsim-sts", version = "0.4.1" }
-awsim-stepfunctions = { path = "crates/awsim-stepfunctions", version = "0.4.1" }
-awsim-acm = { path = "crates/awsim-acm", version = "0.4.1" }
-awsim-waf = { path = "crates/awsim-waf", version = "0.4.1" }
-awsim-scheduler = { path = "crates/awsim-scheduler", version = "0.4.1" }
-awsim-comprehend = { path = "crates/awsim-comprehend", version = "0.4.1" }
-awsim-kendra = { path = "crates/awsim-kendra", version = "0.4.1" }
-awsim-opensearch = { path = "crates/awsim-opensearch", version = "0.4.1" }
-awsim-organizations = { path = "crates/awsim-organizations", version = "0.4.1" }
-awsim-cloudtrail = { path = "crates/awsim-cloudtrail", version = "0.4.1" }
-awsim-eks = { path = "crates/awsim-eks", version = "0.4.1" }
-awsim-firehose = { path = "crates/awsim-firehose", version = "0.4.1" }
-awsim-batch = { path = "crates/awsim-batch", version = "0.4.1" }
-awsim-billing = { path = "crates/awsim-billing", version = "0.4.1" }
-awsim-chaos = { path = "crates/awsim-chaos", version = "0.4.1" }
-awsim-sso-admin = { path = "crates/awsim-sso-admin", version = "0.4.1" }
-awsim-datasync = { path = "crates/awsim-datasync", version = "0.4.1" }
-awsim-polly = { path = "crates/awsim-polly", version = "0.4.1" }
-awsim-resourcegroupstagging = { path = "crates/awsim-resourcegroupstagging", version = "0.4.1" }
-awsim-pipes = { path = "crates/awsim-pipes", version = "0.4.1" }
-awsim-efs = { path = "crates/awsim-efs", version = "0.4.1" }
-awsim-backup = { path = "crates/awsim-backup", version = "0.4.1" }
-awsim-application-autoscaling = { path = "crates/awsim-application-autoscaling", version = "0.4.1" }
-awsim-xray = { path = "crates/awsim-xray", version = "0.4.1" }
-awsim-servicediscovery = { path = "crates/awsim-servicediscovery", version = "0.4.1" }
-awsim-appconfig = { path = "crates/awsim-appconfig", version = "0.4.1" }
-awsim-glacier = { path = "crates/awsim-glacier", version = "0.4.1" }
-awsim-mq = { path = "crates/awsim-mq", version = "0.4.1" }
-awsim-memorydb = { path = "crates/awsim-memorydb", version = "0.4.1" }
-awsim-qldb = { path = "crates/awsim-qldb", version = "0.4.1" }
-awsim-transfer = { path = "crates/awsim-transfer", version = "0.4.1" }
-awsim-pinpoint = { path = "crates/awsim-pinpoint", version = "0.4.1" }
-awsim-identitystore = { path = "crates/awsim-identitystore", version = "0.4.1" }
+awsim-acm = { path = "crates/awsim-acm", version = "0.5.0" }
+awsim-apigateway = { path = "crates/awsim-apigateway", version = "0.5.0" }
+awsim-appconfig = { path = "crates/awsim-appconfig", version = "0.5.0" }
+awsim-application-autoscaling = { path = "crates/awsim-application-autoscaling", version = "0.5.0" }
+awsim-appsync = { path = "crates/awsim-appsync", version = "0.5.0" }
+awsim-athena = { path = "crates/awsim-athena", version = "0.5.0" }
+awsim-backup = { path = "crates/awsim-backup", version = "0.5.0" }
+awsim-batch = { path = "crates/awsim-batch", version = "0.5.0" }
+awsim-bedrock = { path = "crates/awsim-bedrock", version = "0.5.0" }
+awsim-billing = { path = "crates/awsim-billing", version = "0.5.0" }
+awsim-chaos = { path = "crates/awsim-chaos", version = "0.5.0" }
+awsim-cloudformation = { path = "crates/awsim-cloudformation", version = "0.5.0" }
+awsim-cloudfront = { path = "crates/awsim-cloudfront", version = "0.5.0" }
+awsim-cloudtrail = { path = "crates/awsim-cloudtrail", version = "0.5.0" }
+awsim-cloudwatch-logs = { path = "crates/awsim-cloudwatch-logs", version = "0.5.0" }
+awsim-cloudwatch-metrics = { path = "crates/awsim-cloudwatch-metrics", version = "0.5.0" }
+awsim-cognito = { path = "crates/awsim-cognito", version = "0.5.0" }
+awsim-comprehend = { path = "crates/awsim-comprehend", version = "0.5.0" }
+awsim-core = { path = "crates/awsim-core", version = "0.5.0" }
+awsim-datasync = { path = "crates/awsim-datasync", version = "0.5.0" }
+awsim-dynamodb = { path = "crates/awsim-dynamodb", version = "0.5.0" }
+awsim-ec2 = { path = "crates/awsim-ec2", version = "0.5.0" }
+awsim-ecr = { path = "crates/awsim-ecr", version = "0.5.0" }
+awsim-ecs = { path = "crates/awsim-ecs", version = "0.5.0" }
+awsim-efs = { path = "crates/awsim-efs", version = "0.5.0" }
+awsim-eks = { path = "crates/awsim-eks", version = "0.5.0" }
+awsim-elb = { path = "crates/awsim-elb", version = "0.5.0" }
+awsim-eventbridge = { path = "crates/awsim-eventbridge", version = "0.5.0" }
+awsim-firehose = { path = "crates/awsim-firehose", version = "0.5.0" }
+awsim-glacier = { path = "crates/awsim-glacier", version = "0.5.0" }
+awsim-glue = { path = "crates/awsim-glue", version = "0.5.0" }
+awsim-iam = { path = "crates/awsim-iam", version = "0.5.0" }
+awsim-iam-policy = { path = "crates/awsim-iam-policy", version = "0.5.0" }
+awsim-identitystore = { path = "crates/awsim-identitystore", version = "0.5.0" }
+awsim-kendra = { path = "crates/awsim-kendra", version = "0.5.0" }
+awsim-kinesis = { path = "crates/awsim-kinesis", version = "0.5.0" }
+awsim-kms = { path = "crates/awsim-kms", version = "0.5.0" }
+awsim-lambda = { path = "crates/awsim-lambda", version = "0.5.0" }
+awsim-memorydb = { path = "crates/awsim-memorydb", version = "0.5.0" }
+awsim-mq = { path = "crates/awsim-mq", version = "0.5.0" }
+awsim-opensearch = { path = "crates/awsim-opensearch", version = "0.5.0" }
+awsim-organizations = { path = "crates/awsim-organizations", version = "0.5.0" }
+awsim-pinpoint = { path = "crates/awsim-pinpoint", version = "0.5.0" }
+awsim-pipes = { path = "crates/awsim-pipes", version = "0.5.0" }
+awsim-polly = { path = "crates/awsim-polly", version = "0.5.0" }
+awsim-qldb = { path = "crates/awsim-qldb", version = "0.5.0" }
+awsim-rds = { path = "crates/awsim-rds", version = "0.5.0" }
+awsim-resourcegroupstagging = { path = "crates/awsim-resourcegroupstagging", version = "0.5.0" }
+awsim-route53 = { path = "crates/awsim-route53", version = "0.5.0" }
+awsim-s3 = { path = "crates/awsim-s3", version = "0.5.0" }
+awsim-scheduler = { path = "crates/awsim-scheduler", version = "0.5.0" }
+awsim-secretsmanager = { path = "crates/awsim-secretsmanager", version = "0.5.0" }
+awsim-servicediscovery = { path = "crates/awsim-servicediscovery", version = "0.5.0" }
+awsim-ses = { path = "crates/awsim-ses", version = "0.5.0" }
+awsim-sns = { path = "crates/awsim-sns", version = "0.5.0" }
+awsim-sqs = { path = "crates/awsim-sqs", version = "0.5.0" }
+awsim-ssm = { path = "crates/awsim-ssm", version = "0.5.0" }
+awsim-sso-admin = { path = "crates/awsim-sso-admin", version = "0.5.0" }
+awsim-stepfunctions = { path = "crates/awsim-stepfunctions", version = "0.5.0" }
+awsim-sts = { path = "crates/awsim-sts", version = "0.5.0" }
+awsim-transfer = { path = "crates/awsim-transfer", version = "0.5.0" }
+awsim-waf = { path = "crates/awsim-waf", version = "0.5.0" }
+awsim-xray = { path = "crates/awsim-xray", version = "0.5.0" }
 
+async-trait = "0.1"
+reqwest = { version = "0.12", default-features = false, features = [
+  "json",
+  "rustls-tls"
+] }
 # Async
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
-async-trait = "0.1"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
 # Web
 axum = "0.8"
-tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace", "compression-gzip", "compression-br", "decompression-gzip", "decompression-br", "decompression-zstd", "decompression-deflate"] }
-hyper = { version = "1", features = ["full"] }
 bytes = "1"
 futures = "0.3"
-rust-embed = { version = "8", features = ["axum", "interpolate-folder-path"] }
+hyper = { version = "1", features = ["full"] }
 mime_guess = "2"
+rust-embed = { version = "8", features = ["axum", "interpolate-folder-path"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = [
+  "compression-br",
+  "compression-gzip",
+  "cors",
+  "decompression-br",
+  "decompression-deflate",
+  "decompression-gzip",
+  "decompression-zstd",
+  "trace"
+] }
 
+quick-xml = { version = "0.37", features = ["serialize"] }
+saphyr = "0.0.6"
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-saphyr = "0.0.6"
-quick-xml = { version = "0.37", features = ["serialize"] }
 serde_urlencoded = "0.7"
 
+anyhow = "1"
 # Error handling
 thiserror = "2"
-anyhow = "1"
 
 # Logging
 tracing = "0.1"
@@ -174,13 +186,13 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # Concurrency
 dashmap = "6"
 
+r2d2 = "0.8"
+r2d2_sqlite = "0.25"
+refinery = { version = "0.8", features = ["rusqlite"] }
 # SQLite-backed state — shared across DynamoDB / CloudWatch Logs /
 # CloudWatch Metrics / Kinesis stores so they all stay on the same
 # rusqlite + r2d2 versions.
 rusqlite = { version = "0.32", features = ["bundled", "serde_json"] }
-refinery = { version = "0.8", features = ["rusqlite"] }
-r2d2 = "0.8"
-r2d2_sqlite = "0.25"
 tempfile = "3"
 
 # Embedded KV — used by OpenSearch so the working set isn't bounded
@@ -201,35 +213,35 @@ arc-swap = "1"
 # names, emails, lorem ipsum, etc. without hand-rolling word lists.
 fake = "3"
 
-# Crypto
-uuid = { version = "1", features = ["v4"] }
-md-5 = "0.10"
+aes-gcm = "0.10"
 base64 = "0.22"
+bcrypt = "0.16"
+hmac = "0.12"
+jsonwebtoken = "9"
+md-5 = "0.10"
+rand = "0.8"
+rsa = { version = "0.9", features = ["sha2"] }
 sha1 = "0.10"
 sha2 = "0.10"
-hmac = "0.12"
+# Crypto
+uuid = { version = "1", features = ["v4"] }
 zip = "2"
-rand = "0.8"
-aes-gcm = "0.10"
-rsa = { version = "0.9", features = ["sha2"] }
-jsonwebtoken = "9"
-bcrypt = "0.16"
 
+chrono = { version = "0.4", features = ["serde"] }
+ipnet = "2"
 # Policy / matching
 regex = "1"
-ipnet = "2"
-chrono = { version = "0.4", features = ["serde"] }
 
 # Numeric (DynamoDB stores numbers as up-to-38-digit decimals; rust_decimal
 # gives ~28 significant digits with exact arithmetic, far better than f64
 # for IDs / timestamps / financial values that DDB customers actually use).
 rust_decimal = "1"
 
+hkdf = "0.12"
 # Big-integer arithmetic for Cognito's SRP6a flow. RFC 5054 group 3072
 # uses a 3072-bit modulus that does not fit in any primitive integer type.
 num-bigint = "0.4"
 num-traits = "0.2"
-hkdf = "0.12"
 
 # Allocator — wired into the awsim binary for Linux + macOS only
 # (MSVC builds keep the system allocator). Returns memory to the OS
@@ -241,13 +253,13 @@ tikv-jemallocator = "0.6"
 opt-level = 0
 codegen-units = 256
 
-[profile.release.package.awsim-conformance]
-opt-level = 1
-codegen-units = 128
-
 [profile.release]
 opt-level = "z"
 strip = true
 lto = true
 panic = "abort"
 codegen-units = 1
+
+[profile.release.package.awsim-conformance]
+opt-level = 1
+codegen-units = 128

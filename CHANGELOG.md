@@ -1,4 +1,612 @@
 
+## 0.5.0 — 2026-06-02
+
+### Bug Fixes
+
+- **ui:** Pin dynamodb item delete action to right edge
+- **ui:** Save changes on alias editor when pricing fields used
+- **qldb:** Return HTTP 412 for ResourcePreconditionNotMetException
+- **core:** Return 403 SignatureDoesNotMatch for tampered SigV4 requests
+- **elb:** Sort Tags.member.N by numeric index for sparse inputs
+- **secretsmanager:** InvalidRequest on version/stage mismatch
+- **cloudwatch-logs:** Validate DescribeLogStreams orderBy/prefix
+- **iam:** Reject Path/Arn mutation via UpdateRole
+- **apigateway:** Validate CreateRestApi apiKeySource enum
+- **sqs:** Scope FIFO dedup window by message group when configured
+- **ses:** Validate MailFromDomain against identity domain
+- **waf:** Validate IPSet CIDR shape against IPAddressVersion
+- **ssm:** Validate PutParameter DataType and aws:ec2:image format
+- **route53:** Cap ChangeResourceRecordSets at 1000 changes / 32000 values
+- **route53:** Split public/private hosted zones with VPC requirement
+- **ses:** Persist SendEmail ReplyToAddresses and ConfigurationSetName
+- **eventbridge:** Validate Connection AuthParameters per auth type
+- **stepfunctions:** Validate roleArn shape on create/update
+- **acm:** Persist CertificateTransparencyLoggingPreference
+- **kinesis:** Paginate ListShards with NextToken cursor
+- **firehose:** Validate stream type, buffering, and compression
+- **secretsmanager:** Surface owner, region, and version timestamps
+- **cognito:** Validate PasswordPolicy MinimumLength and TempPasswordDays
+- **cognito:** Set AutoVerifiedAttributes flags on ConfirmSignUp
+- **ecr:** Validate and surface CreateRepository encryptionConfiguration
+- **ses:** Validate PutSuppressedDestination Reason allowlist
+- **mq:** Validate broker name, storage type, and LDAP metadata
+- **eks:** Require Nodegroup subnets and validate diskSize
+- **elb:** Require certificates on HTTPS/TLS listeners
+- **rds:** Persist VpcSecurityGroups on DB cluster
+- **rds:** Validate and surface DB instance Iops + StorageThroughput
+- **ecs:** Persist Service loadBalancers, deploymentConfiguration, deploymentController, networkConfiguration
+- **ses:** Persist account VDM and suppression attributes
+- **cloudformation:** Implement Fn::GetAZs intrinsic
+- **apigateway:** Persist binaryMediaTypes and validate endpointConfiguration on CreateRestApi
+- **stepfunctions:** Persist tracingConfiguration and validate encryptionConfiguration
+- **cloudwatch-metrics:** Accept PutMetricData StatisticValues as pre-aggregated mean
+- **cloudwatch-metrics:** Apply Dimensions filter on ListMetrics
+- **cloudwatch-logs:** Accept and surface logGroupClass on CreateLogGroup
+- **cloudwatch-logs:** Reject PutLogEvents entries outside 14d/2h window
+- **eventbridge:** Accept Target BatchParameters and round-trip in describe
+- **dynamodb:** Cap AttributeName at 255 bytes on CreateTable
+- **ssm:** Validate PutParameter Value against AllowedPattern regex
+- **dynamodb:** Enforce 4 MB payload cap on TransactWriteItems
+- **secretsmanager:** Support owned-by-me and primary-region ListSecrets filters
+- **sts:** Enforce SourceIdentity regex and AccessKeyId format
+- **iam:** Cap managed policy document at 6144 characters
+- **kinesis:** Cap GetRecords response at 10 MB of record bytes
+- **acm:** Gate GetCertificate on PENDING_VALIDATION and DeleteCertificate on InUseBy
+- **dynamodb:** Enforce 20-GSI cap on UpdateTable Create
+- **secretsmanager:** Default PutSecretValue empty VersionStages to AWSCURRENT
+- **sns:** Validate MessageAttribute DataType and enforce 256 KB payload cap
+- **lambda:** Validate Qualifier against $LATEST/numeric/alias grammar
+- **kinesis:** Reject malformed ExplicitHashKey instead of silent fallback
+- **acm:** Validate SAN count, dedup, and KeyAlgorithm on RequestCertificate
+- **ecr:** Reject duplicate image push with ImageAlreadyExistsException
+- **eventbridge:** Enforce per-bus rule and per-rule target caps
+- **kms:** Surface InvalidCiphertextException on malformed Decrypt input
+- **kms:** Enforce MacAlgorithm / KeySpec compatibility
+- **kms:** Enforce SigningAlgorithm / KeySpec compatibility table
+- **sqs:** Validate MessageAttribute DataType and value pairing
+- **sns:** Align PublishBatch error codes to AWS spec
+- **secretsmanager:** UpdateSecret rejects rotation parameters
+- **sts:** Evaluate ExternalId / MFA / SourceIp on AssumeRole trust policies
+- **cognito-identity:** Emit InvalidParameterException not InvalidParameter
+- **polly,batch,datasync:** Align error HTTP status to Smithy
+- **firehose:** Return HTTP 400 from every firehose error shape
+- **ssm:** Return HTTP 400 from every ssm error shape
+- **ecs:** Return HTTP 400 from every ecs error shape
+- **ecr:** Return HTTP 400 from every ecr error shape
+- **cognito:** Return 403 from NotAuthorizedException per Smithy
+- **kinesis:** Return HTTP 400 from every kinesis error shape
+- **sqs:** Return HTTP 400 from NonExistentQueue and use full Query code
+- **dynamodb:** Return HTTP 400 from ResourceInUse and *AlreadyExists
+- **secretsmanager:** Align ResourceNotFound/Exists to HTTP 400
+- **kms:** Return 409 from DisabledException
+- **iam:** Return 409 from LimitExceededException
+- **tests:** Make s3 multipart test AWS-correct and raise body cap
+- **iam:** Mark the root user as is_root in principal resolution
+- **operator-auth:** Make sign-in work and gate the admin UI
+- **ssm:** Honor Tier on PutParameter + enforce per-tier value size cap
+- **rds:** Validate DBInstanceIdentifier regex + StorageType enum
+- **kinesis:** Validate StreamName + StreamMode + ShardCount on CreateStream
+- **eks:** Require roleArn + validate cluster name on CreateCluster
+- **ecr:** Validate repository name + imageTagMutability on CreateRepository
+- **ecs:** Validate networkMode + requiresCompatibilities on RegisterTaskDefinition
+- **ec2:** Validate RunInstances MinCount / MaxCount instead of silent clamp
+- **cloudwatch-logs:** Enforce 10000-event PutLogEvents per-request cap
+- **cloudwatch-metrics:** Enforce 1000-datum PutMetricData per-request cap
+- **secretsmanager:** Reject GetSecretValue with mismatched VersionId+VersionStage
+- **eventbridge:** Validate ScheduleExpression at PutRule time
+- **iam:** Validate RoleName against AWS regex on CreateRole
+- **lambda:** Validate TracingConfig.Mode against AWS enum
+- **kms:** Enforce 4 KiB EncryptionContext size + string-value shape
+- **sns:** Require MessageGroupId + dedup on FIFO topic Publish
+- **sqs:** Reject SetQueueAttributes that flips FifoQueue after creation
+- **dynamodb:** Reject ProjectionExpression with AttributesToGet
+- **s3:** Enforce 5 MiB minimum part size on non-final multipart parts
+- **core:** Emit S3-style bare <Error> envelope for REST-XML responses
+- **core:** HMAC-sign pagination tokens with 6h expiry
+- **ui:** Tighten Models & Aliases tab visuals
+- **ui:** Re-seed gateway dialogs on every closed -> open transition
+- **core:** Report live IAM enforcement state in /_awsim/config
+- **ui:** Scrollable dialog body with slim scrollbar and flush pinned footer
+- **ui:** Bound dialog height and scroll long forms
+- **appconfig:** Stop AppConfigData clobbering the control plane
+- **ui:** Stop one large cell from stretching the table
+- **ui:** Make Select root value/open bindable
+- **ui:** Point topbar Documentation link at the docs
+- **awsim:** Suppress clippy too_many_arguments on register_services
+- **dynamodb:** Emit AWS-faithful KeyConditionExpression errors
+- **bedrock:** Retry with flattened content on text-only backends
+
+### Documentation
+
+- **core:** Document SigV4 verification and bearer-token auth gates
+- **core:** Document cross-service event bus pattern
+- **core:** Document AWSIM_PARTITION flag in configuration guide
+- **iam:** Document AssumeRole trust policy condition variables
+- **theme:** Custom motd-style home page
+- **sidebar:** Include every service and guide page
+- Document AWSIM_VERIFY_SIGV4, credentials endpoint, root protection
+- Document operator auth + new configuration env vars
+- **bedrock:** Refresh sample TOML + CHANGELOG for Model Gateway
+
+### Features
+
+- **ui:** Define gsis and lsis when creating a dynamodb table
+- **ui:** Manage gsi from the dynamodb indexes tab
+- **ui:** Show per-call tokens and cost on Activity and Models tabs
+- **bedrock:** Track per-call tokens and cost in gateway metrics
+- **ui:** Edit gateway pricing per model id and show cost in tester
+- **bedrock:** Inject pricing cost into all family translators
+- **bedrock:** Per-model token pricing overrides in usage block
+- **efs:** Enforce 24h throughput cooldown on UpdateFileSystem
+- **efs:** CreationToken idempotency rejects mismatched args
+- **athena:** Substitute ExecutionParameters into ? placeholders
+- **athena:** ClientRequestToken idempotency on StartQueryExecution
+- **athena:** Resolve WorkGroup EngineVersion with AUTO default
+- **servicediscovery:** Persist Tags on namespace and service create
+- **servicediscovery:** Add TagResource/UntagResource/ListTagsForResource by ARN
+- **appsync:** Persist GraphQL APIs, schemas, resolvers, and associations
+- **athena:** Persist workgroups, queries, and catalogs via snapshot/restore
+- **acm:** Cache RequestCertificate by IdempotencyToken and reject param mismatches
+- **acm:** Support PRIVATE certificate type via CertificateAuthorityArn
+- **qldb:** Start ledger in CREATING and settle to ACTIVE on Describe/List
+- **memorydb:** Start clusters in creating and settle to available on Describe
+- **firehose:** Start delivery streams in CREATING and settle to ACTIVE on Describe
+- **firehose:** Validate ProcessingConfiguration types and Lambda parameters
+- **efs:** Wire AccessPoint ClientToken through IdempotencyCache
+- **efs:** Add PutFileSystemPolicy with JSON validation and 20 KiB cap
+- **efs:** Reject DeleteFileSystem when access points still reference the FS
+- **efs:** Paginate Describe file systems, mount targets, and access points
+- **efs:** Reject non-ENABLED/DISABLED BackupPolicy status inputs
+- **efs:** Validate LifecyclePolicy transition enums on PutLifecycleConfiguration
+- **efs:** Validate AccessPoint PosixUser and RootDirectory CreationInfo
+- **efs:** Enforce single mount per subnet and cap SecurityGroups at five
+- **efs:** Persist AvailabilityZoneName/Id and enforce one-zone single mount
+- **efs:** Emit FileSystemProtection and add UpdateFileSystemProtection op
+- **efs:** Emit ValueInArchive and refresh SizeInBytes.Timestamp on each read
+- **efs:** Default KmsKeyId to managed alias when Encrypted and reject otherwise
+- **efs:** Validate ProvisionedThroughputInMibps against ThroughputMode and 1-1024 range
+- **firehose:** Add Splunk, Iceberg, and OpenSearch destination shapes
+- **servicediscovery:** Paginate ListNamespaces ListServices and ListInstances
+- **qldb:** Expose CapacityExceededException and RateExceededException helpers
+- **route53:** Persist hosted zones, health checks, query logs across snapshots
+- **route53:** Paginate ListResourceRecordSets with MaxItems and StartRecord cursor
+- **acm:** Persist KeyAlgorithm and honor ListCertificates Includes.keyTypes
+- **acm:** Paginate ListCertificates and filter by CertificateStatuses
+- **memorydb:** Seed parameter fixtures and add paginated DescribeParameters
+- **qldb:** Tag ledger stream and export ARNs via shared resource tag store
+- **qldb:** Add S3 export operations and validation
+- **qldb:** Add ListJournalKinesisStreamsForLedger and CancelJournalKinesisStream
+- **qldb:** Persist JournalKinesisStream records via Stream/Describe APIs
+- **memorydb:** Add DescribeEngineVersions exposing engine/family catalog
+- **memorydb:** Emit events from every cluster/user/acl/group mutating op
+- **memorydb:** Add Events store and DescribeEvents with Duration filter
+- **memorydb:** Add UpdateACL with UserNamesToAdd/Remove validation
+- **memorydb:** Add TagResource/UntagResource/ListTags keyed by ARN
+- **memorydb:** Add FailoverShard with ShardName validation
+- **memorydb:** Persist SnapshotArns/SnapshotName and seed NodeType from snapshot
+- **memorydb:** Add BatchUpdateCluster splitting processed and unprocessed
+- **memorydb:** Seed DescribeServiceUpdates with filters and pagination
+- **memorydb:** Add UpdateSubnetGroup with subnet replacement validation
+- **memorydb:** Reject duplicate subnet/parameter groups and empty SubnetIds
+- **qldb:** Return ResourceNotFoundException for tag ops on missing ledger
+- **firehose:** Require matching VersionId and DestinationId on UpdateDestination
+- **memorydb:** Add CopySnapshot in-memory clone path
+- **memorydb:** Add DeleteSubnetGroup and DeleteParameterGroup with in-use guards
+- **memorydb:** Add ResetParameterGroup with AllParameters/ParameterNames validation
+- **memorydb:** Paginate DescribeClusters DescribeUsers and DescribeACLs
+- **memorydb:** Paginate DescribeSnapshots and filter by Source/ClusterName
+- **memorydb:** Elide Shards in DescribeClusters when ShowShardDetails is false
+- **firehose:** Persist delivery stream state via snapshot and restore
+- **memorydb:** Accept window and retention updates in UpdateCluster
+- **memorydb:** Lock AutoMinorVersionUpgrade default and emit empty PendingUpdates
+- **memorydb:** Add Valkey engine versions and validate engine/version coupling
+- **memorydb:** Add Engine field with redis and valkey validation
+- **memorydb:** Normalise User AccessString whitespace on create and update
+- **memorydb:** Populate User.UserGroupCount/ACLNames and ACL.PendingChanges
+- **qldb:** Paginate ListLedgers via MaxResults and NextToken
+- **firehose:** Validate MSKSourceConfiguration and accept DatabaseAsSource filter
+- **firehose:** Validate KinesisStreamSourceConfiguration ARNs
+- **firehose:** Parse and echo Kinesis/MSK/Database source configurations
+- **memorydb:** Synthesise Shards and Nodes topology in cluster responses
+- **memorydb:** Freeze cluster topology in Snapshot.ClusterConfiguration
+- **memorydb:** Derive SnsTopicStatus from SnsTopicArn presence
+- **memorydb:** Validate User AuthenticationMode and track PasswordCount
+- **memorydb:** Derive EnginePatchVersion from engine version table
+- **memorydb:** Add NetworkType and IpDiscovery fields with validation
+- **memorydb:** Validate MaintenanceWindow and SnapshotWindow format
+- **memorydb:** Persist DataTiering and require db.r6gd node type
+- **memorydb:** Validate NumShards and NumReplicasPerShard bounds
+- **qldb:** Enforce 5-ledger per-region quota on CreateLedger
+- **qldb:** Persist EncryptionDescription fields on Ledger model
+- **qldb:** Emit full EncryptionDescription on Ledger responses
+- **qldb:** Implement UpdateLedgerPermissionsMode
+- **qldb:** Validate PermissionsMode enum on CreateLedger
+- **firehose:** Validate KeyARN on StartDeliveryStreamEncryption
+- **firehose:** Paginate ListTagsForDeliveryStream with HasMoreTags
+- **app-autoscaling:** Validate filters on DescribeScalingActivities
+- **app-autoscaling:** DescribeScalingPolicies accepts names and ARNs
+- **app-autoscaling:** Validate CustomizedMetricSpecification shape
+- **app-autoscaling:** Validate StepScalingPolicyConfiguration
+- **app-autoscaling:** Validate TargetTrackingScalingPolicyConfiguration
+- **app-autoscaling:** Validate RoleARN shape on RegisterScalableTarget
+- **app-autoscaling:** Per-namespace ResourceId shape validation
+- **app-autoscaling:** Validate ScalableDimension per ServiceNamespace
+- **app-autoscaling:** Validate ServiceNamespace against allowlist
+- **identitystore:** Validate Primary uniqueness and Type allowlist
+- **appconfig:** Make AppConfig.* deployment strategies immutable
+- **appconfig:** Cap Monitors at 5 and validate AlarmArn shape
+- **appconfig:** Prune hosted versions to 100 per profile
+- **servicediscovery:** Per-type Namespace Properties with SOA TTL
+- **servicediscovery:** CreatorRequestId idempotency on Create paths
+- **servicediscovery:** Implement GetInstancesHealthStatus pagination
+- **servicediscovery:** Honor MaxResults and filters on DiscoverInstances
+- **servicediscovery:** Filter ListOperations by 5 dimensions
+- **servicediscovery:** Implement UpdateService for mutable fields
+- **servicediscovery:** Implement UpdateInstanceCustomHealthStatus
+- **servicediscovery:** Raise ResourceInUseException on non-empty delete
+- **servicediscovery:** Validate RegisterInstance AWS_* attributes
+- **sso-admin:** Validate PermissionSet SessionDuration range
+- **sso-admin:** Validate PermissionSet Name regex and length
+- **servicediscovery:** Validate Vpc on CreatePrivateDnsNamespace
+- **servicediscovery:** Per-service InstancesRevision counter
+- **glacier:** Honor path accountId dash and reject mismatches
+- **route53:** Return full ISO geo catalog from ListGeoLocations
+- **cognito:** Parse UserAttributes sparse member.N/numeric keys
+- **cognito:** Apply tag middleware to identity pool Tag/Untag
+- **rgt:** Partial-success per-ARN map on TagResources/UntagResources
+- **rgt:** Switch GetResources to marker-based cursor stable across mutations
+- **rgt:** Enforce TagsPerPage and ResourcesPerPage bounds strictly
+- **rgt:** Case-sensitive ResourceTypeFilters and 256-value TagFilter cap
+- **scheduler:** Validate and persist StartDate / EndDate bounds
+- **scheduler:** Validate Target RetryPolicy and DeadLetterConfig shape
+- **scheduler:** Validate and persist customer-managed KmsKeyArn
+- **scheduler:** Paginate ListSchedules and ListScheduleGroups via core helper
+- **scheduler:** Enforce schedule and group name regex on create
+- **scheduler:** Validate at(...) one-shot expressions and ActionAfterCompletion
+- **scheduler:** Validate FlexibleTimeWindow Mode and MaximumWindowInMinutes
+- **scheduler:** Validate and persist ScheduleExpressionTimezone with UTC fallback
+- **scheduler:** Validate target ARN shape and universal aws-sdk dispatch
+- **scheduler:** Honor ClientToken on CreateSchedule via idempotency cache
+- **identitystore:** Attach ResourceType and ResourceId to not-found errors
+- **identitystore:** Paginate ListUsers/ListGroups with tenant-scoped HMAC token
+- **identitystore:** Implement IsMemberInGroups with per-group existence check
+- **identitystore:** Validate IdentityStoreId, UserName, and DisplayName shape
+- **lambda:** Detect self-invoke chains under RecursiveLoop=Terminate
+- **cloudwatch-logs:** Route AssociateKmsKey by log-group vs query-result scope
+- **mq:** Paginate ListBrokers / ListConfigurations / ListUsers via core helper
+- **mq:** Stage UpdateBroker into pending mirror and apply on reboot
+- **mq:** Surface LogsSummary and ActionsRequired on DescribeBroker
+- **mq:** Honor CreatorRequestId for CreateBroker idempotency
+- **mq:** Version configurations with engine-validated revisions
+- **mq:** Persist encryption / logs / maintenance / replication on broker create
+- **lambda:** Enforce reserved concurrency with 429 TooManyRequestsException
+- **rds:** Model aurora global clusters with primary/secondary members
+- **rds:** Register and lifecycle custom DB engine versions
+- **rds:** Wire activity stream lifecycle and aurora-mysql backtrack window
+- **rds:** Track read replica relationships and dispatch CreateDBInstanceReadReplica
+- **ssm:** Emit synthetic findings from patch scan and describe ops
+- **rds:** Persist maintenance window and stage pending modified values
+- **ssm:** Validate maintenance window targets and resolve to instance set
+- **secretsmanager:** Dispatch 4-step rotation state machine via Lambda
+- **core:** Per-account-region idempotency cache wrapper
+- **ecr:** Parse and evaluate lifecycle policy DSL
+- **ecr:** Implement OCI Distribution referrers endpoint
+- **ecr:** Validate pull-through cache upstream registries
+- **ecr:** HMAC-sign authorization tokens and enforce on registry
+- **ecr:** Wire registry and repository policies into authz engine
+- **ecs:** Wire serviceRegistries into Cloud Map RegisterInstance
+- **ecs:** Validate container secrets[] via SecretsManager and SSM
+- **ecs:** Validate repositoryCredentials against SecretsManager
+- **ecs:** Allocate ENI attachment for awsvpc tasks
+- **ecs:** Validate task and execution role ARNs against IAM
+- **cloudformation:** Enforce stack policies on UpdateStack diffs
+- **cloudformation:** Parse and surface OnFailure / DisableRollback
+- **cloudformation:** Publish stack events to NotificationARNs
+- **cloudformation:** Parse lifecycle policies and honor DeletionPolicy
+- **cloudformation:** Compute ChangeSet Replacement and Scope
+- **cloudformation:** Propagate stack tags onto resource events
+- **cloudformation:** Validate parameter constraints and honor NoEcho
+- **cloudwatch-logs:** Validate MetricFilter transformations
+- **resourcegroupstagging:** Validate tags via shared middleware
+- **sns:** Deterministic SignatureVersion=1 HTTP envelope builder
+- **eks:** Managed addons with configurationValues and resolveConflicts
+- **sns:** Validate KmsMasterKeyId against KMS keys and aliases
+- **dynamodb:** Configurable grace window before TTL eviction
+- **eventbridge:** Track ManagedBy on rules and offer cleanup helper
+- **eventbridge:** Validate target RoleArn against IAM
+- **cloudwatch-logs:** Validate SubscriptionFilter RoleArn and Distribution
+- **cloudwatch-logs:** Enforce LogGroup deletion-protection and KmsKeyId
+- **cloudwatch-logs:** Enforce sequenceToken on PutLogEvents
+- **eventbridge:** Target retry decision routes to DLQ when caps exceeded
+- **eventbridge:** Enforce bus resource policy on cross-account PutEvents
+- **ses:** Enforce cross-account SourceArn via identity policy lookup
+- **sts:** Thread session tags into trust policy conditions
+- **iam:** Track Virtual MFA device lifecycle Unassigned to Active
+- **ecs:** Apply propagateTags and ECS-managed tags on RunTask
+- **sqs:** Token-bucket rate limiter for message-move tasks
+- **iam:** Record AccessKey LastUsedDate on every authenticated request
+- **sts:** Persist and surface AssumeRole session tags + transitive keys
+- **cloudwatch-metrics:** PutMetricData returns UnprocessedMetricData per datum
+- **dynamodb:** ConsumedCapacity emits Table block under INDEXES mode
+- **sns:** PublishBatch applies FIFO dedup per entry
+- **kinesis:** Cap on-demand streams at 50 with LimitExceededException
+- **elb:** Per-region CanonicalHostedZoneId and internal- DNS prefix
+- **elb:** Validate tag input on CreateLoadBalancer and CreateTargetGroup
+- **elb:** Validate forward weights and pick targets by per-call counter
+- **kms:** Evaluate grant EncryptionContextEquals and Subset constraints
+- **ses:** Add v1 DKIM verification status state machine
+- **ses:** Add SendBulkTemplatedEmail with per-destination data merge
+- **ses:** Enforce configuration set sending switch across send paths
+- **ses:** Add SendRawEmail with RFC 2822 header parsing
+- **ses:** Add SendTemplatedEmail handler honoring Cc/Bcc/ReplyTo
+- **ses:** Persist ConfigurationSetName and EmailTags on sent email rows
+- **sfn:** Thread States context object through Map and Parallel scopes
+- **sfn:** Expand States intrinsics with array, hash, and predicate ops
+- **sfn:** Raise States.Timeout on Tasks and route through Retry/Catch
+- **sfn:** .async task suffix returns immediate acknowledgement
+- **sfn:** Apply Map ItemSelector to each iteration payload
+- **apigateway:** GetExport emits Swagger 2.0 and OpenAPI 3.0 documents
+- **apigateway:** Persist responseModels and resolve by status + content type
+- **apigateway:** Validate request bodies against Model JSON Schemas
+- **apigateway:** Persist requestModels with Content-Type resolution
+- **apigateway:** Canary settings with deterministic traffic split
+- **apigateway:** Honor contentHandling on integration responses
+- **apigateway:** Gzip responses past minimumCompressionSize
+- **apigateway:** Synthesize CORS preflight response from API config
+- **apigateway:** Honor authorizer identityValidationExpression
+- **apigateway:** Interpolate stage variables into integration URIs
+- **ssm:** Persist SessionManager log fields and Reason
+- **ssm:** Persist SSM document attachments and Requires
+- **ssm:** Parse and persist ParameterPolicies on Advanced tier
+- **ssm:** Validate path, paginate, and skip prefix siblings
+- **ssm:** Raise InvalidKeyId when SecureString decrypt would fail
+- **ssm:** Persist SecureString KeyId and filter by it
+- **ses:** GetEmailIdentity returns full attribute set
+- **ses:** Persist DKIM signing attributes for EASY_DKIM and BYODKIM
+- **ses:** Render Content.Templated via stored email templates
+- **ses:** Honor ListManagementOptions topic opt-out on SendEmail
+- **ses:** Persist and surface configuration set VDM options
+- **ses:** Enforce configuration set TLS policy on SendEmail
+- **rds:** Persist MonitoringInterval, MonitoringRoleArn, and log exports
+- **rds:** Honor CopyTagsToSnapshot and propagate KmsKeyId
+- **ecr:** Validate UploadLayerPart partFirstByte/partLastByte
+- **ecr:** Emit synthetic CVE finding for ENHANCED scanning
+- **elb:** Parse + validate ALB redirect/fixed/auth actions
+- **ecr:** Validate registry + repository policy JSON shape
+- **ec2:** SG rules persist UserIdGroupPairs references
+- **secretsmanager:** Validate RotationRules ScheduleExpression
+- **sqs:** Validate MaxNumberOfMessagesPerSecond on move task
+- **ecs:** Persist task-definition volumes verbatim
+- **rds:** Mark first cluster member as writer, rest readers
+- **iam:** Validate trust policy Principal shape
+- **sns:** Validate PublishBatch entry Id shape
+- **sfn:** Coerce strings to numbers in Choice Numeric* operators
+- **route53:** Validate routing policy fields + SetIdentifier
+- **elb:** Validate health-check protocol + Matcher.GrpcCode
+- **iam:** Clean up credential report CSV columns
+- **sns:** Validate RedrivePolicy at Subscribe + SetAttributes
+- **bedrock:** Validate InvokeModel Content-Type/Accept headers
+- **cloudfront:** Validate CreateInvalidation paths + 3000 cap
+- **eventbridge:** Validate StartReplay archive + destination
+- **elb:** Enforce NLB/GWLB protocol allowlist + GENEVE port
+- **cw-metrics:** Filter GetMetricStatistics by Dimensions
+- **ec2:** Surface EnaSupport + SriovNetSupport on instances
+- **eks:** Surface synthetic ASG name in nodegroup resources
+- **sqs:** Cache ReceiveRequestAttemptId for FIFO retry
+- **ssm:** Honor full ParameterFilters key set on DescribeParameters
+- **cfn:** Validate Capabilities against IAM + Transform
+- **cfn:** Reject unknown resource type at template parse
+- **ecs:** Persist placementConstraints + placementStrategy
+- **eks:** Validate cluster logging types allowlist
+- **kinesis:** Real SplitShard closes parent + adds children
+- **firehose:** Real Encrypted flag + batch per-entry errors
+- **waf:** Validate AssociateWebACL ResourceArn service
+- **route53:** GetChange walks PENDING to INSYNC
+- **cognito:** Validate Policies.SignInPolicy on CreateUserPool
+- **elb:** Implement DescribeLoadBalancerPolicies catalog
+- **mq:** Mask passwords + add Pending user mirror
+- **ssm:** LabelParameterVersion validates + moves labels
+- **ec2:** Honor DryRun on mutating operations
+- **sts:** Real DecodeAuthorizationMessage codec
+- **kms:** Enforce 5-minute grant token expiry
+- **acm:** Mark imported certs INELIGIBLE for renewal
+- **sfn:** Enforce 5-minute EXPRESS workflow timeout cap
+- **firehose:** Paginate ListDeliveryStreams with Limit + filter
+- **dynamodb:** Strict type validation for ExpressionAttributeValues
+- **secretsmanager:** Accept AddReplicaRegions on CreateSecret
+- **cw-metrics:** Persist + enforce StorageResolution
+- **cfn:** Enforce stack termination protection on delete
+- **eks:** Validate and persist nodegroup launchTemplate
+- **eks:** Persist nodegroup labels/taints/remoteAccess
+- **sesv2:** Persist ReputationOptions + LastFreshStart
+- **eventbridge:** Persist target DeadLetterConfig + RetryPolicy
+- **ecs:** Validate Fargate cpu/memory pair allowlist
+- **ecr:** Detect + persist manifest media type on PutImage
+- **rds:** Persist and validate LicenseModel per engine
+- **kinesis:** Paginate DescribeStream by Limit + start shard
+- **sqs:** Propagate AWSTraceHeader system attribute
+- **lambda:** Persist and validate ScalingConfig.MaximumConcurrency
+- **eks:** Persist encryptionConfig and add AssociateEncryptionConfig
+- **ec2:** Persist RunInstances UserData and surface via DescribeInstanceAttribute
+- **lambda:** Persist RecursiveLoop via Get/PutFunctionRecursionConfig
+- **dynamodb:** Enforce GSI / LSI per-table caps on CreateTable
+- **dynamodb:** Reject TransactWriteItems with duplicate keys
+- **dynamodb:** Opaque, expiring stream shard iterators
+- **core:** Verify SigV4 signatures on presigned URLs
+- **s3:** Honor CopyObject TaggingDirective and accept ChecksumCrc64Nvme
+- **s3:** Paginate ListParts with PartNumberMarker / MaxParts
+- **s3:** Persist + echo server-side-encryption headers
+- **sqs:** Enforce inflight cap, atomic batch validation, FIFO delay rule
+- **kms:** Rate-limit RotateKeyOnDemand and cap grants per key
+- **s3:** Enforce x-amz-expected-bucket-owner on object operations
+- **core:** Add lookup_or_insert convenience to IdempotencyCache
+- **cloudtrail:** Subscribe to the cross-service event bus
+- **tags:** Enforce AWS-spec tag limits across 25 services
+- **core:** JSON-shape-aware tag validation helpers
+- **core:** Bound WorkerPool concurrency and add TestDriver
+- **ui:** Surface IAM identity and AccessDenied errors gracefully
+- **sns:** Wire topic policies into the AuthzEngine
+- **iam:** Reject trust policies without an AssumeRole action
+- **sts:** Apply AssumeRole session policies on the request path
+- **gateway:** Verify SigV4 signatures cryptographically when enabled
+- **operator-auth:** Sign UI requests as the operator's IAM principal
+- **iam:** Protect the root user from IAM mutations
+- **ui:** IAM user console password management
+- **operator-auth:** Reveal existing access key secrets
+- **ui:** Inline validation on ECR / EKS / RDS create forms
+- **ui:** Expose SSM parameter Tier selector in the editor
+- **ui:** First-run /setup page so bootstrap stops requiring curl
+- **cloudformation:** Implement Fn::Base64 intrinsic
+- **ui:** Admin sign-in page + topbar principal + sign-out control
+- **core:** AWSIM_REQUIRE_SIGNED_REQUESTS gate on the gateway
+- **awsim:** First-run bootstrap flow on AWSIM_REQUIRE_OPERATOR_AUTH
+- **awsim:** Throttle operator login at 5 failures per minute per username
+- **awsim:** Operator login API on /_awsim/auth + optional admin gate
+- **core:** Consolidate TOTP into awsim_core::totp + verify IAM MFA codes
+- **iam:** Store login-profile passwords as bcrypt + enforce policy
+- **core:** Arn::expect_owned_by helper for cross-tenant isolation
+- **core:** HMAC-signed bearer-token mint/verify with TTL
+- **core:** Rehydrate hook so restore can re-arm timers and pollers
+- **core:** TTL-bounded idempotency cache for ClientToken flows
+- **core:** Publish a canonical ApiCall event for every dispatched request
+- **core:** Add check_pass_role helper for iam:PassRole flows
+- **core:** Generic lifecycle state-machine helper with fast-mode env
+- **core:** Shared tag validation helper (50/128/256 + aws: prefix + dedupe)
+- **core:** Isolate panicking/slow ticks + add a shared worker pool
+- **core:** Support non-default AWS partitions (aws-cn, aws-us-gov, ...)
+- **ui:** Retire Settings Bedrock editor + slim Bedrock proxy tab
+- **ui:** Inline test-prompt panel per chat mapping
+- **awsim:** /_awsim/gateway/test-prompt for inline Converse tests
+- **ui:** Activity tab + per-mapping activity chips
+- **awsim:** Wire metrics + recent registries + admin endpoints
+- **bedrock:** Runtime records per-attempt metrics + ring entries
+- **bedrock:** In-process metrics + recent-invocations ring
+- **ui:** Per-target override editors in alias dialog
+- **bedrock:** Per-target request overrides on alias targets
+- **ui:** Health tab + status pills on Backends
+- **awsim:** Wire health poller + /_awsim/gateway/health endpoints
+- **bedrock:** Auto-fallback across alias targets on retriable errors
+- **bedrock:** Backend health registry + Down-skip in alias resolver
+- **ui:** Models & Aliases tab with multi-target editor
+- **bedrock:** Alias groups with First strategy
+- **ui:** Provider-aware Backends tab with Add/Edit wizard
+- **bedrock:** Add provider metadata field to BackendSpec
+- **ui:** Credentials CRUD on Model Gateway page
+- **bedrock:** Reusable [credentials] table referenced by backends
+- **ui:** Point Bedrock proxy chip and Settings to Model Gateway
+- **ui:** Scaffold Model Gateway page with provider catalog browser
+- **bedrock:** Bundle LLM provider catalog + /_awsim/gateway/catalog
+- **cognito:** Filter ID-token claims by client ReadAttributes
+- **cognito:** Enforce app-client Read/WriteAttributes at runtime
+- **ui:** Per-client attribute read/write permissions
+- **cognito:** App-client ReadAttributes/WriteAttributes
+- **ui:** Filter + count parity for Cognito groups and clients
+- **ui:** Collapse Cognito user-row actions into a menu
+- **ui:** In-UI Cognito sign-in flow with token inspection
+- **ui:** Add Cognito admin auth API client operations
+- **ui:** Organizations account + OU creation (Phase 3)
+- **ui:** Organizations SCP creation (Phase 3)
+- **ui:** KMS alias create + delete (completes KMS CRUD)
+- **ui:** KMS key create + schedule-deletion (Phase 3)
+- **ui:** Secrets Manager CRUD (Phase 3)
+- **ui:** StepFunctions start -> watch-it-run loop
+- **ui:** Sidebar service-maturity marker (closes Phase 1 gap)
+- **ui:** EventBridge send-event routing preview
+- **eventbridge:** Implement TestEventPattern
+- **ui:** SNS publish fan-out visibility + history
+- **ui:** SQS send history + send -> messages bridge
+- **ui:** Lambda invoke history + jump to full logs
+- **ui:** IAM simulator decision trace - the 'why'
+- **iam:** Return the decision reason + statement id from Simulate*
+- **iam-policy:** Expose a decision reason for the simulator
+- **ui:** Smooth scroll + prefers-reduced-motion guard
+- **ui:** Finish the visual pass - page header, datagrid, cards
+- **ui:** Refine topbar + sidebar chrome
+- **ui:** Push the dark theme bolder
+- **ui:** Elevate dark theme tokens + typography
+- **ui:** Add page-level list gating to ResourceConsole
+- **ui:** Add optional loadingContent snippet to ResourceConsole
+- **ui:** Palette quick-actions open the create dialog, not just navigate
+- **ui:** Add LoadingState/ErrorState and wire ErrorState into DataTable
+- **ui:** Add DetailPage + DetailNavItem route-detail scaffold
+- **ui:** Add ResourceConsole master/detail shell
+- **ui:** Add shared Select primitive
+- **ui:** Add shared ConfirmDialog primitive
+- **bedrock:** Forward tool use and documents through the translator
+- **bedrock:** Forward image attachments to backend via OpenAI image_url parts
+
+### Performance
+
+- **iam-policy:** Cache parsed policy documents by content hash
+- **dynamodb:** Periodic WAL TRUNCATE checkpoint to bound bulk-write memory
+- **ui:** Drop full-viewport backdrop-blur from overlays
+- **ui:** Cap request-log table at 150 rows
+- **ui:** Batch SSE events in dashboard-state
+- **ui:** Throttle billing history persistence
+- **awsim:** Gzip/brotli the embedded UI assets
+- **ui:** Self-host Geist instead of render-blocking Google Fonts
+
+### Refactor
+
+- **ui:** Consistent empty + skeleton states in Cognito sections
+- **ui:** Standardize Cognito detail routes onto DetailPage
+- **ui:** Replace CLI escape-hatch empty states with CTAs / honest copy
+- **ui:** Migrate sqs/sns/appsync/ecr/apigateway/route53 onto ResourceConsole
+- **ui:** Migrate lambda/stepfunctions/appconfig/pinpoint/opensearch/cloudformation onto ResourceConsole
+- **ui:** Native select -> shared Select in appconfig/servicediscovery/pinpoint/autoscaling + scheduler/playground/settings/seed
+- **ui:** Native select -> shared Select in elb/rds/route53/acm/efs/ssm/mq/transfer/qldb
+- **ui:** Native select -> shared Select in cognito/sns/ses/bedrock/polly/identitystore
+- **ui:** Native select -> shared Select in lambda/apigateway/iam/appsync/stepfunctions
+- **ui:** Native select -> shared Select in dynamodb/ec2/kinesis/kms/glue/memorydb/cloudtrail
+- **ui:** Convert waf scope to shared Select (sweep reference)
+- **ui:** Replace apologetic escape-hatch copy with confident framing
+- **ui:** Move /_awsim/requests admin calls behind src/lib/api
+- **ui:** Move IAM detail routes onto DetailPage
+- **ui:** Move S3 page onto ResourceConsole
+- **ui:** Move DynamoDB page onto ResourceConsole
+- **ui:** Replace window.confirm with ConfirmDialog in mq/pinpoint/pipes/qldb/servicediscovery/stepfunctions/transfer
+- **ui:** Replace window.confirm with ConfirmDialog in eks/glacier/iam/identitystore/lambda/memorydb
+- **ui:** Replace window.confirm with ConfirmDialog in bedrock/cloudtrail/logs/datasync/dynamodb/ec2/ecs/efs
+- **ui:** Replace window.confirm with ConfirmDialog in apigateway/appconfig/autoscaling/backup/batch
+- **ui:** Replace native window.confirm with ConfirmDialog in opensearch/chaos
+- **ui:** Replace native window.confirm with ConfirmDialog in IAM detail pages
+- **ui:** Replace native window.confirm with ConfirmDialog in lambda/stepfunctions/cloudformation
+- **ui:** Consolidate per-service confirm dialogs onto shared primitive
+
+### Tests
+
+- **memorydb:** Lock snapshot/restore round-trip across all resource fields
+- **firehose:** Lock ExtendedS3 destination field round-trip through update
+- **firehose:** Lock tag middleware on Tag/Untag delivery stream
+- **identitystore:** Lock UUIDv4 shape for User and Group ids
+- **route53:** Lock tag middleware on ChangeTagsForResource
+- **rgt:** Cover tag key/value charset rejection on TagResources
+- **scheduler:** Cover tag middleware (reserved prefix and 50-tag cap)
+- **mq:** Cover snapshot round-trip for pending and revisions
+- **conformance:** Pin tag-validation cap, length, prefix and dup rules
+- **conformance:** Extend snapshot round-trip to more services
+- **conformance:** Pin ARN region and account propagation
+- **conformance:** Expand account+region isolation coverage
+- **sqs:** Cover legacy AWS Query protocol end to end
+- **iam:** Cover permissions boundary cap via AuthzEngine
+- **rds:** Cover cross-region CopyDBSnapshot SourceRegion + KmsKeyId
+- **cloudwatch-logs:** Anchor persistence test timestamps to now
+- **conformance:** Assert account/region isolation across services
+- **conformance:** Snapshot+restore round-trip across SQS / IAM / DynamoDB
+- **conformance:** Pin SSO-Admin error factories to Smithy
+- **conformance:** Pin CloudTrail TrailNotFoundException to Smithy
+- **conformance:** Pin Organizations error factories to Smithy
+- **conformance:** Pin EKS error factories to Smithy
+- **conformance:** Pin STS InvalidAuthorizationMessage to Smithy
+- **conformance:** Pin S3 error factories to Smithy
+- **conformance:** Pin SNS error factories to Smithy
+- **conformance:** Pin Lambda error factories to Smithy
+- **conformance:** Pin per-service error factories to Smithy spec
+
+### Revert
+
+- Drop hand-written CHANGELOG entry
+
 ## 0.4.1 — 2026-05-11
 
 ### Bug Fixes
