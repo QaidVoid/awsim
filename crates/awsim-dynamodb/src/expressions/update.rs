@@ -22,27 +22,27 @@ pub fn apply_update_expression(
 
     // Apply SET
     for (path, value_expr) in set_actions {
-        let resolved_path = resolve_path(&path, expr_attr_names);
+        let resolved_path = resolve_path(&path, expr_attr_names)?;
         let value = evaluate_value_expr(&value_expr, item, expr_attr_names, expr_attr_values)?;
         set_nested(item, &resolved_path, value);
     }
 
     // Apply REMOVE
     for path in remove_paths {
-        let resolved_path = resolve_path(&path, expr_attr_names);
+        let resolved_path = resolve_path(&path, expr_attr_names)?;
         remove_nested(item, &resolved_path);
     }
 
     // Apply ADD
     for (path, value_expr) in add_actions {
-        let resolved_path = resolve_path(&path, expr_attr_names);
+        let resolved_path = resolve_path(&path, expr_attr_names)?;
         let value = evaluate_value_expr(&value_expr, item, expr_attr_names, expr_attr_values)?;
         apply_add(item, &resolved_path, &value)?;
     }
 
     // Apply DELETE
     for (path, value_expr) in delete_actions {
-        let resolved_path = resolve_path(&path, expr_attr_names);
+        let resolved_path = resolve_path(&path, expr_attr_names)?;
         let value = evaluate_value_expr(&value_expr, item, expr_attr_names, expr_attr_values)?;
         apply_delete(item, &resolved_path, &value)?;
     }
@@ -199,7 +199,7 @@ fn evaluate_value_expr(
         .and_then(|s| s.strip_suffix(')'))
         && let Some((left, right)) = split_two_args(args_str)
     {
-        let path = resolve_path(left.trim(), expr_attr_names);
+        let path = resolve_path(left.trim(), expr_attr_names)?;
         // If attribute exists, return it; otherwise return default
         if let Some(existing) = get_nested_val(item, &path) {
             return Ok(existing.clone());
@@ -259,7 +259,7 @@ fn evaluate_value_expr(
     }
 
     // Path reference
-    let resolved = resolve_path(expr, expr_attr_names);
+    let resolved = resolve_path(expr, expr_attr_names)?;
     if let Some(val) = get_nested_val(item, &resolved) {
         return Ok(val.clone());
     }

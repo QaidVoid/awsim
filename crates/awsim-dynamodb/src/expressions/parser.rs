@@ -493,9 +493,20 @@ pub fn parse_projection(expr: &str) -> Vec<String> {
         .collect()
 }
 
+/// DynamoDB caps a fully-resolved document path at 64 KB. Paths longer
+/// than this are rejected with a ValidationException, matching AWS.
+const MAX_DOCUMENT_PATH_BYTES: usize = 64 * 1024;
+
 /// Resolve a path that may contain expression attribute name placeholders (#name).
-pub fn resolve_path(path: &str, expr_attr_names: &HashMap<String, String>) -> String {
-    path.split('.')
+///
+/// Returns a ValidationException when the resolved path exceeds the
+/// 64 KB document-path limit enforced by DynamoDB.
+pub fn resolve_path(
+    path: &str,
+    expr_attr_names: &HashMap<String, String>,
+) -> Result<String, AwsError> {
+    let resolved = path
+        .split('.')
         .map(|seg| {
             if let Some(stripped) = seg.strip_prefix('#') {
                 expr_attr_names
@@ -507,7 +518,15 @@ pub fn resolve_path(path: &str, expr_attr_names: &HashMap<String, String>) -> St
             }
         })
         .collect::<Vec<_>>()
-        .join(".")
+        .join(".");
+    if resolved.len() > MAX_DOCUMENT_PATH_BYTES {
+        return Err(AwsError::validation(format!(
+            "Document path is too long: resolved length {} exceeds the {}-byte limit.",
+            resolved.len(),
+            MAX_DOCUMENT_PATH_BYTES
+        )));
+    }
+    Ok(resolved)
 }
 
 /// Resolve a value placeholder (":name") using ExpressionAttributeValues.
@@ -516,4 +535,26 @@ pub fn resolve_value<'a>(
     expr_attr_values: &'a serde_json::Map<String, serde_json::Value>,
 ) -> Option<&'a serde_json::Value> {
     expr_attr_values.get(placeholder)
+}
+
+#[cfg(test)]
+mod resolve_path_tests {
+    use super::*;
+
+    #[test]
+    fn short_path_resolves_ok() {
+        let names = HashMap::new();
+        assert_eq!(resolve_path("a.b.c", &names).unwrap(), "a.b.c");
+    }
+
+    #[test]
+    fn over_64kb_resolved_path_is_rejected() {
+        // A single segment whose resolved length exceeds 64 KB. Use a
+        // placeholder so the resolved value (not the raw expression) is
+        // what trips the limit.
+        let mut names = HashMap::new();
+        names.insert("#big".to_string(), "x".repeat(MAX_DOCUMENT_PATH_BYTES + 1));
+        let err = resolve_path("#big", &names).unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
 }

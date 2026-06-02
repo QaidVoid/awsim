@@ -221,15 +221,17 @@ pub fn write_capacity_units(bytes: usize, transactional: bool) -> f64 {
 /// present when explicitly requested.
 ///
 /// `INDEXES` adds the AWS `Table` sub-object (base-table breakdown) plus
-/// empty `LocalSecondaryIndexes` / `GlobalSecondaryIndexes` maps. The
-/// simulator doesn't yet track per-index capacity separately, but the
-/// presence of the `Table` block is itself the documented signal that
-/// callers requested the detailed shape.
+/// `LocalSecondaryIndexes` / `GlobalSecondaryIndexes` maps. When `index`
+/// is `Some((name, is_gsi))` the matching map carries a per-index
+/// capacity breakdown keyed by `name`; `is_gsi` routes it to the GSI map
+/// (true) or the LSI map (false). When `index` is `None` both maps stay
+/// empty (operations that touch only the base table).
 pub fn build_consumed_capacity(
     input: &Value,
     table_name: &str,
     read_units: f64,
     write_units: f64,
+    index: Option<(&str, bool)>,
 ) -> Option<Value> {
     let mode = opt_str(input, "ReturnConsumedCapacity").unwrap_or("NONE");
     if mode == "NONE" {
@@ -255,14 +257,23 @@ pub fn build_consumed_capacity(
             table.insert("WriteCapacityUnits".into(), Value::from(write_units));
         }
         cc.insert("Table".into(), Value::Object(table));
-        cc.insert(
-            "LocalSecondaryIndexes".into(),
-            Value::Object(Default::default()),
-        );
-        cc.insert(
-            "GlobalSecondaryIndexes".into(),
-            Value::Object(Default::default()),
-        );
+
+        let mut lsi = serde_json::Map::new();
+        let mut gsi = serde_json::Map::new();
+        if let Some((name, is_gsi)) = index {
+            let mut entry = serde_json::Map::new();
+            entry.insert("CapacityUnits".into(), Value::from(total));
+            if read_units > 0.0 {
+                entry.insert("ReadCapacityUnits".into(), Value::from(read_units));
+            }
+            if write_units > 0.0 {
+                entry.insert("WriteCapacityUnits".into(), Value::from(write_units));
+            }
+            let target = if is_gsi { &mut gsi } else { &mut lsi };
+            target.insert(name.to_string(), Value::Object(entry));
+        }
+        cc.insert("LocalSecondaryIndexes".into(), Value::Object(lsi));
+        cc.insert("GlobalSecondaryIndexes".into(), Value::Object(gsi));
     }
     Some(Value::Object(cc))
 }
@@ -335,7 +346,7 @@ mod consumed_capacity_tests {
 
     #[test]
     fn returns_none_when_unset() {
-        let cc = build_consumed_capacity(&json!({}), "t", 1.0, 0.0);
+        let cc = build_consumed_capacity(&json!({}), "t", 1.0, 0.0, None);
         assert!(cc.is_none());
     }
 
@@ -346,6 +357,7 @@ mod consumed_capacity_tests {
             "orders",
             1.0,
             0.5,
+            None,
         )
         .unwrap();
         assert_eq!(cc["TableName"], "orders");
@@ -362,6 +374,7 @@ mod consumed_capacity_tests {
             "orders",
             1.0,
             0.5,
+            None,
         )
         .unwrap();
         assert_eq!(cc["TableName"], "orders");
@@ -372,5 +385,42 @@ mod consumed_capacity_tests {
         assert_eq!(table["WriteCapacityUnits"], 0.5);
         assert!(cc["LocalSecondaryIndexes"].is_object());
         assert!(cc["GlobalSecondaryIndexes"].is_object());
+        // No index requested: both maps are present but empty.
+        assert!(cc["LocalSecondaryIndexes"].as_object().unwrap().is_empty());
+        assert!(cc["GlobalSecondaryIndexes"].as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn indexes_mode_routes_gsi_capacity_into_gsi_map() {
+        let cc = build_consumed_capacity(
+            &json!({ "ReturnConsumedCapacity": "INDEXES" }),
+            "orders",
+            2.0,
+            0.0,
+            Some(("byTag", true)),
+        )
+        .unwrap();
+        // GSI breakdown lands under GlobalSecondaryIndexes keyed by name.
+        let gsi = cc["GlobalSecondaryIndexes"]["byTag"].as_object().unwrap();
+        assert_eq!(gsi["CapacityUnits"], 2.0);
+        assert_eq!(gsi["ReadCapacityUnits"], 2.0);
+        assert!(gsi.get("WriteCapacityUnits").is_none());
+        // The LSI map stays empty for a GSI request.
+        assert!(cc["LocalSecondaryIndexes"].as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn indexes_mode_routes_lsi_capacity_into_lsi_map() {
+        let cc = build_consumed_capacity(
+            &json!({ "ReturnConsumedCapacity": "INDEXES" }),
+            "orders",
+            3.0,
+            0.0,
+            Some(("byDate", false)),
+        )
+        .unwrap();
+        let lsi = cc["LocalSecondaryIndexes"]["byDate"].as_object().unwrap();
+        assert_eq!(lsi["CapacityUnits"], 3.0);
+        assert!(cc["GlobalSecondaryIndexes"].as_object().unwrap().is_empty());
     }
 }

@@ -28,22 +28,27 @@ use crate::operations::item::{estimate_item_bytes, item_to_json};
 /// memory as `serde_json::Value` trees.
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 
+/// Apply a ProjectionExpression to an item, keeping only the requested
+/// attributes.
+///
+/// Errors with a ValidationException when a projected path resolves
+/// past the 64 KB document-path limit.
 fn apply_projection_to_item(
     item: &DynamoItem,
     paths: &[String],
     expr_attr_names: &std::collections::HashMap<String, String>,
-) -> DynamoItem {
+) -> Result<DynamoItem, AwsError> {
     if paths.is_empty() {
-        return item.clone();
+        return Ok(item.clone());
     }
     let mut result = DynamoItem::new();
     for path in paths {
-        let resolved = resolve_path(path, expr_attr_names);
+        let resolved = resolve_path(path, expr_attr_names)?;
         if let Some(val) = item.get(&resolved) {
             result.insert(resolved, val.clone());
         }
     }
-    result
+    Ok(result)
 }
 
 /// Resolved index Projection settings used to filter returned items so
@@ -312,7 +317,7 @@ pub fn query(
                 Some(p) => p.filter(&item),
                 None => item.clone(),
             };
-            apply_projection_to_item(&after_index, &projection_paths, &expr_attr_names)
+            apply_projection_to_item(&after_index, &projection_paths, &expr_attr_names)?
         };
         if select != "COUNT" {
             response_bytes += estimate_item_bytes(&projected);
@@ -414,7 +419,13 @@ pub fn query(
         .unwrap_or(false);
     let read_units = read_capacity_units(response_bytes, consistent_read, false);
     state.enforce_throughput(table_name, BucketKind::Read, read_units)?;
-    if let Some(cc) = build_consumed_capacity(input, table_name, read_units, 0.0) {
+    if let Some(cc) = build_consumed_capacity(
+        input,
+        table_name,
+        read_units,
+        0.0,
+        index_name.map(|n| (n, gsi_slot.is_some())),
+    ) {
         result["ConsumedCapacity"] = cc;
     }
     Ok(result)
@@ -456,6 +467,15 @@ pub fn scan(
 
     let hash_key_name = table.hash_key().unwrap_or("").to_string();
     let range_key_name = table.range_key().map(|s| s.to_string());
+
+    // Resolve the requested index up front so the per-index
+    // ConsumedCapacity breakdown can be attributed correctly. Computed
+    // while `table` is still borrowed since the Ref is dropped below.
+    let scan_index_name = opt_str(input, "IndexName").map(|s| s.to_string());
+    let scan_index_is_gsi = scan_index_name
+        .as_deref()
+        .map(|n| table.gsi.iter().any(|g| g.index_name == n))
+        .unwrap_or(false);
 
     drop(table);
 
@@ -511,7 +531,7 @@ pub fn scan(
             let projected = if select == "COUNT" {
                 DynamoItem::new()
             } else {
-                apply_projection_to_item(&item, &projection_paths, &expr_attr_names)
+                apply_projection_to_item(&item, &projection_paths, &expr_attr_names)?
             };
             if select != "COUNT" {
                 response_bytes += estimate_item_bytes(&projected);
@@ -553,7 +573,13 @@ pub fn scan(
         .unwrap_or(false);
     let read_units = read_capacity_units(response_bytes, consistent_read, false);
     state.enforce_throughput(table_name, BucketKind::Read, read_units)?;
-    if let Some(cc) = build_consumed_capacity(input, table_name, read_units, 0.0) {
+    if let Some(cc) = build_consumed_capacity(
+        input,
+        table_name,
+        read_units,
+        0.0,
+        scan_index_name.as_deref().map(|n| (n, scan_index_is_gsi)),
+    ) {
         result["ConsumedCapacity"] = cc;
     }
     Ok(result)

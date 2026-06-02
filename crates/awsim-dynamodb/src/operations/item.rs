@@ -212,23 +212,26 @@ pub(crate) fn validate_item_sets(item: &DynamoItem) -> Result<(), AwsError> {
 }
 
 /// Apply projection to an item (return only specified attributes).
+///
+/// Errors with a ValidationException when a projected path resolves
+/// past the 64 KB document-path limit.
 fn apply_projection(
     item: &DynamoItem,
     projection_expr: Option<&str>,
     expr_attr_names: &std::collections::HashMap<String, String>,
-) -> DynamoItem {
+) -> Result<DynamoItem, AwsError> {
     match projection_expr {
-        None => item.clone(),
+        None => Ok(item.clone()),
         Some(expr) => {
             let paths = crate::expressions::parse_projection(expr);
             let mut result = DynamoItem::new();
             for path in paths {
-                let resolved = crate::expressions::parser::resolve_path(&path, expr_attr_names);
+                let resolved = crate::expressions::parser::resolve_path(&path, expr_attr_names)?;
                 if let Some(val) = item.get(&resolved) {
                     result.insert(resolved, val.clone());
                 }
             }
-            result
+            Ok(result)
         }
     }
 }
@@ -394,7 +397,7 @@ pub fn put_item(
     }
     let write_units = write_capacity_units(item_bytes, false);
     state.enforce_throughput(&table_name, BucketKind::Write, write_units)?;
-    if let Some(cc) = build_consumed_capacity(input, &table_name, 0.0, write_units) {
+    if let Some(cc) = build_consumed_capacity(input, &table_name, 0.0, write_units, None) {
         result["ConsumedCapacity"] = cc;
     }
     Ok(result)
@@ -439,13 +442,13 @@ pub fn get_item(
             let item = crate::keys::storage_value_to_item(stored)
                 .ok_or_else(|| AwsError::internal("DynamoDB stored attrs is not an object"))?;
             let bytes = estimate_item_bytes(&item);
-            let projected = apply_projection(&item, projection_expr, &expr_attr_names);
+            let projected = apply_projection(&item, projection_expr, &expr_attr_names)?;
             (json!({ "Item": item_to_json(&projected) }), bytes)
         }
     };
     let read_units = read_capacity_units(bytes, consistent_read, false);
     state.enforce_throughput(table_name, BucketKind::Read, read_units)?;
-    if let Some(cc) = build_consumed_capacity(input, table_name, read_units, 0.0) {
+    if let Some(cc) = build_consumed_capacity(input, table_name, read_units, 0.0, None) {
         response["ConsumedCapacity"] = cc;
     }
     Ok(response)
@@ -530,7 +533,7 @@ pub fn delete_item(
     }
     let write_units = write_capacity_units(old_bytes, false);
     state.enforce_throughput(&table_name, BucketKind::Write, write_units)?;
-    if let Some(cc) = build_consumed_capacity(input, &table_name, 0.0, write_units) {
+    if let Some(cc) = build_consumed_capacity(input, &table_name, 0.0, write_units, None) {
         result["ConsumedCapacity"] = cc;
     }
     Ok(result)
@@ -707,7 +710,7 @@ pub fn update_item(
 
     let write_units = write_capacity_units(new_item_bytes, false);
     state.enforce_throughput(&table_name, BucketKind::Write, write_units)?;
-    if let Some(cc) = build_consumed_capacity(input, &table_name, 0.0, write_units) {
+    if let Some(cc) = build_consumed_capacity(input, &table_name, 0.0, write_units, None) {
         result["ConsumedCapacity"] = cc;
     }
     Ok(result)

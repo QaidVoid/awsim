@@ -84,17 +84,17 @@ pub fn evaluate_condition(
         )?),
 
         ConditionExpr::AttributeExists(path) => {
-            let resolved = resolve_path(path, expr_attr_names);
+            let resolved = resolve_path(path, expr_attr_names)?;
             Ok(get_nested(item, &resolved).is_some())
         }
 
         ConditionExpr::AttributeNotExists(path) => {
-            let resolved = resolve_path(path, expr_attr_names);
+            let resolved = resolve_path(path, expr_attr_names)?;
             Ok(get_nested(item, &resolved).is_none())
         }
 
         ConditionExpr::AttributeType(path, type_op) => {
-            let resolved = resolve_path(path, expr_attr_names);
+            let resolved = resolve_path(path, expr_attr_names)?;
             let attr = match get_nested(item, &resolved) {
                 Some(v) => v,
                 None => return Ok(false),
@@ -144,7 +144,7 @@ pub fn evaluate_condition(
         }
 
         ConditionExpr::SizeComparison { path, op, right } => {
-            let resolved = resolve_path(path, expr_attr_names);
+            let resolved = resolve_path(path, expr_attr_names)?;
             let attr_val = get_nested(item, &resolved);
             let right_val = resolve_operand(right, item, expr_attr_names, expr_attr_values);
             match (attr_val, right_val) {
@@ -177,7 +177,10 @@ fn resolve_operand<'a>(
 ) -> Option<&'a Value> {
     match operand {
         Operand::Path(path) => {
-            let resolved = resolve_path(path, expr_attr_names);
+            // A path past the 64 KB limit can never match a stored
+            // attribute, so treat the over-long case as "not found"
+            // rather than threading a Result through this Option API.
+            let resolved = resolve_path(path, expr_attr_names).ok()?;
             get_nested(item, &resolved)
         }
         Operand::Value(placeholder) => resolve_value(placeholder, expr_attr_values),
