@@ -5,7 +5,7 @@
 /// - Intrinsic functions: Ref, Fn::GetAtt, Fn::Sub, Fn::Join, Fn::Select, Fn::If
 /// - Conditions
 /// - DependsOn ordering
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
 use crate::error::invalid_template;
@@ -156,7 +156,8 @@ pub fn validate_and_parse(
     body: &str,
     supplied_params: &HashMap<String, String>,
 ) -> Result<ParsedTemplate, AwsError> {
-    let template = parse_template_body(body)?;
+    let mut template = parse_template_body(body)?;
+    expand_transforms(&mut template);
 
     let description = template
         .get("Description")
@@ -285,6 +286,129 @@ pub fn validate_and_parse(
         conditions,
         parameters: parameter_defs,
     })
+}
+
+/// Conservatively expand recognized macros named in the top-level
+/// `Transform`. `AWS::Serverless-*` (SAM) rewrites each
+/// `AWS::Serverless::Function` into a `AWS::Lambda::Function` (plus a
+/// synthesized execution `AWS::IAM::Role` when none is given, and a
+/// `AWS::Lambda::EventSourceMapping` per SQS/DynamoDB/Kinesis event) and
+/// each `AWS::Serverless::SimpleTable` into a `AWS::DynamoDB::Table`.
+/// `AWS::Include` is recognized but is a structural no-op (no remote
+/// fetch). Other SAM features (Api, Globals, Layers, policy templates)
+/// are intentionally left unexpanded.
+fn expand_transforms(template: &mut Value) {
+    let transforms: Vec<String> = match template.get("Transform") {
+        Some(Value::String(s)) => vec![s.clone()],
+        Some(Value::Array(a)) => a
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect(),
+        _ => return,
+    };
+    if !transforms.iter().any(|t| t.starts_with("AWS::Serverless")) {
+        return;
+    }
+
+    let Some(resources) = template.get_mut("Resources").and_then(Value::as_object_mut) else {
+        return;
+    };
+
+    let mut additions: Vec<(String, Value)> = Vec::new();
+    for (logical_id, res) in resources.iter_mut() {
+        let ty = res.get("Type").and_then(Value::as_str).unwrap_or("");
+        match ty {
+            "AWS::Serverless::Function" => {
+                let props = res.get("Properties").cloned().unwrap_or_else(|| json!({}));
+                let mut lambda_props = serde_json::Map::new();
+                for key in ["Handler", "Runtime", "MemorySize", "Timeout", "Environment"] {
+                    if let Some(v) = props.get(key) {
+                        lambda_props.insert(key.to_string(), v.clone());
+                    }
+                }
+                // Code: SAM CodeUri / InlineCode -> Lambda Code.
+                if let Some(inline) = props.get("InlineCode") {
+                    lambda_props.insert("Code".to_string(), json!({ "ZipFile": inline }));
+                } else if let Some(uri) = props.get("CodeUri") {
+                    lambda_props.insert("Code".to_string(), json!({ "S3Key": uri }));
+                }
+                // Execution role: reuse an explicit Role, else synthesize one.
+                if let Some(role) = props.get("Role") {
+                    lambda_props.insert("Role".to_string(), role.clone());
+                } else {
+                    let role_id = format!("{logical_id}Role");
+                    additions.push((
+                        role_id.clone(),
+                        json!({
+                            "Type": "AWS::IAM::Role",
+                            "Properties": {
+                                "AssumeRolePolicyDocument": {
+                                    "Version": "2012-10-17",
+                                    "Statement": [{
+                                        "Effect": "Allow",
+                                        "Principal": { "Service": "lambda.amazonaws.com" },
+                                        "Action": "sts:AssumeRole"
+                                    }]
+                                }
+                            }
+                        }),
+                    ));
+                    lambda_props.insert(
+                        "Role".to_string(),
+                        json!({ "Fn::GetAtt": [role_id, "Arn"] }),
+                    );
+                }
+                // Minimal event-source mappings for stream/queue events.
+                if let Some(events) = props.get("Events").and_then(Value::as_object) {
+                    for (ev_name, ev) in events {
+                        let ev_type = ev.get("Type").and_then(Value::as_str).unwrap_or("");
+                        let ev_props = ev.get("Properties").cloned().unwrap_or_else(|| json!({}));
+                        let source = match ev_type {
+                            "SQS" => ev_props.get("Queue").cloned(),
+                            "DynamoDB" | "Kinesis" => ev_props.get("Stream").cloned(),
+                            _ => None,
+                        };
+                        if let Some(arn) = source {
+                            additions.push((
+                                format!("{logical_id}{ev_name}"),
+                                json!({
+                                    "Type": "AWS::Lambda::EventSourceMapping",
+                                    "Properties": {
+                                        "FunctionName": { "Ref": logical_id },
+                                        "EventSourceArn": arn,
+                                    }
+                                }),
+                            ));
+                        }
+                    }
+                }
+                *res = json!({ "Type": "AWS::Lambda::Function", "Properties": Value::Object(lambda_props) });
+            }
+            "AWS::Serverless::SimpleTable" => {
+                let props = res.get("Properties").cloned().unwrap_or_else(|| json!({}));
+                let mut table_props = serde_json::Map::new();
+                // SAM PrimaryKey { Name, Type } -> DynamoDB key schema.
+                if let Some(pk) = props.get("PrimaryKey") {
+                    let name = pk.get("Name").and_then(Value::as_str).unwrap_or("id");
+                    let attr_type = pk.get("Type").and_then(Value::as_str).unwrap_or("S");
+                    table_props.insert(
+                        "AttributeDefinitions".to_string(),
+                        json!([{ "AttributeName": name, "AttributeType": attr_type }]),
+                    );
+                    table_props.insert(
+                        "KeySchema".to_string(),
+                        json!([{ "AttributeName": name, "KeyType": "HASH" }]),
+                    );
+                }
+                table_props.insert("BillingMode".to_string(), json!("PAY_PER_REQUEST"));
+                *res = json!({ "Type": "AWS::DynamoDB::Table", "Properties": Value::Object(table_props) });
+            }
+            _ => {}
+        }
+    }
+    for (k, v) in additions {
+        resources.insert(k, v);
+    }
 }
 
 fn parse_parameter_defs(template: &Value) -> Vec<ParameterDef> {
@@ -1132,5 +1256,95 @@ mod parameter_constraint_tests {
         supplied.insert("Env".to_string(), "staging".to_string());
         let err = validate_and_parse(body, &supplied).unwrap_err();
         assert_eq!(err.code, "ValidationError");
+    }
+}
+
+#[cfg(test)]
+mod transform_tests {
+    use super::*;
+
+    fn parse(body: &str) -> ParsedTemplate {
+        validate_and_parse(body, &HashMap::new()).unwrap()
+    }
+
+    fn types(t: &ParsedTemplate) -> Vec<&str> {
+        t.resources
+            .iter()
+            .map(|r| r.resource_type.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn sam_function_expands_to_lambda_and_synthesized_role() {
+        let body = r#"{
+            "Transform": "AWS::Serverless-2016-10-31",
+            "Resources": {
+                "Fn": { "Type": "AWS::Serverless::Function",
+                    "Properties": { "Handler": "index.handler", "Runtime": "python3.12", "InlineCode": "x" } }
+            }
+        }"#;
+        let parsed = parse(body);
+        let tys = types(&parsed);
+        assert!(tys.contains(&"AWS::Lambda::Function"), "got {tys:?}");
+        assert!(
+            tys.contains(&"AWS::IAM::Role"),
+            "expected synthesized role, got {tys:?}"
+        );
+        assert!(parsed.resources.iter().any(|r| r.logical_id == "FnRole"));
+    }
+
+    #[test]
+    fn sam_function_with_explicit_role_skips_synthesis() {
+        let body = r#"{
+            "Transform": ["AWS::Serverless-2016-10-31"],
+            "Resources": {
+                "Fn": { "Type": "AWS::Serverless::Function",
+                    "Properties": { "Handler": "h", "Runtime": "go1.x", "Role": "arn:aws:iam::000000000000:role/r" } }
+            }
+        }"#;
+        let parsed = parse(body);
+        let tys = types(&parsed);
+        assert!(tys.contains(&"AWS::Lambda::Function"));
+        assert!(
+            !tys.contains(&"AWS::IAM::Role"),
+            "should not synthesize a role, got {tys:?}"
+        );
+    }
+
+    #[test]
+    fn sam_function_event_expands_to_event_source_mapping() {
+        let body = r#"{
+            "Transform": "AWS::Serverless-2016-10-31",
+            "Resources": {
+                "Fn": { "Type": "AWS::Serverless::Function",
+                    "Properties": { "Handler": "h", "Runtime": "nodejs20.x", "Role": "arn:aws:iam::000000000000:role/r",
+                        "Events": { "Q": { "Type": "SQS", "Properties": { "Queue": "arn:aws:sqs:us-east-1:000000000000:q" } } } } }
+            }
+        }"#;
+        let parsed = parse(body);
+        assert!(types(&parsed).contains(&"AWS::Lambda::EventSourceMapping"));
+        assert!(parsed.resources.iter().any(|r| r.logical_id == "FnQ"));
+    }
+
+    #[test]
+    fn sam_simple_table_expands_to_dynamodb_table() {
+        let body = r#"{
+            "Transform": "AWS::Serverless-2016-10-31",
+            "Resources": {
+                "T": { "Type": "AWS::Serverless::SimpleTable",
+                    "Properties": { "PrimaryKey": { "Name": "pk", "Type": "S" } } }
+            }
+        }"#;
+        let parsed = parse(body);
+        assert_eq!(types(&parsed), vec!["AWS::DynamoDB::Table"]);
+    }
+
+    #[test]
+    fn non_sam_template_is_unchanged() {
+        let body = r#"{
+            "Resources": { "B": { "Type": "AWS::S3::Bucket" } }
+        }"#;
+        let parsed = parse(body);
+        assert_eq!(types(&parsed), vec!["AWS::S3::Bucket"]);
     }
 }

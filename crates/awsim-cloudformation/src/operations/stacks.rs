@@ -523,6 +523,16 @@ fn validate_capabilities(
 
     let has_cap = |c: &str| supplied.iter().any(|x| x == c);
 
+    // AUTO_EXPAND is checked first: it gates running the transform, and a
+    // SAM transform is what synthesizes the IAM resources the IAM checks
+    // below would otherwise flag, so without it those resources do not
+    // (conceptually) exist yet.
+    if has_transform && !has_cap("CAPABILITY_AUTO_EXPAND") {
+        return Err(AwsError::bad_request(
+            "InsufficientCapabilitiesException",
+            "Requires capabilities : [CAPABILITY_AUTO_EXPAND]",
+        ));
+    }
     if needs_named_iam && !has_cap("CAPABILITY_NAMED_IAM") {
         return Err(AwsError::bad_request(
             "InsufficientCapabilitiesException",
@@ -533,12 +543,6 @@ fn validate_capabilities(
         return Err(AwsError::bad_request(
             "InsufficientCapabilitiesException",
             "Requires capabilities : [CAPABILITY_IAM]",
-        ));
-    }
-    if has_transform && !has_cap("CAPABILITY_AUTO_EXPAND") {
-        return Err(AwsError::bad_request(
-            "InsufficientCapabilitiesException",
-            "Requires capabilities : [CAPABILITY_AUTO_EXPAND]",
         ));
     }
     Ok(())
