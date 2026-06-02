@@ -293,6 +293,8 @@ mod tests {
                 tags: HashMap::new(),
                 created_at: 0,
                 encryption_config: vec![],
+                sm: awsim_core::lifecycle::LifecycleSm::new(crate::state::ClusterState::Active),
+                reap_at: None,
             },
         );
         state

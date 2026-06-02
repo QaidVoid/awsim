@@ -1,7 +1,19 @@
+use std::time::{Duration, SystemTime};
+
+use awsim_core::lifecycle::LifecycleSm;
 use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
-use crate::state::{Cluster, EksState, now_secs};
+use crate::state::{Cluster, ClusterState, EksState, now_secs};
+
+/// Wall-clock a cluster spends in `CREATING` before promoting to
+/// `ACTIVE`. Collapsed to zero by `AWSIM_LIFECYCLE_FAST`.
+const CLUSTER_CREATE_DELAY: Duration = Duration::from_secs(3);
+/// Wall-clock a cluster spends in `DELETING` before tick reaps it.
+const CLUSTER_DELETE_DELAY: Duration = Duration::from_secs(3);
+/// Wall-clock a cluster spends in `UPDATING` before returning to
+/// `ACTIVE`.
+const CLUSTER_UPDATE_DELAY: Duration = Duration::from_secs(2);
 
 pub fn create_cluster(
     state: &EksState,
@@ -43,7 +55,7 @@ pub fn create_cluster(
         kubernetes_network_config: input["kubernetesNetworkConfig"].clone(),
         logging: input["logging"].clone(),
         identity: json!({ "oidc": { "issuer": format!("https://oidc.eks.{}.amazonaws.com/id/EXAMPLED539D4633E53DE1B716D3041E", ctx.region) } }),
-        status: "ACTIVE".to_string(),
+        status: ClusterState::Creating.as_wire().to_string(),
         certificate_authority: json!({ "data": "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t" }),
         platform_version: "eks.1".to_string(),
         tags: input["tags"]
@@ -59,9 +71,19 @@ pub fn create_cluster(
             .as_array()
             .cloned()
             .unwrap_or_default(),
+        sm: LifecycleSm::new(ClusterState::Creating),
+        reap_at: None,
     };
-    state.clusters.insert(name.to_string(), cluster.clone());
-    Ok(json!({ "cluster": serialize_cluster(&cluster) }))
+    // Schedule the CREATING -> ACTIVE promotion; tick (or a polling
+    // Describe) observes the deadline and flips the wire status.
+    cluster.sm.start_transition(
+        ClusterState::Creating,
+        ClusterState::Active,
+        CLUSTER_CREATE_DELAY,
+    );
+    state.clusters.insert(name.to_string(), cluster);
+    let c = state.clusters.get(name).expect("just inserted");
+    Ok(json!({ "cluster": serialize_cluster(&c) }))
 }
 
 pub fn describe_cluster(
@@ -89,12 +111,23 @@ pub fn delete_cluster(
     let name = input["name"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "name is required"))?;
-    let (_, c) = state.clusters.remove(name).ok_or_else(|| {
+    let mut c = state.clusters.get_mut(name).ok_or_else(|| {
         AwsError::not_found(
             "ResourceNotFoundException",
             format!("Cluster {name} not found"),
         )
     })?;
+    // Flip to DELETING immediately (visible to a polling Describe) and
+    // arm the reap deadline; `tick` removes the entry once it elapses.
+    // Transition from whatever state the cluster is in (a cluster can
+    // be deleted mid-CREATE), then no-op on a repeated DeleteCluster
+    // since it's already DELETING.
+    let current = c.sm.observe(SystemTime::now()).state;
+    if current != ClusterState::Deleting {
+        c.sm.start_transition(current, ClusterState::Deleting, Duration::ZERO);
+    }
+    c.reap_at
+        .get_or_insert_with(|| SystemTime::now() + CLUSTER_DELETE_DELAY);
     Ok(json!({ "cluster": serialize_cluster(&c) }))
 }
 
@@ -128,6 +161,15 @@ pub fn update_cluster_config(
     if let Some(v) = input.get("resourcesVpcConfig") {
         c.resources_vpc_config = v.clone();
     }
+    // Surface an observable UPDATING -> ACTIVE blip so a polling
+    // DescribeCluster sees the in-flight config update. Only fires
+    // from ACTIVE; a busy cluster is left as-is.
+    c.sm.start_transition(ClusterState::Active, ClusterState::Updating, Duration::ZERO);
+    c.sm.start_transition(
+        ClusterState::Updating,
+        ClusterState::Active,
+        CLUSTER_UPDATE_DELAY,
+    );
     Ok(json!({
         "update": {
             "id": uuid::Uuid::new_v4().to_string(),
@@ -176,6 +218,11 @@ fn validate_cluster_logging(value: &Value) -> Result<(), AwsError> {
 }
 
 pub(crate) fn serialize_cluster(c: &Cluster) -> Value {
+    // Derive the wire `status` from the live state machine so a
+    // polling DescribeCluster observes CREATING -> ACTIVE -> DELETING
+    // as the scheduled deadlines elapse. Observing here is what
+    // promotes a transient cluster even between tick passes.
+    let status = c.sm.observe(SystemTime::now()).state.as_wire();
     json!({
         "name": c.name,
         "arn": c.arn,
@@ -187,7 +234,7 @@ pub(crate) fn serialize_cluster(c: &Cluster) -> Value {
         "kubernetesNetworkConfig": c.kubernetes_network_config,
         "logging": c.logging,
         "identity": c.identity,
-        "status": c.status,
+        "status": status,
         "certificateAuthority": c.certificate_authority,
         "platformVersion": c.platform_version,
         "tags": c.tags,

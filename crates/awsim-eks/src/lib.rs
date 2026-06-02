@@ -2,6 +2,8 @@ pub mod error;
 mod operations;
 mod state;
 
+use std::time::SystemTime;
+
 use async_trait::async_trait;
 use awsim_core::{
     AccountRegionStore, AwsError, Protocol, RequestContext, RouteDefinition, ServiceHandler,
@@ -9,7 +11,7 @@ use awsim_core::{
 use serde_json::Value;
 use tracing::debug;
 
-use state::EksState;
+use state::{ClusterState, EksState};
 
 pub struct EksService {
     store: AccountRegionStore<EksState>,
@@ -227,6 +229,39 @@ impl ServiceHandler for EksService {
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
+
+    /// Promote transient cluster/nodegroup lifecycles and reap
+    /// clusters whose `DELETING` window has elapsed.
+    ///
+    /// Each pass observes every resource's state machine at the
+    /// current wall clock, which flips `CREATING`/`UPDATING` to their
+    /// scheduled successor once the deadline passes, then removes any
+    /// cluster that has reached its armed reap deadline. Absolute-time
+    /// gated and idempotent: a missed or repeated tick never loses or
+    /// double-applies state, and the scan touches only in-memory
+    /// counters so it stays well under the tick budget.
+    async fn tick(&self) {
+        let now = SystemTime::now();
+        for (_, state) in self.store.iter_all() {
+            // Promote transient nodegroups (CREATING -> ACTIVE).
+            for entry in state.nodegroups.iter() {
+                entry.value().sm.observe(now);
+            }
+            // Promote transient clusters, then collect any cluster
+            // whose DELETING reap deadline has passed.
+            let mut reap: Vec<String> = Vec::new();
+            for entry in state.clusters.iter() {
+                let c = entry.value();
+                let observed = c.sm.observe(now).state;
+                if observed == ClusterState::Deleting && c.reap_at.is_some_and(|at| now >= at) {
+                    reap.push(entry.key().clone());
+                }
+            }
+            for name in reap {
+                state.clusters.remove(&name);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -355,5 +390,116 @@ mod tests {
         ))
         .unwrap_err();
         assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn cluster_reports_creating_then_active_after_observe() {
+        use std::time::{Duration, SystemTime};
+
+        let svc = EksService::new();
+        let ctx = ctx();
+        let created = block_on(svc.handle(
+            "CreateCluster",
+            json!({ "name": "life", "roleArn": "arn:aws:iam::000000000000:role/eks" }),
+            &ctx,
+        ))
+        .unwrap();
+        // CreateCluster lands the cluster in CREATING; the default
+        // (non-fast) delay keeps it there for a real Describe at now.
+        // Under AWSIM_LIFECYCLE_FAST the transition collapses to zero so
+        // it reports ACTIVE immediately -- accept either.
+        if !awsim_core::lifecycle::fast_mode() {
+            assert_eq!(created["cluster"]["status"], "CREATING");
+            let desc =
+                block_on(svc.handle("DescribeCluster", json!({ "name": "life" }), &ctx)).unwrap();
+            assert_eq!(desc["cluster"]["status"], "CREATING");
+        }
+
+        // Drive the deadline deterministically by observing the stored
+        // state machine at a future wall clock, then a polling Describe
+        // (observing at `now`) sees the promotion.
+        let state = svc.store.get(&ctx.account_id, &ctx.region);
+        let later = SystemTime::now() + Duration::from_secs(3600);
+        assert_eq!(
+            state.clusters.get("life").unwrap().sm.observe(later).state,
+            ClusterState::Active
+        );
+        let desc =
+            block_on(svc.handle("DescribeCluster", json!({ "name": "life" }), &ctx)).unwrap();
+        assert_eq!(desc["cluster"]["status"], "ACTIVE");
+    }
+
+    #[test]
+    fn delete_cluster_marks_deleting_then_tick_reaps() {
+        use std::time::{Duration, SystemTime};
+
+        let svc = EksService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateCluster",
+            json!({ "name": "doomed", "roleArn": "arn:aws:iam::000000000000:role/eks" }),
+            &ctx,
+        ))
+        .unwrap();
+        // Promote to ACTIVE first so the delete starts from a steady state.
+        let state = svc.store.get(&ctx.account_id, &ctx.region);
+        let later = SystemTime::now() + Duration::from_secs(3600);
+        state.clusters.get("doomed").unwrap().sm.observe(later);
+
+        let deleted =
+            block_on(svc.handle("DeleteCluster", json!({ "name": "doomed" }), &ctx)).unwrap();
+        assert_eq!(deleted["cluster"]["status"], "DELETING");
+        // A polling Describe still sees the cluster in DELETING.
+        let desc =
+            block_on(svc.handle("DescribeCluster", json!({ "name": "doomed" }), &ctx)).unwrap();
+        assert_eq!(desc["cluster"]["status"], "DELETING");
+
+        // Force the reap deadline into the past and tick once.
+        state.clusters.get_mut("doomed").unwrap().reap_at =
+            Some(SystemTime::now() - Duration::from_secs(1));
+        block_on(svc.tick());
+
+        let err =
+            block_on(svc.handle("DescribeCluster", json!({ "name": "doomed" }), &ctx)).unwrap_err();
+        assert_eq!(err.code, "ResourceNotFoundException");
+    }
+
+    #[test]
+    fn nodegroup_reports_creating_then_active_after_observe() {
+        use crate::state::NodegroupState;
+        use std::time::{Duration, SystemTime};
+
+        let svc = EksService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateCluster",
+            json!({ "name": "c", "roleArn": "arn:aws:iam::000000000000:role/eks" }),
+            &ctx,
+        ))
+        .unwrap();
+        let created = block_on(svc.handle(
+            "CreateNodegroup",
+            json!({ "clusterName": "c", "nodegroupName": "ng", "subnets": ["subnet-1"] }),
+            &ctx,
+        ))
+        .unwrap();
+        if !awsim_core::lifecycle::fast_mode() {
+            assert_eq!(created["nodegroup"]["status"], "CREATING");
+        }
+
+        let state = svc.store.get(&ctx.account_id, &ctx.region);
+        let later = SystemTime::now() + Duration::from_secs(3600);
+        let key = ("c".to_string(), "ng".to_string());
+        assert_eq!(
+            state.nodegroups.get(&key).unwrap().sm.observe(later).state,
+            NodegroupState::Active
+        );
+        let desc = block_on(svc.handle(
+            "DescribeNodegroup",
+            json!({ "clusterName": "c", "nodegroupName": "ng" }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(desc["nodegroup"]["status"], "ACTIVE");
     }
 }

@@ -1,9 +1,15 @@
 use std::collections::HashMap;
+use std::time::{Duration, SystemTime};
 
+use awsim_core::lifecycle::LifecycleSm;
 use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
-use crate::state::{EksState, Nodegroup, now_secs};
+use crate::state::{EksState, Nodegroup, NodegroupState, now_secs};
+
+/// Wall-clock a nodegroup spends in `CREATING` before promoting to
+/// `ACTIVE`. Collapsed to zero by `AWSIM_LIFECYCLE_FAST`.
+const NODEGROUP_CREATE_DELAY: Duration = Duration::from_secs(3);
 
 pub fn create_nodegroup(
     state: &EksState,
@@ -140,7 +146,7 @@ pub fn create_nodegroup(
         cluster_name: cluster.to_string(),
         name: name.to_string(),
         arn: arn.clone(),
-        status: "ACTIVE".to_string(),
+        status: NodegroupState::Creating.as_wire().to_string(),
         capacity_type: input["capacityType"]
             .as_str()
             .unwrap_or("ON_DEMAND")
@@ -179,10 +185,18 @@ pub fn create_nodegroup(
         taints,
         remote_access,
         launch_template,
+        sm: LifecycleSm::new(NodegroupState::Creating),
     };
-    state
-        .nodegroups
-        .insert((cluster.to_string(), name.to_string()), ng.clone());
+    // Schedule the CREATING -> ACTIVE promotion; tick (or a polling
+    // DescribeNodegroup) observes the deadline and flips the status.
+    ng.sm.start_transition(
+        NodegroupState::Creating,
+        NodegroupState::Active,
+        NODEGROUP_CREATE_DELAY,
+    );
+    let key = (cluster.to_string(), name.to_string());
+    state.nodegroups.insert(key.clone(), ng);
+    let ng = state.nodegroups.get(&key).expect("just inserted");
     Ok(json!({ "nodegroup": serialize_nodegroup(&ng) }))
 }
 
@@ -252,6 +266,10 @@ fn serialize_nodegroup(ng: &Nodegroup) -> Value {
         .filter(|s| !s.is_empty())
         .unwrap_or(&ng.name);
     let asg_name = format!("eks-{}-{}", ng.name, asg_suffix);
+    // Derive the wire `status` from the live state machine so a
+    // polling DescribeNodegroup observes CREATING -> ACTIVE as the
+    // scheduled deadline elapses.
+    let status = ng.sm.observe(SystemTime::now()).state.as_wire();
     let mut obj = json!({
         "nodegroupName": ng.name,
         "nodegroupArn": ng.arn,
@@ -260,7 +278,7 @@ fn serialize_nodegroup(ng: &Nodegroup) -> Value {
         "releaseVersion": ng.release_version,
         "createdAt": ng.created_at,
         "modifiedAt": ng.created_at,
-        "status": ng.status,
+        "status": status,
         "capacityType": ng.capacity_type,
         "scalingConfig": ng.scaling_config,
         "instanceTypes": ng.instance_types,
