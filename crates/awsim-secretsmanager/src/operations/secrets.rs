@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use awsim_core::{AwsError, RequestContext};
+use awsim_core::{AccountRegionStore, AwsError, RequestContext};
 use serde_json::{Value, json};
 use tracing::info;
 
@@ -65,6 +65,12 @@ fn secret_metadata(secret: &Secret) -> Value {
     if let Some(days) = secret.rotation_automatically_after_days {
         meta["RotationRules"] = json!({ "AutomaticallyAfterDays": days });
     }
+    if let Some(ref expr) = secret.rotation_schedule {
+        meta["RotationRules"] = json!({ "ScheduleExpression": expr });
+    }
+    if let Some(ts) = secret.next_rotation_date {
+        meta["NextRotationDate"] = json!(ts);
+    }
     if let Some(ref kms) = secret.kms_key_id {
         meta["KmsKeyId"] = json!(kms);
     }
@@ -99,6 +105,7 @@ pub fn create_secret(
     state: &SecretsState,
     input: &Value,
     ctx: &RequestContext,
+    store: Option<&AccountRegionStore<SecretsState>>,
 ) -> Result<Value, AwsError> {
     let name = input["Name"]
         .as_str()
@@ -166,14 +173,24 @@ pub fn create_secret(
         rotation_enabled: false,
         rotation_lambda_arn: None,
         rotation_automatically_after_days: None,
+        rotation_schedule: None,
+        next_rotation_date: None,
         kms_key_id: input["KmsKeyId"].as_str().map(str::to_string),
         last_rotated_date: None,
         last_accessed_date: None,
         replica_regions: replica_regions.clone(),
+        primary_region: None,
+        primary_arn: None,
     };
 
     info!(name = %name, arn = %arn, "Created secret");
-    state.secrets.insert(name.to_string(), secret);
+    state.secrets.insert(name.to_string(), secret.clone());
+
+    // Mirror the AWSCURRENT version into each target region so a
+    // GetSecretValue routed to a replica region resolves locally.
+    if let Some(store) = store {
+        write_replica_records(store, ctx, &secret, &replica_regions);
+    }
 
     let mut response = json!({
         "ARN": arn,
@@ -185,6 +202,44 @@ pub fn create_secret(
             serde_json::Value::Array(replica_regions.iter().map(replica_status_value).collect());
     }
     Ok(response)
+}
+
+/// Insert (or refresh) a replica `Secret` record into each target
+/// region's store. The replica clones the primary's current value and
+/// metadata but is flagged via `primary_region`/`primary_arn`. Cheap and
+/// idempotent: re-running it simply overwrites the replica with the
+/// latest primary snapshot.
+fn write_replica_records(
+    store: &AccountRegionStore<SecretsState>,
+    ctx: &RequestContext,
+    primary: &Secret,
+    replica_regions: &[crate::state::ReplicaRegion],
+) {
+    for replica in replica_regions {
+        let replica_state = store.get(&ctx.account_id, &replica.region);
+        let mut record = primary.clone();
+        record.replica_regions = Vec::new();
+        record.primary_region = Some(ctx.region.clone());
+        record.primary_arn = Some(primary.arn.clone());
+        if replica.kms_key_id.is_some() {
+            record.kms_key_id = replica.kms_key_id.clone();
+        }
+        replica_state.secrets.insert(primary.name.clone(), record);
+    }
+}
+
+/// Delete replica records for `regions` from their region stores. Used
+/// by RemoveRegionsFromReplication / StopReplicationToReplica.
+fn delete_replica_records(
+    store: &AccountRegionStore<SecretsState>,
+    ctx: &RequestContext,
+    secret_name: &str,
+    regions: &[String],
+) {
+    for region in regions {
+        let replica_state = store.get(&ctx.account_id, region);
+        replica_state.secrets.remove(secret_name);
+    }
 }
 
 /// Parse the `AddReplicaRegions` array, rejecting entries that duplicate
@@ -914,6 +969,8 @@ pub fn rotate_secret(
         return Err(error::invalid_request("Secret is marked for deletion"));
     }
 
+    let now = now_epoch_f64();
+
     // Store rotation configuration if provided
     if let Some(lambda_arn) = input["RotationLambdaARN"].as_str() {
         secret.rotation_lambda_arn = Some(lambda_arn.to_string());
@@ -939,37 +996,113 @@ pub fn rotate_secret(
                 )));
             }
             secret.rotation_automatically_after_days = Some(days);
+            secret.rotation_schedule = None;
         }
         if let Some(expr) = schedule {
             validate_schedule_expression(expr)?;
+            secret.rotation_schedule = Some(expr.to_string());
+            secret.rotation_automatically_after_days = None;
         }
     }
     secret.rotation_enabled = true;
 
+    // Compute the next automatic rotation due time from whichever rule
+    // is configured. RotateSecret performs an immediate rotation now, so
+    // the schedule clock starts ticking from this moment.
+    let after_days = secret.rotation_automatically_after_days;
+    let schedule = secret.rotation_schedule.clone();
+    secret.next_rotation_date = compute_next_rotation_date(now, after_days, schedule.as_deref());
+
+    let arn = secret.arn.clone();
+    let sname = secret.name.clone();
+    drop(secret);
+
+    let pending_vid = rotate_core(state, &name, &ctx.account_id, &ctx.region, lambda_invoker)?;
+
+    Ok(json!({
+        "ARN": arn,
+        "Name": sname,
+        "VersionId": pending_vid,
+    }))
+}
+
+/// Compute the epoch-seconds deadline for the next automatic rotation.
+///
+/// `AutomaticallyAfterDays` adds `days * 86400`; `rate(N unit)` adds the
+/// equivalent interval; `cron(...)` is approximated as `now + 86400`
+/// (we deliberately avoid shipping a cron engine). Returns `None` when
+/// neither rule is set.
+fn compute_next_rotation_date(
+    now: f64,
+    after_days: Option<u64>,
+    schedule: Option<&str>,
+) -> Option<f64> {
+    if let Some(days) = after_days {
+        return Some(now + (days as f64) * 86_400.0);
+    }
+    let expr = schedule?;
+    if let Some(rest) = expr.strip_prefix("rate(").and_then(|s| s.strip_suffix(')')) {
+        let parts: Vec<&str> = rest.split_whitespace().collect();
+        if parts.len() == 2
+            && let Ok(value) = parts[0].parse::<u64>()
+        {
+            let unit_secs = match parts[1] {
+                "minute" | "minutes" => 60.0,
+                "hour" | "hours" => 3_600.0,
+                "day" | "days" => 86_400.0,
+                _ => return Some(now + 86_400.0),
+            };
+            return Some(now + (value as f64) * unit_secs);
+        }
+        return Some(now + 86_400.0);
+    }
+    // cron(...) or anything else: bounded one-day approximation.
+    Some(now + 86_400.0)
+}
+
+/// Run the four-step rotation state machine and promote AWSPENDING for
+/// the secret named `name`. Assumes the caller has already validated the
+/// secret exists and is not deleted; creates the AWSPENDING version,
+/// dispatches the Lambda steps (when both an ARN and an invoker are
+/// available), then promotes AWSPENDING -> AWSCURRENT. Shared by the
+/// `RotateSecret` API path and the background `tick`. Returns the new
+/// version id.
+fn rotate_core(
+    state: &SecretsState,
+    name: &str,
+    account_id: &str,
+    region: &str,
+    lambda_invoker: Option<&dyn awsim_core::LambdaInvoker>,
+) -> Result<String, AwsError> {
     // Create the new AWSPENDING version up front. Real AWS performs
     // the same step on the customer's behalf before invoking the
     // rotation Lambda for `createSecret`.
     let now = now_epoch_f64();
     let pending_vid = new_version_id();
-    let current_value = secret
-        .versions
-        .get(&secret.current_version_id)
-        .map(|v| (v.secret_string.clone(), v.secret_binary.clone()));
-    let (secret_string, secret_binary) = current_value.unwrap_or((None, None));
-    let pending_version = SecretVersion {
-        version_id: pending_vid.clone(),
-        secret_string,
-        secret_binary,
-        stages: vec!["AWSPENDING".to_string()],
-        created_date: now,
+    let (arn, lambda_arn, old_current_id) = {
+        let mut secret = state
+            .secrets
+            .get_mut(name)
+            .ok_or_else(|| error::resource_not_found(name))?;
+        let current_value = secret
+            .versions
+            .get(&secret.current_version_id)
+            .map(|v| (v.secret_string.clone(), v.secret_binary.clone()));
+        let (secret_string, secret_binary) = current_value.unwrap_or((None, None));
+        let pending_version = SecretVersion {
+            version_id: pending_vid.clone(),
+            secret_string,
+            secret_binary,
+            stages: vec!["AWSPENDING".to_string()],
+            created_date: now,
+        };
+        secret.versions.insert(pending_vid.clone(), pending_version);
+        (
+            secret.arn.clone(),
+            secret.rotation_lambda_arn.clone(),
+            secret.current_version_id.clone(),
+        )
     };
-    secret.versions.insert(pending_vid.clone(), pending_version);
-
-    let arn = secret.arn.clone();
-    let sname = secret.name.clone();
-    let lambda_arn = secret.rotation_lambda_arn.clone();
-    let old_current_id = secret.current_version_id.clone();
-    drop(secret);
 
     // Dispatch the four-step rotation state machine when a Lambda ARN
     // is configured AND the gateway has wired up a `LambdaInvoker`.
@@ -984,7 +1117,7 @@ pub fn rotate_secret(
                 "ClientRequestToken": pending_vid.clone(),
             });
             invoker
-                .invoke(arn_ref, &payload, &ctx.account_id, &ctx.region)
+                .invoke(arn_ref, &payload, account_id, region)
                 .map_err(|e| {
                     // Surface failure with the step name so operators
                     // can tell which call broke the rotation chain.
@@ -1001,8 +1134,8 @@ pub fn rotate_secret(
     // leaves the previous version active.
     let mut secret = state
         .secrets
-        .get_mut(&name)
-        .ok_or_else(|| error::resource_not_found(secret_id))?;
+        .get_mut(name)
+        .ok_or_else(|| error::resource_not_found(name))?;
     if let Some(old_ver) = secret.versions.get_mut(&old_current_id) {
         old_ver.stages.retain(|s| s != "AWSCURRENT");
         if !old_ver.stages.contains(&"AWSPREVIOUS".to_string()) {
@@ -1022,17 +1155,52 @@ pub fn rotate_secret(
 
     info!(name = %name, lambda = ?lambda_arn, "RotateSecret");
 
-    Ok(json!({
-        "ARN": arn,
-        "Name": sname,
-        "VersionId": pending_vid,
-    }))
+    Ok(pending_vid)
 }
 
 /// AWS rotation Lambda contract: the Lambda is invoked once per step
 /// in this order. Each call must succeed before the next runs; a
 /// failure aborts the rotation and leaves AWSPENDING in place.
 const ROTATION_STEPS: &[&str] = &["createSecret", "setSecret", "testSecret", "finishSecret"];
+
+/// Scan every secret and fire automatic rotation for any whose
+/// `next_rotation_date` has come due. Shared by the background `tick`.
+/// Absolute-time gated and idempotent: rotating advances
+/// `next_rotation_date`, so re-running for the same wall clock is a
+/// no-op. A failing rotation Lambda leaves the deadline untouched so the
+/// next tick retries.
+pub fn run_due_rotations(
+    state: &SecretsState,
+    account_id: &str,
+    region: &str,
+    lambda_invoker: Option<&dyn awsim_core::LambdaInvoker>,
+) {
+    let now = now_epoch_f64();
+    let due: Vec<String> = state
+        .secrets
+        .iter()
+        .filter(|e| {
+            let s = e.value();
+            s.rotation_enabled
+                && s.deleted_date.is_none()
+                && s.next_rotation_date.is_some_and(|d| d <= now)
+        })
+        .map(|e| e.key().clone())
+        .collect();
+
+    for name in due {
+        if rotate_core(state, &name, account_id, region, lambda_invoker).is_err() {
+            // Leave next_rotation_date in place so the next tick retries.
+            continue;
+        }
+        if let Some(mut s) = state.secrets.get_mut(&name) {
+            let after_days = s.rotation_automatically_after_days;
+            let schedule = s.rotation_schedule.clone();
+            s.next_rotation_date =
+                compute_next_rotation_date(now_epoch_f64(), after_days, schedule.as_deref());
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // CancelRotateSecret
@@ -1055,6 +1223,8 @@ pub fn cancel_rotate_secret(
 
     secret.rotation_enabled = false;
     secret.rotation_lambda_arn = None;
+    secret.next_rotation_date = None;
+    secret.rotation_schedule = None;
 
     let arn = secret.arn.clone();
     let sname = secret.name.clone();
@@ -1196,82 +1366,154 @@ pub fn get_random_password(
 }
 
 // ---------------------------------------------------------------------------
-// ReplicateSecretToRegions (stub)
+// ReplicateSecretToRegions
 // ---------------------------------------------------------------------------
 
 pub fn replicate_secret_to_regions(
     state: &SecretsState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
+    store: Option<&AccountRegionStore<SecretsState>>,
 ) -> Result<Value, AwsError> {
     let secret_id = input["SecretId"]
         .as_str()
         .ok_or_else(|| error::missing_parameter("SecretId"))?;
 
     let name = resolve_name(state, secret_id)?;
-    let secret = state
-        .secrets
-        .get(&name)
-        .ok_or_else(|| error::resource_not_found(secret_id))?;
 
-    let arn = secret.arn.clone();
-    drop(secret);
+    // Parse and merge the requested regions into the primary's set,
+    // rejecting the primary region and duplicates against what's already
+    // configured.
+    let added = parse_replica_regions(&input["AddReplicaRegions"], &ctx.region)?;
+
+    let arn;
+    let merged;
+    {
+        let mut secret = state
+            .secrets
+            .get_mut(&name)
+            .ok_or_else(|| error::resource_not_found(secret_id))?;
+        for region in &added {
+            if secret
+                .replica_regions
+                .iter()
+                .any(|r| r.region == region.region)
+            {
+                return Err(error::invalid_parameter(format!(
+                    "Region `{}` is already replicated.",
+                    region.region
+                )));
+            }
+        }
+        secret.replica_regions.extend(added.iter().cloned());
+        arn = secret.arn.clone();
+        merged = secret.clone();
+    }
+
+    if let Some(store) = store {
+        write_replica_records(store, ctx, &merged, &added);
+    }
 
     Ok(json!({
         "ARN": arn,
-        "ReplicationStatus": [],
+        "ReplicationStatus": Value::Array(
+            merged.replica_regions.iter().map(replica_status_value).collect()
+        ),
     }))
 }
 
 // ---------------------------------------------------------------------------
-// RemoveRegionsFromReplication (stub)
+// RemoveRegionsFromReplication
 // ---------------------------------------------------------------------------
 
 pub fn remove_regions_from_replication(
     state: &SecretsState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
+    store: Option<&AccountRegionStore<SecretsState>>,
 ) -> Result<Value, AwsError> {
     let secret_id = input["SecretId"]
         .as_str()
         .ok_or_else(|| error::missing_parameter("SecretId"))?;
 
     let name = resolve_name(state, secret_id)?;
-    let secret = state
-        .secrets
-        .get(&name)
-        .ok_or_else(|| error::resource_not_found(secret_id))?;
 
-    let arn = secret.arn.clone();
-    drop(secret);
+    let remove: Vec<String> = input["RemoveReplicaRegions"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let arn;
+    let secret_name;
+    let remaining;
+    {
+        let mut secret = state
+            .secrets
+            .get_mut(&name)
+            .ok_or_else(|| error::resource_not_found(secret_id))?;
+        secret
+            .replica_regions
+            .retain(|r| !remove.contains(&r.region));
+        arn = secret.arn.clone();
+        secret_name = secret.name.clone();
+        remaining = secret.replica_regions.clone();
+    }
+
+    if let Some(store) = store {
+        delete_replica_records(store, ctx, &secret_name, &remove);
+    }
 
     Ok(json!({
         "ARN": arn,
-        "ReplicationStatus": [],
+        "ReplicationStatus": Value::Array(
+            remaining.iter().map(replica_status_value).collect()
+        ),
     }))
 }
 
 // ---------------------------------------------------------------------------
-// StopReplicationToReplica (stub)
+// StopReplicationToReplica
 // ---------------------------------------------------------------------------
 
 pub fn stop_replication_to_replica(
     state: &SecretsState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
+    store: Option<&AccountRegionStore<SecretsState>>,
 ) -> Result<Value, AwsError> {
     let secret_id = input["SecretId"]
         .as_str()
         .ok_or_else(|| error::missing_parameter("SecretId"))?;
 
+    // Called against the replica record in the replica's own region. It
+    // promotes the replica to a standalone secret: we drop the
+    // primary linkage here and prune the replica entry from the primary
+    // when it's reachable through the shared store.
     let name = resolve_name(state, secret_id)?;
-    let secret = state
-        .secrets
-        .get(&name)
-        .ok_or_else(|| error::resource_not_found(secret_id))?;
+    let arn;
+    let secret_name;
+    let primary_region;
+    {
+        let mut secret = state
+            .secrets
+            .get_mut(&name)
+            .ok_or_else(|| error::resource_not_found(secret_id))?;
+        arn = secret.arn.clone();
+        secret_name = secret.name.clone();
+        primary_region = secret.primary_region.take();
+        secret.primary_arn = None;
+    }
 
-    let arn = secret.arn.clone();
-    drop(secret);
+    if let (Some(store), Some(primary_region)) = (store, primary_region) {
+        let primary_state = store.get(&ctx.account_id, &primary_region);
+        if let Some(mut primary) = primary_state.secrets.get_mut(&secret_name) {
+            primary.replica_regions.retain(|r| r.region != ctx.region);
+        }
+    }
 
     Ok(json!({ "ARN": arn }))
 }
@@ -1626,6 +1868,16 @@ mod tests {
 
     fn ctx() -> RequestContext {
         RequestContext::new("secretsmanager", "us-east-1")
+    }
+
+    /// Single-region create helper: shadows the real `create_secret` so
+    /// existing tests keep their 3-arg shape (no replica store).
+    fn create_secret(
+        state: &SecretsState,
+        input: &Value,
+        ctx: &RequestContext,
+    ) -> Result<Value, AwsError> {
+        super::create_secret(state, input, ctx, None)
     }
 
     fn token(prefix: &str) -> String {
@@ -2229,5 +2481,153 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn rotate_secret_after_days_sets_next_rotation_date() {
+        let state = SecretsState::default();
+        create_secret(&state, &json!({ "Name": "s", "SecretString": "v" }), &ctx()).unwrap();
+        let before = now_epoch_f64();
+        rotate_secret(
+            &state,
+            &json!({
+                "SecretId": "s",
+                "RotationRules": { "AutomaticallyAfterDays": 1 }
+            }),
+            &ctx(),
+            None,
+        )
+        .unwrap();
+        let secret = state.secrets.get("s").unwrap();
+        assert_eq!(secret.rotation_automatically_after_days, Some(1));
+        let next = secret.next_rotation_date.expect("next_rotation_date set");
+        // now + 1 day (86400s); allow a couple seconds of clock skew.
+        assert!(
+            (next - (before + 86_400.0)).abs() < 5.0,
+            "expected ~now+86400, got delta {}",
+            next - before
+        );
+        // Surfaces in DescribeSecret as NextRotationDate.
+        let desc = describe_secret(&state, &json!({ "SecretId": "s" }), &ctx()).unwrap();
+        assert!(desc["NextRotationDate"].as_f64().is_some());
+    }
+
+    #[test]
+    fn rotate_secret_schedule_rate_sets_next_rotation_date() {
+        let state = SecretsState::default();
+        create_secret(&state, &json!({ "Name": "s", "SecretString": "v" }), &ctx()).unwrap();
+        let before = now_epoch_f64();
+        rotate_secret(
+            &state,
+            &json!({
+                "SecretId": "s",
+                "RotationRules": { "ScheduleExpression": "rate(2 hours)" }
+            }),
+            &ctx(),
+            None,
+        )
+        .unwrap();
+        let secret = state.secrets.get("s").unwrap();
+        assert_eq!(secret.rotation_schedule.as_deref(), Some("rate(2 hours)"));
+        let next = secret.next_rotation_date.expect("next_rotation_date set");
+        assert!(
+            (next - (before + 7_200.0)).abs() < 5.0,
+            "expected ~now+7200, got delta {}",
+            next - before
+        );
+    }
+
+    #[test]
+    fn cancel_rotate_secret_clears_schedule_and_next_rotation() {
+        let state = SecretsState::default();
+        create_secret(&state, &json!({ "Name": "s", "SecretString": "v" }), &ctx()).unwrap();
+        rotate_secret(
+            &state,
+            &json!({
+                "SecretId": "s",
+                "RotationRules": { "AutomaticallyAfterDays": 1 }
+            }),
+            &ctx(),
+            None,
+        )
+        .unwrap();
+        assert!(state.secrets.get("s").unwrap().next_rotation_date.is_some());
+
+        cancel_rotate_secret(&state, &json!({ "SecretId": "s" }), &ctx()).unwrap();
+        let secret = state.secrets.get("s").unwrap();
+        assert!(!secret.rotation_enabled);
+        assert!(secret.next_rotation_date.is_none());
+        assert!(secret.rotation_schedule.is_none());
+    }
+
+    #[test]
+    fn run_due_rotations_fires_when_next_rotation_in_past() {
+        let state = SecretsState::default();
+        create_secret(
+            &state,
+            &json!({ "Name": "s", "SecretString": "v0" }),
+            &ctx(),
+        )
+        .unwrap();
+        let invoker = RecordingInvoker::new();
+        rotate_secret(
+            &state,
+            &json!({
+                "SecretId": "s",
+                "RotationLambdaARN": "arn:aws:lambda:us-east-1:000000000000:function:rot",
+                "RotationRules": { "AutomaticallyAfterDays": 1 }
+            }),
+            &ctx(),
+            Some(&invoker),
+        )
+        .unwrap();
+        // The initial rotation fired four steps and stamped LastRotatedDate.
+        assert_eq!(invoker.calls().len(), 4);
+        let prev_rotated = state.secrets.get("s").unwrap().last_rotated_date.unwrap();
+
+        // Force the next rotation into the past so the tick picks it up.
+        if let Some(mut s) = state.secrets.get_mut("s") {
+            s.next_rotation_date = Some(now_epoch_f64() - 1.0);
+        }
+
+        run_due_rotations(&state, "000000000000", "us-east-1", Some(&invoker));
+
+        // Another four-step pass fired.
+        assert_eq!(invoker.calls().len(), 8);
+        let secret = state.secrets.get("s").unwrap();
+        assert!(
+            secret.last_rotated_date.unwrap() >= prev_rotated,
+            "last_rotated_date should advance"
+        );
+        // next_rotation_date moved back into the future.
+        assert!(secret.next_rotation_date.unwrap() > now_epoch_f64());
+    }
+
+    #[test]
+    fn run_due_rotations_skips_when_not_due() {
+        let state = SecretsState::default();
+        create_secret(
+            &state,
+            &json!({ "Name": "s", "SecretString": "v0" }),
+            &ctx(),
+        )
+        .unwrap();
+        let invoker = RecordingInvoker::new();
+        rotate_secret(
+            &state,
+            &json!({
+                "SecretId": "s",
+                "RotationLambdaARN": "arn:aws:lambda:us-east-1:000000000000:function:rot",
+                "RotationRules": { "AutomaticallyAfterDays": 1 }
+            }),
+            &ctx(),
+            Some(&invoker),
+        )
+        .unwrap();
+        assert_eq!(invoker.calls().len(), 4);
+
+        // next_rotation_date is ~1 day out, so the tick is a no-op.
+        run_due_rotations(&state, "000000000000", "us-east-1", Some(&invoker));
+        assert_eq!(invoker.calls().len(), 4);
     }
 }

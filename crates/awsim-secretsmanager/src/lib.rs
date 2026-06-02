@@ -78,7 +78,9 @@ impl ServiceHandler for SecretsManagerService {
         let state = self.store.get(&ctx.account_id, &ctx.region);
 
         match operation {
-            "CreateSecret" => operations::secrets::create_secret(&state, &input, ctx),
+            "CreateSecret" => {
+                operations::secrets::create_secret(&state, &input, ctx, Some(&self.store))
+            }
             "GetSecretValue" => operations::secrets::get_secret_value(&state, &input, ctx),
             "PutSecretValue" => operations::secrets::put_secret_value(&state, &input, ctx),
             "DescribeSecret" => operations::secrets::describe_secret(&state, &input, ctx),
@@ -99,15 +101,24 @@ impl ServiceHandler for SecretsManagerService {
                 operations::secrets::validate_resource_policy(&state, &input, ctx)
             }
             "GetRandomPassword" => operations::secrets::get_random_password(&state, &input, ctx),
-            "ReplicateSecretToRegions" => {
-                operations::secrets::replicate_secret_to_regions(&state, &input, ctx)
-            }
-            "RemoveRegionsFromReplication" => {
-                operations::secrets::remove_regions_from_replication(&state, &input, ctx)
-            }
-            "StopReplicationToReplica" => {
-                operations::secrets::stop_replication_to_replica(&state, &input, ctx)
-            }
+            "ReplicateSecretToRegions" => operations::secrets::replicate_secret_to_regions(
+                &state,
+                &input,
+                ctx,
+                Some(&self.store),
+            ),
+            "RemoveRegionsFromReplication" => operations::secrets::remove_regions_from_replication(
+                &state,
+                &input,
+                ctx,
+                Some(&self.store),
+            ),
+            "StopReplicationToReplica" => operations::secrets::stop_replication_to_replica(
+                &state,
+                &input,
+                ctx,
+                Some(&self.store),
+            ),
             "ListSecretVersionIds" => {
                 operations::secrets::list_secret_version_ids(&state, &input, ctx)
             }
@@ -174,6 +185,20 @@ impl ServiceHandler for SecretsManagerService {
             }
         }
     }
+
+    /// Fire automatic rotation for any secret whose `NextRotationDate`
+    /// has come due. AWS rotates on a schedule set via
+    /// `RotateSecret` (`AutomaticallyAfterDays` or a `ScheduleExpression`);
+    /// we mirror that by scanning every account/region each tick and
+    /// running the rotation state machine for due secrets. Absolute-time
+    /// gated and idempotent: each rotation advances `NextRotationDate`,
+    /// so a missed or repeated tick never rotates twice for one deadline.
+    async fn tick(&self) {
+        let invoker = self.lambda_invoker.as_deref();
+        for ((account_id, region), state) in self.store.iter_all() {
+            operations::secrets::run_due_rotations(&state, &account_id, &region, invoker);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -185,6 +210,10 @@ mod tests {
 
     fn ctx() -> RequestContext {
         RequestContext::new("secretsmanager", "us-east-1")
+    }
+
+    fn ctx_region(region: &str) -> RequestContext {
+        RequestContext::new("secretsmanager", region)
     }
 
     fn block_on<F: std::future::Future>(f: F) -> F::Output {
@@ -577,6 +606,153 @@ mod tests {
         assert_eq!(
             errors[0]["ErrorCode"].as_str().unwrap(),
             "ResourceNotFoundException"
+        );
+    }
+
+    #[test]
+    fn test_create_secret_replica_readable_in_target_region() {
+        let svc = SecretsManagerService::new();
+        let east = ctx();
+        let west = ctx_region("us-west-2");
+
+        block_on(svc.handle(
+            "CreateSecret",
+            json!({
+                "Name": "repl",
+                "SecretString": "shared",
+                "AddReplicaRegions": [{ "Region": "us-west-2" }],
+            }),
+            &east,
+        ))
+        .unwrap();
+
+        // The replica record resolves in us-west-2 and yields the value.
+        let val =
+            block_on(svc.handle("GetSecretValue", json!({ "SecretId": "repl" }), &west)).unwrap();
+        assert_eq!(val["SecretString"].as_str().unwrap(), "shared");
+    }
+
+    #[test]
+    fn test_remove_regions_deletes_replica_record() {
+        let svc = SecretsManagerService::new();
+        let east = ctx();
+        let west = ctx_region("us-west-2");
+
+        block_on(svc.handle(
+            "CreateSecret",
+            json!({
+                "Name": "repl2",
+                "SecretString": "v",
+                "AddReplicaRegions": [{ "Region": "us-west-2" }],
+            }),
+            &east,
+        ))
+        .unwrap();
+        // Present before removal.
+        block_on(svc.handle("GetSecretValue", json!({ "SecretId": "repl2" }), &west)).unwrap();
+
+        block_on(svc.handle(
+            "RemoveRegionsFromReplication",
+            json!({ "SecretId": "repl2", "RemoveReplicaRegions": ["us-west-2"] }),
+            &east,
+        ))
+        .unwrap();
+
+        // The replica record is gone from us-west-2.
+        let err = block_on(svc.handle("GetSecretValue", json!({ "SecretId": "repl2" }), &west))
+            .unwrap_err();
+        assert_eq!(err.code, "ResourceNotFoundException");
+
+        // The primary no longer lists the replica.
+        let desc =
+            block_on(svc.handle("DescribeSecret", json!({ "SecretId": "repl2" }), &east)).unwrap();
+        assert!(desc["ReplicationStatus"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_replicate_secret_to_regions_creates_replica() {
+        let svc = SecretsManagerService::new();
+        let east = ctx();
+        let west = ctx_region("us-west-2");
+
+        block_on(svc.handle(
+            "CreateSecret",
+            json!({ "Name": "lazy", "SecretString": "v" }),
+            &east,
+        ))
+        .unwrap();
+
+        let resp = block_on(svc.handle(
+            "ReplicateSecretToRegions",
+            json!({ "SecretId": "lazy", "AddReplicaRegions": [{ "Region": "us-west-2" }] }),
+            &east,
+        ))
+        .unwrap();
+        assert_eq!(resp["ReplicationStatus"].as_array().unwrap().len(), 1);
+
+        let val =
+            block_on(svc.handle("GetSecretValue", json!({ "SecretId": "lazy" }), &west)).unwrap();
+        assert_eq!(val["SecretString"].as_str().unwrap(), "v");
+    }
+
+    #[test]
+    fn test_tick_rotates_due_secret() {
+        use crate::state::SecretsState;
+        use awsim_core::AwsError;
+        use serde_json::Value;
+        use std::sync::Arc;
+
+        struct NoopInvoker;
+        impl awsim_core::LambdaInvoker for NoopInvoker {
+            fn invoke(
+                &self,
+                _function_name: &str,
+                _payload: &Value,
+                _account: &str,
+                _region: &str,
+            ) -> Result<Value, AwsError> {
+                Ok(json!({}))
+            }
+        }
+
+        let svc = SecretsManagerService::new().with_lambda_invoker(Arc::new(NoopInvoker));
+        let east = ctx();
+
+        block_on(svc.handle(
+            "CreateSecret",
+            json!({ "Name": "auto", "SecretString": "v0" }),
+            &east,
+        ))
+        .unwrap();
+        block_on(svc.handle(
+            "RotateSecret",
+            json!({
+                "SecretId": "auto",
+                "RotationLambdaARN": "arn:aws:lambda:us-east-1:000000000000:function:rot",
+                "RotationRules": { "AutomaticallyAfterDays": 1 }
+            }),
+            &east,
+        ))
+        .unwrap();
+
+        // Force the deadline into the past.
+        let state: Arc<SecretsState> = svc.store().get("000000000000", "us-east-1");
+        let prev_rotated = {
+            let mut s = state.secrets.get_mut("auto").unwrap();
+            s.next_rotation_date = Some(crate::util::now_epoch_f64() - 1.0);
+            s.last_rotated_date.unwrap()
+        };
+
+        block_on(svc.tick());
+
+        let s = state.secrets.get("auto").unwrap();
+        assert!(
+            s.last_rotated_date.unwrap() >= prev_rotated,
+            "tick should rotate the due secret"
+        );
+        assert!(
+            s.next_rotation_date.unwrap() > crate::util::now_epoch_f64(),
+            "tick should advance next_rotation_date"
         );
     }
 }

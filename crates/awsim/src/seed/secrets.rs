@@ -123,6 +123,10 @@ pub async fn seed(
                 last_rotated_date: None,
                 last_accessed_date: None,
                 replica_regions: Vec::new(),
+                rotation_schedule: None,
+                next_rotation_date: None,
+                primary_region: None,
+                primary_arn: None,
             };
             if samples.len() < SAMPLE_LIMIT {
                 samples.push(json!({

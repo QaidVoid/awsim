@@ -36,6 +36,14 @@ pub struct Secret {
     pub rotation_lambda_arn: Option<String>,
     /// Days between automatic rotations.
     pub rotation_automatically_after_days: Option<u64>,
+    /// Validated `ScheduleExpression` (`rate(...)` / `cron(...)`) stashed
+    /// from the last RotateSecret. `None` when rotation is driven by
+    /// `AutomaticallyAfterDays` or disabled.
+    pub rotation_schedule: Option<String>,
+    /// Unix epoch seconds — when the next automatic rotation is due. The
+    /// background `tick` fires rotation once wall-clock passes this and
+    /// then advances it. `None` when automatic rotation is disabled.
+    pub next_rotation_date: Option<f64>,
     /// KMS key ARN/alias used to encrypt secret values at rest. None
     /// means the AWS-managed `aws/secretsmanager` key (unsurfaced in
     /// Describe responses, matching AWS).
@@ -50,11 +58,18 @@ pub struct Secret {
     /// ReplicateSecretToRegions. Each entry surfaces in DescribeSecret
     /// as a `ReplicationStatus` row.
     pub replica_regions: Vec<ReplicaRegion>,
+    /// `None` for a primary secret; `Some(region)` names the primary's
+    /// region when this record is a cross-region replica mirror.
+    pub primary_region: Option<String>,
+    /// ARN of the primary secret this replica mirrors. `None` for a
+    /// primary secret.
+    pub primary_arn: Option<String>,
 }
 
-/// A single replica entry. Replication itself is metadata-only today —
-/// no cross-region mirror is created — but storing the requested set is
-/// what most SDK round-trips care about.
+/// A single replica entry on the primary secret. Each requested replica
+/// also gets a mirrored `Secret` record written into its region's store
+/// (flagged via `primary_region`/`primary_arn`) so a GetSecretValue
+/// routed to the replica region resolves locally.
 #[derive(Debug, Clone)]
 pub struct ReplicaRegion {
     pub region: String,
