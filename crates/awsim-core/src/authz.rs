@@ -152,6 +152,21 @@ pub trait LambdaInvoker: Send + Sync {
     ) -> Result<serde_json::Value, AwsError>;
 }
 
+/// In-process writer that lets a service deliver an object straight into
+/// the embedded S3 without a network round trip. Synchronous, meant to
+/// be called off the request path (e.g. Firehose buffering delivery).
+/// `body_b64` is the base64-encoded object bytes.
+pub trait S3ObjectWriter: Send + Sync {
+    fn put_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        body_b64: &str,
+        account: &str,
+        region: &str,
+    ) -> Result<(), AwsError>;
+}
+
 pub struct NoopPrincipalLookup;
 
 impl PrincipalLookup for NoopPrincipalLookup {

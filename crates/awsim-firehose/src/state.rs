@@ -6,6 +6,19 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Default)]
 pub struct FirehoseState {
     pub streams: DashMap<String, DeliveryStream>,
+    /// Per-stream delivery metrics + the most recently written S3 object
+    /// keys. Kept in a parallel map (not on `DeliveryStream`) so it stays
+    /// ephemeral and doesn't bloat the snapshot; real Firehose surfaces
+    /// these to CloudWatch AWS/Firehose, which is out of scope.
+    pub delivery_stats: DashMap<String, DeliveryStats>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct DeliveryStats {
+    pub last_s3_keys: Vec<String>,
+    pub succeeded_records: u64,
+    pub processing_failed: u64,
+    pub processing_dropped: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

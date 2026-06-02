@@ -2682,6 +2682,9 @@ fn register_services(
         None => awsim_s3::S3Service::new(),
     };
     let s3_store = s3.store();
+    // Captured before `s3` is moved into its Arc so Firehose can deliver
+    // objects into the embedded S3 without a network round trip.
+    let firehose_s3_writer: Arc<dyn awsim_core::S3ObjectWriter> = Arc::new(s3.object_writer());
     let s3_routes = {
         use awsim_core::ServiceHandler;
         s3.routes()
@@ -2737,7 +2740,8 @@ fn register_services(
         awsim_lambda::LambdaServiceInvoker::new(lambda_store.clone()),
     );
     let secretsmanager = Arc::new(
-        awsim_secretsmanager::SecretsManagerService::new().with_lambda_invoker(lambda_invoker),
+        awsim_secretsmanager::SecretsManagerService::new()
+            .with_lambda_invoker(lambda_invoker.clone()),
     );
     let secrets_store = secretsmanager.store();
     state.register(secretsmanager, vec![]);
@@ -2912,7 +2916,11 @@ fn register_services(
     };
     state.register(Arc::new(eks), eks_routes);
 
-    let firehose = Arc::new(awsim_firehose::FirehoseService::new());
+    let firehose = Arc::new(
+        awsim_firehose::FirehoseService::new()
+            .with_s3_writer(firehose_s3_writer)
+            .with_lambda_invoker(lambda_invoker.clone()),
+    );
     state.register(firehose, vec![]);
 
     let batch = awsim_batch::BatchService::new();

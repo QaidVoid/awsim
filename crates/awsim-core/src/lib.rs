@@ -23,8 +23,8 @@ pub mod totp;
 
 pub use authz::{
     AuthzEngine, CloudMapRegistrar, GrantLookup, KmsKeyLookup, LambdaInvoker, NoopPrincipalLookup,
-    ParameterLookup, PrincipalLookup, ResolvedPrincipal, ResourcePolicyLookup, ScpLookup,
-    SecretLookup,
+    ParameterLookup, PrincipalLookup, ResolvedPrincipal, ResourcePolicyLookup, S3ObjectWriter,
+    ScpLookup, SecretLookup,
 };
 // `HandlerByteStream` and `HandlerResult` are defined further down in
 // this file; re-exported here for crate consumers.

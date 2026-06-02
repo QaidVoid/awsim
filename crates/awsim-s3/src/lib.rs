@@ -78,6 +78,17 @@ impl S3Service {
         self.store.clone()
     }
 
+    /// Build an in-process [`S3ObjectWriter`] over this service's store,
+    /// so peers (e.g. Firehose delivery) can write objects without a
+    /// network round trip. Carries the body store so large bodies land
+    /// in the same place as gateway PutObjects.
+    pub fn object_writer(&self) -> S3ServiceWriter {
+        S3ServiceWriter {
+            store: self.store.clone(),
+            body_store: self.body_store.clone(),
+        }
+    }
+
     pub fn body_store(&self) -> Option<&Arc<BodyStore>> {
         self.body_store.as_ref()
     }
@@ -1492,5 +1503,38 @@ impl S3Service {
                 }
             }
         }
+    }
+}
+
+/// In-process [`awsim_core::S3ObjectWriter`] backed by the S3 service
+/// store. Lets another crate deliver an object straight into the
+/// embedded S3 (S3 is global, so the object lands under the account's
+/// `"global"` region regardless of the caller's region).
+pub struct S3ServiceWriter {
+    store: AccountRegionStore<S3State>,
+    body_store: Option<Arc<BodyStore>>,
+}
+
+impl awsim_core::S3ObjectWriter for S3ServiceWriter {
+    fn put_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        body_b64: &str,
+        account: &str,
+        _region: &str,
+    ) -> Result<(), AwsError> {
+        let state = self.store.get(account, "global");
+        if let Some(bs) = &self.body_store {
+            state.set_body_store(Arc::clone(bs));
+        }
+        let ctx = RequestContext::new_with_account("s3", "global", account);
+        let input = serde_json::json!({
+            "Bucket": bucket,
+            "Key": key,
+            "__raw_body": body_b64,
+        });
+        operations::object::put_object(&state, &input, &ctx)?;
+        Ok(())
     }
 }
