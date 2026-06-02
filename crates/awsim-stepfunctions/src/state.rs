@@ -43,6 +43,10 @@ pub struct StateMachine {
     /// `{ type, kmsKeyId?, kmsDataKeyReusePeriodSeconds? }`. Type must
     /// be AWS_OWNED_KEY or CUSTOMER_MANAGED_KMS_KEY.
     pub encryption_configuration: Option<serde_json::Value>,
+    /// `{ level, includeExecutionData?, destinations[].cloudWatchLogsLogGroup.logGroupArn }`.
+    /// When level != OFF, execution history is exported to the named log
+    /// group via the event sink.
+    pub logging_configuration: Option<serde_json::Value>,
 }
 
 /// A Step Functions activity.

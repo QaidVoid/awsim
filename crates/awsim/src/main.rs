@@ -2278,6 +2278,9 @@ fn spawn_event_router(state: &AppState) {
                         "servicediscovery:DnsChange" => {
                             integrations::handle_servicediscovery_dns(&services, &event).await;
                         }
+                        "states:ExecutionLog" => {
+                            integrations::handle_stepfunctions_log(&services, &event).await;
+                        }
                         "cognito:LambdaTrigger" => {
                             integrations::handle_cognito_trigger(&services, &event).await;
                         }

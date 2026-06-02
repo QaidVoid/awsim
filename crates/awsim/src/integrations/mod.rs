@@ -774,6 +774,99 @@ pub async fn handle_servicediscovery_dns(
     }
 }
 
+/// Export a Step Functions execution's history to its configured
+/// CloudWatch Logs group (`states:ExecutionLog`). Creates the log group
+/// and a per-execution stream (tolerating already-exists), then writes
+/// one event per history record plus a final status line. PutLogEvents
+/// does not auto-create the group/stream, so the create calls are
+/// mandatory.
+pub async fn handle_stepfunctions_log(
+    services: &HashMap<String, Arc<dyn ServiceHandler>>,
+    event: &InternalEvent,
+) {
+    let Some(logs) = services.get("logs") else {
+        return;
+    };
+    let log_group_name = event.detail["logGroupArn"]
+        .as_str()
+        .and_then(|a| {
+            a.rsplit_once("log-group:")
+                .map(|(_, rest)| rest.trim_end_matches(":*"))
+        })
+        .unwrap_or("");
+    if log_group_name.is_empty() {
+        return;
+    }
+    let exec_name = event.detail["name"].as_str().unwrap_or("execution");
+    let log_stream_name = format!("states/{exec_name}");
+    let ctx = RequestContext::new_with_account("logs", &event.region, &event.account_id);
+
+    // Idempotent group + stream creation (PutLogEvents requires both).
+    let _ = logs
+        .handle(
+            "CreateLogGroup",
+            serde_json::json!({ "logGroupName": log_group_name }),
+            &ctx,
+        )
+        .await;
+    let _ = logs
+        .handle(
+            "CreateLogStream",
+            serde_json::json!({
+                "logGroupName": log_group_name,
+                "logStreamName": log_stream_name,
+            }),
+            &ctx,
+        )
+        .await;
+
+    let base_ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let exec_arn = event.detail["executionArn"].clone();
+    let mut log_events: Vec<Value> = event.detail["events"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .enumerate()
+                .map(|(i, e)| {
+                    serde_json::json!({
+                        "timestamp": base_ts + i as u64,
+                        "message": serde_json::json!({
+                            "type": e["type"],
+                            "id": e["id"],
+                            "execution_arn": exec_arn,
+                        })
+                        .to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    log_events.push(serde_json::json!({
+        "timestamp": base_ts + log_events.len() as u64,
+        "message": serde_json::json!({
+            "type": "ExecutionStatus",
+            "status": event.detail["status"],
+            "execution_arn": exec_arn,
+        })
+        .to_string(),
+    }));
+
+    let input = serde_json::json!({
+        "logGroupName": log_group_name,
+        "logStreamName": log_stream_name,
+        "logEvents": log_events,
+    });
+    match logs.handle("PutLogEvents", input, &ctx).await {
+        Ok(_) => info!(log_group = %log_group_name, "StepFunctions execution log exported"),
+        Err(e) => {
+            warn!(log_group = %log_group_name, error = %e.message, "StepFunctions log export failed")
+        }
+    }
+}
+
 pub async fn handle_eventbridge_target(
     services: &HashMap<String, Arc<dyn ServiceHandler>>,
     event: &InternalEvent,

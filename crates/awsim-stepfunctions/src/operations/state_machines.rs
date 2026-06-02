@@ -67,7 +67,46 @@ fn sm_to_value(sm: &StateMachine) -> Value {
     if let Some(ec) = &sm.encryption_configuration {
         obj["encryptionConfiguration"] = ec.clone();
     }
+    if let Some(lc) = &sm.logging_configuration {
+        obj["loggingConfiguration"] = lc.clone();
+    }
     obj
+}
+
+/// Validate `loggingConfiguration` structurally: optional `level` in
+/// {ALL, ERROR, FATAL, OFF}, optional boolean `includeExecutionData`,
+/// optional `destinations[]`. Anything else fails with
+/// InvalidParameterValue.
+fn validate_logging_config(input: &Value) -> Result<Option<Value>, AwsError> {
+    let Some(lc) = input.get("loggingConfiguration") else {
+        return Ok(None);
+    };
+    if lc.is_null() {
+        return Ok(None);
+    }
+    let obj = lc.as_object().ok_or_else(|| {
+        AwsError::bad_request(
+            "InvalidParameterValue",
+            "loggingConfiguration must be an object.",
+        )
+    })?;
+    if let Some(level) = obj.get("level").and_then(Value::as_str)
+        && !matches!(level, "ALL" | "ERROR" | "FATAL" | "OFF")
+    {
+        return Err(AwsError::bad_request(
+            "InvalidParameterValue",
+            "loggingConfiguration.level must be ALL, ERROR, FATAL, or OFF.",
+        ));
+    }
+    if let Some(ied) = obj.get("includeExecutionData")
+        && !ied.is_boolean()
+    {
+        return Err(AwsError::bad_request(
+            "InvalidParameterValue",
+            "loggingConfiguration.includeExecutionData must be a boolean.",
+        ));
+    }
+    Ok(Some(Value::Object(obj.clone())))
 }
 
 /// Validate `tracingConfiguration` per Smithy: an object with an
@@ -203,6 +242,7 @@ pub fn create_state_machine(
 
     let tracing_configuration = validate_tracing_config(input)?;
     let encryption_configuration = validate_encryption_config(input)?;
+    let logging_configuration = validate_logging_config(input)?;
 
     let creation_date = now_iso8601();
     let sm = StateMachine {
@@ -216,6 +256,7 @@ pub fn create_state_machine(
         tags,
         tracing_configuration,
         encryption_configuration,
+        logging_configuration,
     };
 
     info!(name, arn = %arn, "Created state machine");
@@ -348,9 +389,67 @@ pub fn update_state_machine(
     if input.get("encryptionConfiguration").is_some() {
         sm.encryption_configuration = validate_encryption_config(input)?;
     }
+    if input.get("loggingConfiguration").is_some() {
+        sm.logging_configuration = validate_logging_config(input)?;
+    }
 
     let update_date = now_iso8601();
     info!(arn, "Updated state machine");
 
     Ok(json!({ "updateDate": update_date }))
+}
+
+#[cfg(test)]
+mod logging_tests {
+    use super::*;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("states", "us-east-1")
+    }
+
+    const DEF: &str = r#"{"StartAt":"X","States":{"X":{"Type":"Pass","End":true}}}"#;
+
+    #[test]
+    fn create_accepts_and_describe_echoes_logging_configuration() {
+        let state = StepFunctionsState::default();
+        let created = create_state_machine(
+            &state,
+            &json!({
+                "name": "m",
+                "definition": DEF,
+                "roleArn": "arn:aws:iam::000000000000:role/r",
+                "loggingConfiguration": {
+                    "level": "ALL",
+                    "includeExecutionData": true,
+                    "destinations": [{ "cloudWatchLogsLogGroup": {
+                        "logGroupArn": "arn:aws:logs:us-east-1:000000000000:log-group:/sfn:*"
+                    }}],
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let arn = created["stateMachineArn"].as_str().unwrap().to_string();
+        let desc =
+            describe_state_machine(&state, &json!({ "stateMachineArn": arn }), &ctx()).unwrap();
+        assert_eq!(desc["loggingConfiguration"]["level"], "ALL");
+        assert_eq!(desc["loggingConfiguration"]["includeExecutionData"], true);
+    }
+
+    #[test]
+    fn create_rejects_invalid_logging_level() {
+        let state = StepFunctionsState::default();
+        let err = create_state_machine(
+            &state,
+            &json!({
+                "name": "m",
+                "definition": DEF,
+                "roleArn": "arn:aws:iam::000000000000:role/r",
+                "loggingConfiguration": { "level": "VERBOSE" },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+    }
 }

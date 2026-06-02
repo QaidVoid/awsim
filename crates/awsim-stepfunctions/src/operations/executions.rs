@@ -97,6 +97,7 @@ pub fn start_execution(
     // Run the ASL interpreter synchronously (dev emulator)
     let definition = sm.definition.clone();
     let is_express = sm.machine_type == "EXPRESS";
+    let logging_configuration = sm.logging_configuration.clone();
     drop(sm); // release dashmap reference before potentially mutating
 
     let result = asl::run_execution(&definition, &exec_input, &start_date, is_express)?;
@@ -120,6 +121,42 @@ pub fn start_execution(
     };
 
     info!(arn = %exec_arn, status = %exec.status, "Started execution");
+
+    // Export execution history to CloudWatch Logs when logging is enabled.
+    // The binary's event router creates the log group/stream and writes
+    // the events; best-effort, skipped in unit tests (no event bus).
+    if let (Some(bus), Some(cfg)) = (ctx.event_bus.as_ref(), logging_configuration.as_ref()) {
+        let level = cfg.get("level").and_then(Value::as_str).unwrap_or("OFF");
+        let log_group_arn = cfg
+            .get("destinations")
+            .and_then(Value::as_array)
+            .and_then(|d| d.first())
+            .and_then(|d| d.get("cloudWatchLogsLogGroup"))
+            .and_then(|g| g.get("logGroupArn"))
+            .and_then(Value::as_str);
+        if level != "OFF"
+            && let Some(arn) = log_group_arn
+        {
+            let events: Vec<Value> = exec
+                .history
+                .iter()
+                .map(|e| json!({ "type": e.event_type, "id": e.id, "timestamp": e.timestamp }))
+                .collect();
+            bus.publish(awsim_core::events::InternalEvent {
+                source: "states".to_string(),
+                event_type: "states:ExecutionLog".to_string(),
+                region: ctx.region.clone(),
+                account_id: ctx.account_id.clone(),
+                detail: json!({
+                    "logGroupArn": arn,
+                    "executionArn": exec.arn,
+                    "name": exec.name,
+                    "status": exec.status,
+                    "events": events,
+                }),
+            });
+        }
+    }
 
     // AWS bills Step Functions per state transition, not per
     // StartExecution call. Each state we entered counts as one
@@ -281,4 +318,81 @@ pub fn get_execution_history(
         .collect();
 
     Ok(json!({ "events": events }))
+}
+
+#[cfg(test)]
+mod logging_emit_tests {
+    use super::*;
+    use crate::operations::state_machines::create_state_machine;
+
+    #[test]
+    fn start_execution_emits_states_execution_log_when_logging_enabled() {
+        let state = StepFunctionsState::default();
+        let setup_ctx = RequestContext::new("states", "us-east-1");
+        let created = create_state_machine(
+            &state,
+            &json!({
+                "name": "m",
+                "definition": r#"{"StartAt":"X","States":{"X":{"Type":"Pass","End":true}}}"#,
+                "roleArn": "arn:aws:iam::000000000000:role/r",
+                "loggingConfiguration": {
+                    "level": "ALL",
+                    "destinations": [{ "cloudWatchLogsLogGroup": {
+                        "logGroupArn": "arn:aws:logs:us-east-1:000000000000:log-group:/sfn:*"
+                    }}],
+                },
+            }),
+            &setup_ctx,
+        )
+        .unwrap();
+        let sm_arn = created["stateMachineArn"].as_str().unwrap().to_string();
+
+        let bus = awsim_core::events::EventBus::new();
+        let mut rx = bus.subscribe();
+        let mut ctx = RequestContext::new("states", "us-east-1");
+        ctx.event_bus = Some(bus);
+        start_execution(
+            &state,
+            &json!({ "stateMachineArn": sm_arn, "name": "e1", "input": "{}" }),
+            &ctx,
+        )
+        .unwrap();
+        let ev = rx.try_recv().expect("expected a states:ExecutionLog");
+        assert_eq!(ev.event_type, "states:ExecutionLog");
+        assert!(
+            ev.detail["logGroupArn"]
+                .as_str()
+                .unwrap()
+                .contains("log-group:/sfn")
+        );
+        assert_eq!(ev.detail["status"], "SUCCEEDED");
+    }
+
+    #[test]
+    fn start_execution_without_logging_emits_nothing() {
+        let state = StepFunctionsState::default();
+        let setup_ctx = RequestContext::new("states", "us-east-1");
+        let created = create_state_machine(
+            &state,
+            &json!({
+                "name": "m",
+                "definition": r#"{"StartAt":"X","States":{"X":{"Type":"Pass","End":true}}}"#,
+                "roleArn": "arn:aws:iam::000000000000:role/r",
+            }),
+            &setup_ctx,
+        )
+        .unwrap();
+        let sm_arn = created["stateMachineArn"].as_str().unwrap().to_string();
+        let bus = awsim_core::events::EventBus::new();
+        let mut rx = bus.subscribe();
+        let mut ctx = RequestContext::new("states", "us-east-1");
+        ctx.event_bus = Some(bus);
+        start_execution(
+            &state,
+            &json!({ "stateMachineArn": sm_arn, "name": "e1", "input": "{}" }),
+            &ctx,
+        )
+        .unwrap();
+        assert!(rx.try_recv().is_err());
+    }
 }
