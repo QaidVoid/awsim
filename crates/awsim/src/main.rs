@@ -1939,6 +1939,38 @@ fn raise_nofile_limit() {}
 
 ///   cloudformation:CreateResource  — provisions the resource in the target service
 ///   cloudformation:DeleteResource  — deprovisions the resource from the target service
+/// Emit an `AWS/SNS` delivery metric (`NumberOfNotificationsDelivered`
+/// / `NumberOfNotificationsFailed`) into CloudWatch for a topic that has
+/// the matching delivery-status feedback role configured. Best-effort:
+/// silently drops if the monitoring service is unavailable.
+async fn emit_sns_delivery_metric(
+    services: &std::collections::HashMap<String, std::sync::Arc<dyn awsim_core::ServiceHandler>>,
+    region: &str,
+    account_id: &str,
+    topic_name: &str,
+    delivered: bool,
+) {
+    let Some(cw) = services.get("monitoring") else {
+        return;
+    };
+    let metric = if delivered {
+        "NumberOfNotificationsDelivered"
+    } else {
+        "NumberOfNotificationsFailed"
+    };
+    let ctx = awsim_core::RequestContext::new_with_account("monitoring", region, account_id);
+    let input = serde_json::json!({
+        "Namespace": "AWS/SNS",
+        "MetricData": [{
+            "MetricName": metric,
+            "Value": 1.0,
+            "Unit": "Count",
+            "Dimensions": [{ "Name": "TopicName", "Value": topic_name }],
+        }],
+    });
+    let _ = cw.handle("PutMetricData", input, &ctx).await;
+}
+
 fn spawn_event_router(state: &AppState) {
     use std::sync::Arc;
 
@@ -1968,6 +2000,17 @@ fn spawn_event_router(state: &AppState) {
                     let raw_message_delivery = event.detail["raw_message_delivery"]
                         .as_bool()
                         .unwrap_or(false);
+                    // Delivery-status feedback gates threaded from the SNS
+                    // fan-out: emit AWS/SNS metrics only when the topic has the
+                    // matching *FeedbackRoleArn configured for this protocol.
+                    let topic_name = event.detail["topic_name"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string();
+                    let success_feedback =
+                        event.detail["success_feedback"].as_bool().unwrap_or(false);
+                    let failure_feedback =
+                        event.detail["failure_feedback"].as_bool().unwrap_or(false);
 
                     match event.event_type.as_str() {
                         "sns:Publish" if protocol == "sqs" => {
@@ -2077,27 +2120,142 @@ fn spawn_event_router(state: &AppState) {
                                         info!(
                                             topic = %topic_arn,
                                             queue = %endpoint,
-                                            "SNS→SQS fan-out delivered"
+                                            "SNS->SQS fan-out delivered"
                                         );
+                                        if success_feedback {
+                                            emit_sns_delivery_metric(
+                                                &services,
+                                                &event.region,
+                                                &event.account_id,
+                                                &topic_name,
+                                                true,
+                                            )
+                                            .await;
+                                        }
                                     }
                                     Err(e) => {
                                         warn!(
                                             topic = %topic_arn,
                                             queue = %endpoint,
                                             error = %e.message,
-                                            "SNS→SQS fan-out delivery failed"
+                                            "SNS->SQS fan-out delivery failed"
                                         );
+                                        if failure_feedback {
+                                            emit_sns_delivery_metric(
+                                                &services,
+                                                &event.region,
+                                                &event.account_id,
+                                                &topic_name,
+                                                false,
+                                            )
+                                            .await;
+                                        }
                                     }
                                 }
                             }
                         }
                         "sns:Publish" if protocol == "lambda" => {
-                            // Lambda fan-out — reserved for future implementation.
-                            info!(
-                                topic = %topic_arn,
-                                function = %endpoint,
-                                "SNS→Lambda fan-out: not yet implemented"
-                            );
+                            if let Some(lambda) = services.get("lambda") {
+                                let func_name = endpoint
+                                    .rsplit(":function:")
+                                    .next()
+                                    .unwrap_or(endpoint.as_str())
+                                    .to_string();
+                                // Real SNS delivers an envelope of Records[] to
+                                // the function, each wrapping the SNS message.
+                                let sns_record = serde_json::json!({ "Records": [{
+                                    "EventSource": "aws:sns",
+                                    "EventVersion": "1.0",
+                                    "EventSubscriptionArn": subscription_arn,
+                                    "Sns": {
+                                        "Type": "Notification",
+                                        "MessageId": message_id,
+                                        "TopicArn": topic_arn,
+                                        "Subject": subject,
+                                        "Message": message,
+                                        "Timestamp": iso8601_now(),
+                                        "SignatureVersion": "1",
+                                        "MessageAttributes": message_attributes
+                                            .clone()
+                                            .unwrap_or_else(|| serde_json::json!({})),
+                                    }
+                                }]});
+                                let ctx = RequestContext::new_with_account(
+                                    "lambda",
+                                    &event.region,
+                                    &event.account_id,
+                                );
+                                let invoke_input = serde_json::json!({
+                                    "FunctionName": func_name,
+                                    "Payload": sns_record.to_string(),
+                                    "InvocationType": "Event",
+                                });
+                                match lambda.handle("Invoke", invoke_input, &ctx).await {
+                                    Ok(_) => {
+                                        info!(
+                                            topic = %topic_arn,
+                                            function = %endpoint,
+                                            "SNS->Lambda fan-out delivered"
+                                        );
+                                        if success_feedback {
+                                            emit_sns_delivery_metric(
+                                                &services,
+                                                &event.region,
+                                                &event.account_id,
+                                                &topic_name,
+                                                true,
+                                            )
+                                            .await;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            topic = %topic_arn,
+                                            function = %endpoint,
+                                            error = %e.message,
+                                            "SNS->Lambda fan-out delivery failed"
+                                        );
+                                        if failure_feedback {
+                                            emit_sns_delivery_metric(
+                                                &services,
+                                                &event.region,
+                                                &event.account_id,
+                                                &topic_name,
+                                                false,
+                                            )
+                                            .await;
+                                        }
+                                        // Async-failure DLQ: route to the
+                                        // function's EventInvokeConfig OnFailure
+                                        // destination. Only pre-execution Invoke
+                                        // errors (missing function, throttle,
+                                        // recursion) surface here, since
+                                        // InvocationType=Event returns 202 and
+                                        // discards the runtime result, the same
+                                        // convention the ESM DLQ paths follow.
+                                        if let Ok(cfg) = lambda
+                                            .handle(
+                                                "GetFunctionEventInvokeConfig",
+                                                serde_json::json!({ "FunctionName": func_name }),
+                                                &ctx,
+                                            )
+                                            .await
+                                            && let Some(dest) =
+                                                cfg["DestinationConfig"]["OnFailure"]["Destination"]
+                                                    .as_str()
+                                        {
+                                            integrations::route_to_destination(
+                                                &services,
+                                                dest,
+                                                &sns_record,
+                                                &event.account_id,
+                                                &event.region,
+                                            )
+                                            .await;
+                                        }
+                                    }
+                                }
+                            }
                         }
                         "cloudformation:CreateResource" => {
                             integrations::handle_cf_create_resource(&services, &event).await;

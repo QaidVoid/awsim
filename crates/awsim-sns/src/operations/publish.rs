@@ -215,6 +215,18 @@ fn fan_out_to_subscribers(
         None
     };
 
+    // Delivery-status feedback is configured per-protocol at the topic
+    // level. When the matching *SuccessFeedbackRoleArn /
+    // *FailureFeedbackRoleArn is set, real SNS emits AWS/SNS CloudWatch
+    // metrics on each delivery. Thread the gate flags + topic name into
+    // the event so the router can emit without re-reading SNS state.
+    let topic_attrs: HashMap<String, String> = state
+        .topics
+        .get(topic_arn)
+        .map(|t| t.attributes.clone())
+        .unwrap_or_default();
+    let topic_name = topic_arn.rsplit(':').next().unwrap_or("").to_string();
+
     for (protocol, endpoint, subscription_arn, filter_policy, scope, raw_delivery) in subs {
         if let Some(filter_str) = &filter_policy
             && let Ok(filter_val) = serde_json::from_str::<Value>(filter_str)
@@ -233,6 +245,17 @@ fn fan_out_to_subscribers(
 
         let delivered = select_message_for_protocol(message_json, &protocol).unwrap_or(raw_message);
 
+        let (succ_attr, fail_attr) = match protocol.as_str() {
+            "sqs" => ("SQSSuccessFeedbackRoleArn", "SQSFailureFeedbackRoleArn"),
+            "lambda" => (
+                "LambdaSuccessFeedbackRoleArn",
+                "LambdaFailureFeedbackRoleArn",
+            ),
+            _ => ("", ""),
+        };
+        let success_feedback = topic_attrs.get(succ_attr).is_some_and(|s| !s.is_empty());
+        let failure_feedback = topic_attrs.get(fail_attr).is_some_and(|s| !s.is_empty());
+
         let event = InternalEvent {
             source: "sns".to_string(),
             event_type: "sns:Publish".to_string(),
@@ -248,6 +271,9 @@ fn fan_out_to_subscribers(
                 "subscription_arn": subscription_arn,
                 "message_attributes": attr_envelope,
                 "raw_message_delivery": raw_delivery,
+                "topic_name": topic_name.clone(),
+                "success_feedback": success_feedback,
+                "failure_feedback": failure_feedback,
             }),
         };
         bus.publish(event);
@@ -701,6 +727,84 @@ mod tests {
                 created_at: "1970-01-01T00:00:00Z".to_string(),
             },
         );
+    }
+
+    fn make_topic_with_attrs(state: &SnsState, arn: &str, attrs: Vec<(&str, &str)>) {
+        let mut map = std::collections::HashMap::new();
+        for (k, v) in attrs {
+            map.insert(k.to_string(), v.to_string());
+        }
+        state.topics.insert(
+            arn.to_string(),
+            crate::state::Topic {
+                arn: arn.to_string(),
+                name: arn.rsplit(':').next().unwrap().to_string(),
+                attributes: map,
+                tags: Default::default(),
+                is_fifo: false,
+                subscription_arns: Vec::new(),
+                created_at: "1970-01-01T00:00:00Z".to_string(),
+            },
+        );
+    }
+
+    fn subscribe_sqs(state: &SnsState, topic: &str) {
+        let arn = format!("{topic}:sub-1");
+        state.subscriptions.insert(
+            arn.clone(),
+            crate::state::Subscription {
+                arn,
+                topic_arn: topic.to_string(),
+                protocol: "sqs".to_string(),
+                endpoint: "arn:aws:sqs:us-east-1:000000000000:q".to_string(),
+                confirmed: true,
+                attributes: Default::default(),
+            },
+        );
+    }
+
+    fn ctx_with_bus() -> (RequestContext, awsim_core::events::EventBus) {
+        let bus = awsim_core::events::EventBus::new();
+        let mut ctx = RequestContext::new("sns", "us-east-1");
+        ctx.event_bus = Some(bus.clone());
+        (ctx, bus)
+    }
+
+    #[test]
+    fn fan_out_event_carries_success_feedback_gate() {
+        let state = SnsState::default();
+        let topic = "arn:aws:sns:us-east-1:000000000000:t";
+        make_topic_with_attrs(
+            &state,
+            topic,
+            vec![(
+                "SQSSuccessFeedbackRoleArn",
+                "arn:aws:iam::000000000000:role/r",
+            )],
+        );
+        subscribe_sqs(&state, topic);
+        let (ctx, bus) = ctx_with_bus();
+        let mut rx = bus.subscribe();
+        publish(&state, &json!({ "TopicArn": topic, "Message": "hi" }), &ctx).unwrap();
+        let ev = rx.try_recv().expect("expected one sns:Publish event");
+        assert_eq!(ev.detail["protocol"], "sqs");
+        assert_eq!(ev.detail["topic_name"], "t");
+        assert_eq!(ev.detail["success_feedback"], true);
+        assert_eq!(ev.detail["failure_feedback"], false);
+    }
+
+    #[test]
+    fn fan_out_event_has_no_feedback_gate_without_role() {
+        let state = SnsState::default();
+        let topic = "arn:aws:sns:us-east-1:000000000000:t";
+        make_topic_with_attrs(&state, topic, vec![]);
+        subscribe_sqs(&state, topic);
+        let (ctx, bus) = ctx_with_bus();
+        let mut rx = bus.subscribe();
+        publish(&state, &json!({ "TopicArn": topic, "Message": "hi" }), &ctx).unwrap();
+        let ev = rx.try_recv().expect("expected one sns:Publish event");
+        assert_eq!(ev.detail["success_feedback"], false);
+        assert_eq!(ev.detail["failure_feedback"], false);
     }
 
     #[test]

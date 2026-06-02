@@ -16,6 +16,11 @@ use tracing::{debug, info, warn};
 mod esm;
 pub mod pipes;
 
+/// Route an async-invoke failure payload to a Lambda destination ARN
+/// (SQS queue or SNS topic). Shared by the ESM pollers and the
+/// SNS->Lambda fan-out DLQ path.
+pub use esm::route_to_destination;
+
 /// Snapshot of the fields the SQS poller needs from an EventSourceMapping.
 /// Tuple aliased to keep clippy's type-complexity lint quiet.
 type SqsMappingSnapshot = (
