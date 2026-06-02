@@ -2114,6 +2114,9 @@ fn spawn_event_router(state: &AppState) {
                         "ses:EmailEvent" => {
                             integrations::handle_ses_event(&services, &event).await;
                         }
+                        "ses:ReceiptAction" => {
+                            integrations::handle_ses_receipt_action(&services, &event).await;
+                        }
                         "cognito:LambdaTrigger" => {
                             integrations::handle_cognito_trigger(&services, &event).await;
                         }

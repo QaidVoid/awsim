@@ -129,6 +129,27 @@ pub struct Contact {
     pub created_at: u64,
 }
 
+/// A single inbound receipt rule. `actions` are the AWS action union
+/// members (S3Action, SNSAction, LambdaAction, StopAction,
+/// AddHeaderAction, BounceAction, ...) stored verbatim so we don't have
+/// to model every member; synthetic delivery walks them in order.
+#[derive(Debug, Clone)]
+pub struct ReceiptRule {
+    pub name: String,
+    pub enabled: bool,
+    pub recipients: Vec<String>,
+    pub scan_enabled: bool,
+    pub tls_policy: Option<String>,
+    pub actions: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ReceiptRuleSet {
+    pub name: String,
+    pub created_at: u64,
+    pub rules: Vec<ReceiptRule>,
+}
+
 #[derive(Debug, Clone)]
 pub struct SuppressedDestination {
     pub email: String,
@@ -158,6 +179,11 @@ pub struct SesState {
     pub custom_verification_templates: DashMap<String, CustomVerificationTemplate>,
     pub identity_policies: DashMap<String, HashMap<String, String>>,
     pub identity_tags: DashMap<String, HashMap<String, String>>,
+    /// Inbound receipt rule sets keyed by name, plus the currently
+    /// active set. SES email-receiving is account/region scoped like the
+    /// rest of this state.
+    pub receipt_rule_sets: DashMap<String, ReceiptRuleSet>,
+    pub active_receipt_rule_set: Mutex<Option<String>>,
     /// Account-level VDM attributes: stored verbatim and returned by
     /// `GetAccount`. AWS shape:
     /// `{ VdmEnabled: ENABLED|DISABLED, DashboardAttributes?: {...}, GuardianAttributes?: {...} }`.

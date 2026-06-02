@@ -618,6 +618,64 @@ pub async fn handle_ses_event(
     }
 }
 
+/// Fan out one `ses:ReceiptAction` emitted by synthetic inbound
+/// delivery. SNS and Lambda actions are dispatched to the in-process
+/// handler; S3 / Bounce / AddHeader / Stop actions are recorded in the
+/// delivery summary and need no live fan-out.
+pub async fn handle_ses_receipt_action(
+    services: &HashMap<String, Arc<dyn ServiceHandler>>,
+    event: &InternalEvent,
+) {
+    let action_type = event.detail["actionType"].as_str().unwrap_or("");
+    let action = &event.detail["action"][action_type];
+    let message_id = event.detail["messageId"].as_str().unwrap_or("");
+    match action_type {
+        "SNSAction" => {
+            if let Some(sns) = services.get("sns") {
+                let arn = action["TopicArn"].as_str().unwrap_or("");
+                let input = serde_json::json!({
+                    "TopicArn": arn,
+                    "Message": event.detail.to_string(),
+                });
+                let ctx = RequestContext::new_with_account("sns", &event.region, &event.account_id);
+                match sns.handle("Publish", input, &ctx).await {
+                    Ok(_) => info!(topic = %arn, message_id, "SES receipt SNSAction delivered"),
+                    Err(e) => {
+                        warn!(topic = %arn, error = %e.message, "SES receipt SNSAction failed")
+                    }
+                }
+            }
+        }
+        "LambdaAction" => {
+            if let Some(lambda) = services.get("lambda") {
+                let func = action["FunctionArn"].as_str().unwrap_or("");
+                let func_name = func.rsplit(":function:").next().unwrap_or(func);
+                let input = serde_json::json!({
+                    "FunctionName": func_name,
+                    "Payload": event.detail.to_string(),
+                    "InvocationType": action["InvocationType"].as_str().unwrap_or("Event"),
+                });
+                let ctx =
+                    RequestContext::new_with_account("lambda", &event.region, &event.account_id);
+                match lambda.handle("Invoke", input, &ctx).await {
+                    Ok(_) => {
+                        info!(function = %func_name, message_id, "SES receipt LambdaAction delivered")
+                    }
+                    Err(e) => {
+                        warn!(function = %func_name, error = %e.message, "SES receipt LambdaAction failed")
+                    }
+                }
+            }
+        }
+        other => {
+            debug!(
+                action = other,
+                message_id, "SES receipt action recorded (no fan-out)"
+            );
+        }
+    }
+}
+
 pub async fn handle_eventbridge_target(
     services: &HashMap<String, Arc<dyn ServiceHandler>>,
     event: &InternalEvent,

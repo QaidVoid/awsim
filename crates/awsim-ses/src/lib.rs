@@ -757,6 +757,36 @@ impl ServiceHandler for SesService {
                 operations::more::put_deliverability_dashboard_option(&state, &input, ctx)
             }
             "GetBlacklistReports" => operations::more::get_blacklist_reports(&state, &input, ctx),
+            "CreateReceiptRuleSet" => {
+                operations::receipt::create_receipt_rule_set(&state, &input, ctx)
+            }
+            "DeleteReceiptRuleSet" => {
+                operations::receipt::delete_receipt_rule_set(&state, &input, ctx)
+            }
+            "DescribeReceiptRuleSet" => {
+                operations::receipt::describe_receipt_rule_set(&state, &input, ctx)
+            }
+            "ListReceiptRuleSets" => {
+                operations::receipt::list_receipt_rule_sets(&state, &input, ctx)
+            }
+            "SetActiveReceiptRuleSet" => {
+                operations::receipt::set_active_receipt_rule_set(&state, &input, ctx)
+            }
+            "DescribeActiveReceiptRuleSet" => {
+                operations::receipt::describe_active_receipt_rule_set(&state, &input, ctx)
+            }
+            "CreateReceiptRule" => operations::receipt::create_receipt_rule(&state, &input, ctx),
+            "UpdateReceiptRule" => operations::receipt::update_receipt_rule(&state, &input, ctx),
+            "DeleteReceiptRule" => operations::receipt::delete_receipt_rule(&state, &input, ctx),
+            "DescribeReceiptRule" => {
+                operations::receipt::describe_receipt_rule(&state, &input, ctx)
+            }
+            "ReorderReceiptRuleSet" => {
+                operations::receipt::reorder_receipt_rule_set(&state, &input, ctx)
+            }
+            "DeliverReceiptMessage" => {
+                operations::receipt::deliver_receipt_message(&state, &input, ctx)
+            }
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
