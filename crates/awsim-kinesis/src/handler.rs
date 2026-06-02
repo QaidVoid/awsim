@@ -162,4 +162,19 @@ impl ServiceHandler for KinesisService {
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
+
+    /// Periodic maintenance: promote due `UpdateShardCount` transitions
+    /// and sweep enhanced-fan-out consumers that have gone idle. Both
+    /// passes are absolute-time gated and idempotent, so a missed or
+    /// repeated tick never loses or double-applies state.
+    async fn tick(&self) {
+        let now = std::time::SystemTime::now();
+        let now_secs = crate::state::now_secs();
+        for (_, state) in self.store.iter_all() {
+            for mut entry in state.streams.iter_mut() {
+                entry.value_mut().promote(now);
+            }
+            let _ = consumers::sweep_idle_consumers(&state, now_secs);
+        }
+    }
 }

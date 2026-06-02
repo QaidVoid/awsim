@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
+use std::time::SystemTime;
 
 use dashmap::DashMap;
 
@@ -55,7 +56,15 @@ pub struct StreamConsumer {
     pub consumer_status: String,
     pub stream_arn: String,
     pub consumer_creation_timestamp: u64,
+    /// Unix seconds of the last `SubscribeToShard` (or registration).
+    /// The tick sweep deregisters consumers idle past
+    /// [`CONSUMER_IDLE_SECS`].
+    pub last_active_secs: u64,
 }
+
+/// Enhanced-fan-out consumers idle for longer than this are swept by
+/// the tick loop, mirroring AWS reclaiming abandoned subscriptions.
+pub const CONSUMER_IDLE_SECS: u64 = 300;
 
 /// A Kinesis Data Stream.
 #[derive(Debug, Clone)]
@@ -78,6 +87,33 @@ pub struct KinesisStream {
     pub stream_mode: String,
     pub warm_throughput_mibps: u64,
     pub warm_throughput_records: u64,
+    /// Staged `UpdateShardCount` transition: the deadline after which
+    /// the stream promotes back to ACTIVE plus the replacement shard
+    /// set. `None` when the stream is settled. Every read path routes
+    /// through [`KinesisStream::promote`] so a stream never appears
+    /// stuck in `UPDATING`.
+    pub pending_update: Option<(SystemTime, Vec<Shard>)>,
+}
+
+impl KinesisStream {
+    /// Promote a staged `UpdateShardCount` once its deadline has
+    /// elapsed: swap in the new shards and flip status back to
+    /// `ACTIVE`. Idempotent and absolute-time gated, so the tick loop
+    /// and every `Describe*` read path can call it freely.
+    pub fn promote(&mut self, now: SystemTime) {
+        let due = matches!(&self.pending_update, Some((at, _)) if now >= *at);
+        if due && let Some((_, shards)) = self.pending_update.take() {
+            self.shards = shards;
+            self.status = "ACTIVE".to_string();
+        }
+    }
+
+    /// Stage an `UpdateShardCount` transition to `new_shards`, flipping
+    /// status to `UPDATING` until `deadline`.
+    pub fn begin_update(&mut self, deadline: SystemTime, new_shards: Vec<Shard>) {
+        self.status = "UPDATING".to_string();
+        self.pending_update = Some((deadline, new_shards));
+    }
 }
 
 /// A single shard within a stream. Records themselves live in the

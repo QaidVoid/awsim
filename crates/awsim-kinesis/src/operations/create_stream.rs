@@ -96,6 +96,7 @@ pub fn handle(
         stream_mode,
         warm_throughput_mibps: 0,
         warm_throughput_records: 0,
+        pending_update: None,
     };
 
     info!(stream = %stream_name, shards = shard_count, "Created Kinesis stream");

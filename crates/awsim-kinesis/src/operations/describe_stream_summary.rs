@@ -1,3 +1,5 @@
+use std::time::SystemTime;
+
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -11,6 +13,11 @@ pub fn handle(
     let stream_name = input["StreamName"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("MissingParameter", "StreamName is required"))?;
+
+    // Promote a due UpdateShardCount before reading status/shard count.
+    if let Some(mut s) = state.streams.get_mut(stream_name) {
+        s.promote(SystemTime::now());
+    }
 
     let stream = state.streams.get(stream_name).ok_or_else(|| {
         AwsError::bad_request(

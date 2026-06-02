@@ -155,6 +155,7 @@ mod split_shard_tests {
             stream_mode: "PROVISIONED".to_string(),
             warm_throughput_mibps: 0,
             warm_throughput_records: 0,
+            pending_update: None,
         };
         state.streams.insert(name.to_string(), stream);
     }

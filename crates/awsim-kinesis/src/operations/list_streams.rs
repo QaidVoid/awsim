@@ -1,3 +1,5 @@
+use std::time::SystemTime;
+
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -8,6 +10,12 @@ pub fn handle(
     _input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    // Promote any due UpdateShardCount transitions before listing.
+    let now = SystemTime::now();
+    for mut e in state.streams.iter_mut() {
+        e.value_mut().promote(now);
+    }
+
     let mut stream_names: Vec<String> = state.streams.iter().map(|e| e.key().clone()).collect();
     stream_names.sort();
 
