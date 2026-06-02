@@ -927,7 +927,9 @@ fn generate_credentials_for_role(role_arn: &str, _identity_id: &str) -> Value {
         "AccessKeyId":  access_key,
         "SecretKey":    secret_key,
         "SessionToken": session_token,
-        "Expiration":   expiration_epoch(3600),
+        // GetCredentialsForIdentity reports Expiration in epoch
+        // milliseconds, unlike the STS session expiry which is seconds.
+        "Expiration":   expiration_epoch(3600) * 1000.0,
     })
 }
 
@@ -1160,33 +1162,53 @@ fn describe_identity(state: &IdentityPoolState, input: &Value) -> Result<Value, 
 
 /// ListIdentities
 fn list_identities(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsError> {
+    use awsim_core::pagination::{cap_max_results, paginate};
+
     let pool_id = input["IdentityPoolId"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "IdentityPoolId is required")
     })?;
 
     get_pool(state, pool_id)?;
 
-    let max_results = input["MaxResults"].as_u64().unwrap_or(60) as usize;
+    // HideDisabled is accepted for API parity; awsim has no per-identity
+    // disabled state, so there is nothing to filter out.
+    let _hide_disabled = input["HideDisabled"].as_bool().unwrap_or(false);
 
-    let identities: Vec<Value> = state
+    let max_results = cap_max_results(input["MaxResults"].as_i64(), 60, 60);
+
+    // Sort by identity_id for deterministic, resumable pagination.
+    let mut identities: Vec<Identity> = state
         .identities
         .iter()
         .filter(|e| e.value().pool_id == pool_id)
-        .take(max_results)
-        .map(|e| {
+        .map(|e| e.value().clone())
+        .collect();
+    identities.sort_by(|a, b| a.identity_id.cmp(&b.identity_id));
+
+    let token = input["NextToken"].as_str();
+    let page = paginate(identities, max_results, token, |i| i.identity_id.clone())?;
+
+    let identity_values: Vec<Value> = page
+        .items
+        .iter()
+        .map(|identity| {
             json!({
-                "IdentityId":       e.value().identity_id,
-                "Logins":           e.value().logins,
-                "CreationDate":     e.value().creation_date,
-                "LastModifiedDate": e.value().last_modified_date,
+                "IdentityId":       identity.identity_id,
+                "Logins":           identity.logins,
+                "CreationDate":     identity.creation_date,
+                "LastModifiedDate": identity.last_modified_date,
             })
         })
         .collect();
 
-    Ok(json!({
+    let mut resp = json!({
         "IdentityPoolId": pool_id,
-        "Identities":     identities,
-    }))
+        "Identities":     identity_values,
+    });
+    if let Some(next) = page.next_token {
+        resp["NextToken"] = json!(next);
+    }
+    Ok(resp)
 }
 
 /// DeleteIdentities
@@ -2709,5 +2731,141 @@ mod tests {
             err.code.contains("Validation") || err.code.contains("InvalidParameter"),
             "expected validation, got {err:?}",
         );
+    }
+
+    #[test]
+    fn get_credentials_expiration_is_milliseconds() {
+        let state = make_state();
+        let ctx = make_ctx();
+        let create = create_identity_pool(
+            &state,
+            &json!({ "IdentityPoolName": "ms-pool", "AllowUnauthenticatedIdentities": true }),
+            &ctx,
+        )
+        .unwrap();
+        let pool_id = create["IdentityPoolId"].as_str().unwrap();
+
+        set_identity_pool_roles(
+            &state,
+            &json!({
+                "IdentityPoolId": pool_id,
+                "Roles": { "unauthenticated": "arn:aws:iam::000000000000:role/UnauthRole" }
+            }),
+        )
+        .unwrap();
+
+        let id_result = get_id(&state, &json!({ "IdentityPoolId": pool_id }), &ctx).unwrap();
+        let identity_id = id_result["IdentityId"].as_str().unwrap();
+
+        let sessions = StsSessionStore::new();
+        let creds = get_credentials_for_identity(
+            &state,
+            &json!({ "IdentityId": identity_id }),
+            &sessions,
+            "000000000000",
+        )
+        .unwrap();
+
+        // Epoch milliseconds are > 1e12 (epoch seconds are ~1.7e9).
+        let exp = creds["Credentials"]["Expiration"].as_f64().unwrap();
+        assert!(exp > 1e12, "expected ms-scale expiration, got {exp}");
+    }
+
+    fn insert_identity(state: &IdentityPoolState, pool_id: &str, identity_id: &str) {
+        state.identities.insert(
+            identity_id.to_string(),
+            Identity {
+                identity_id: identity_id.to_string(),
+                pool_id: pool_id.to_string(),
+                logins: Vec::new(),
+                login_tokens: HashMap::new(),
+                creation_date: "0".to_string(),
+                last_modified_date: "0".to_string(),
+                developer_user_identifiers: Vec::new(),
+            },
+        );
+    }
+
+    #[test]
+    fn list_identities_cursor_round_trip() {
+        let state = make_state();
+        let ctx = make_ctx();
+        let create = create_identity_pool(
+            &state,
+            &json!({ "IdentityPoolName": "page-pool", "AllowUnauthenticatedIdentities": true }),
+            &ctx,
+        )
+        .unwrap();
+        let pool_id = create["IdentityPoolId"].as_str().unwrap().to_string();
+
+        for id in ["id-a", "id-b", "id-c", "id-d", "id-e"] {
+            insert_identity(&state, &pool_id, id);
+        }
+
+        // Page 1: two items + a NextToken.
+        let p1 = list_identities(
+            &state,
+            &json!({ "IdentityPoolId": pool_id, "MaxResults": 2 }),
+        )
+        .unwrap();
+        let page1: Vec<String> = p1["Identities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["IdentityId"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(page1, vec!["id-a", "id-b"]);
+        let token = p1["NextToken"].as_str().expect("page 1 has NextToken");
+
+        // Page 2: resumes from the token.
+        let p2 = list_identities(
+            &state,
+            &json!({ "IdentityPoolId": pool_id, "MaxResults": 2, "NextToken": token }),
+        )
+        .unwrap();
+        let page2: Vec<String> = p2["Identities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["IdentityId"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(page2, vec!["id-c", "id-d"]);
+        let token2 = p2["NextToken"].as_str().expect("page 2 has NextToken");
+
+        // Page 3: final item, no token.
+        let p3 = list_identities(
+            &state,
+            &json!({ "IdentityPoolId": pool_id, "MaxResults": 2, "NextToken": token2 }),
+        )
+        .unwrap();
+        let page3: Vec<String> = p3["Identities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["IdentityId"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(page3, vec!["id-e"]);
+        assert!(p3.get("NextToken").is_none());
+    }
+
+    #[test]
+    fn list_identities_accepts_hide_disabled() {
+        let state = make_state();
+        let ctx = make_ctx();
+        let create = create_identity_pool(
+            &state,
+            &json!({ "IdentityPoolName": "hd-pool", "AllowUnauthenticatedIdentities": true }),
+            &ctx,
+        )
+        .unwrap();
+        let pool_id = create["IdentityPoolId"].as_str().unwrap().to_string();
+        insert_identity(&state, &pool_id, "id-x");
+
+        let res = list_identities(
+            &state,
+            &json!({ "IdentityPoolId": pool_id, "HideDisabled": true }),
+        )
+        .unwrap();
+        assert_eq!(res["Identities"].as_array().unwrap().len(), 1);
     }
 }

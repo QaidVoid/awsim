@@ -243,9 +243,13 @@ pub fn list_identity_providers(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    use awsim_core::pagination::{cap_max_results, paginate};
+
     let pool_id = input["UserPoolId"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+
+    let limit = cap_max_results(input["MaxResults"].as_i64(), 60, 60);
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -254,8 +258,13 @@ pub fn list_identity_providers(
         )
     })?;
 
-    let providers: Vec<Value> = pool
-        .identity_providers
+    let mut providers: Vec<IdentityProvider> = pool.identity_providers.clone();
+    providers.sort_by(|a, b| a.provider_name.cmp(&b.provider_name));
+
+    let token = input["NextToken"].as_str();
+    let page = paginate(providers, limit, token, |idp| idp.provider_name.clone())?;
+    let provider_values: Vec<Value> = page
+        .items
         .iter()
         .map(|idp| {
             json!({
@@ -267,7 +276,11 @@ pub fn list_identity_providers(
         })
         .collect();
 
-    Ok(json!({ "Providers": providers }))
+    let mut resp = json!({ "Providers": provider_values });
+    if let Some(next) = page.next_token {
+        resp["NextToken"] = json!(next);
+    }
+    Ok(resp)
 }
 
 // ---------------------------------------------------------------------------

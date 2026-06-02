@@ -240,11 +240,13 @@ pub fn list_groups(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    use awsim_core::pagination::{cap_max_results, paginate};
+
     let pool_id = input["UserPoolId"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
 
-    let limit = input["Limit"].as_u64().unwrap_or(60) as usize;
+    let limit = cap_max_results(input["Limit"].as_i64(), 60, 60);
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -253,14 +255,18 @@ pub fn list_groups(
         )
     })?;
 
-    let groups: Vec<Value> = pool
-        .groups
-        .values()
-        .take(limit)
-        .map(group_to_value)
-        .collect();
+    let mut groups: Vec<CognitoGroup> = pool.groups.values().cloned().collect();
+    groups.sort_by(|a, b| a.group_name.cmp(&b.group_name));
 
-    Ok(json!({ "Groups": groups }))
+    let token = input["NextToken"].as_str();
+    let page = paginate(groups, limit, token, |g| g.group_name.clone())?;
+    let group_values: Vec<Value> = page.items.iter().map(group_to_value).collect();
+
+    let mut resp = json!({ "Groups": group_values });
+    if let Some(next) = page.next_token {
+        resp["NextToken"] = json!(next);
+    }
+    Ok(resp)
 }
 
 // ---------------------------------------------------------------------------

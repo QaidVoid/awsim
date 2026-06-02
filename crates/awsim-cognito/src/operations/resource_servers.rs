@@ -221,9 +221,13 @@ pub fn list_resource_servers(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    use awsim_core::pagination::{cap_max_results, paginate};
+
     let pool_id = input["UserPoolId"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+
+    let limit = cap_max_results(input["MaxResults"].as_i64(), 50, 50);
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -232,7 +236,16 @@ pub fn list_resource_servers(
         )
     })?;
 
-    let servers: Vec<Value> = pool.resource_servers.iter().map(server_to_value).collect();
+    let mut servers: Vec<ResourceServer> = pool.resource_servers.clone();
+    servers.sort_by(|a, b| a.identifier.cmp(&b.identifier));
 
-    Ok(json!({ "ResourceServers": servers }))
+    let token = input["NextToken"].as_str();
+    let page = paginate(servers, limit, token, |rs| rs.identifier.clone())?;
+    let server_values: Vec<Value> = page.items.iter().map(server_to_value).collect();
+
+    let mut resp = json!({ "ResourceServers": server_values });
+    if let Some(next) = page.next_token {
+        resp["NextToken"] = json!(next);
+    }
+    Ok(resp)
 }

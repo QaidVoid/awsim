@@ -864,6 +864,8 @@ pub fn list_users(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    use awsim_core::pagination::{cap_max_results, paginate};
+
     let pool_id = input["UserPoolId"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
@@ -875,8 +877,8 @@ pub fn list_users(
         )
     })?;
 
-    // Collect and sort users for deterministic pagination
-    let mut users: Vec<&CognitoUser> = pool.users.values().collect();
+    // Collect and sort users for deterministic, resumable pagination.
+    let mut users: Vec<CognitoUser> = pool.users.values().cloned().collect();
     users.sort_by(|a, b| a.username.cmp(&b.username));
 
     // Apply Filter if provided
@@ -884,28 +886,15 @@ pub fn list_users(
         users.retain(|u| evaluate_cognito_filter(u, filter_str));
     }
 
-    // Apply PaginationToken — skip users up to and including the token username
-    if let Some(token) = input["PaginationToken"].as_str()
-        && let Some(pos) = users.iter().position(|u| u.username == token)
-    {
-        users = users.into_iter().skip(pos + 1).collect();
-    }
+    let limit = cap_max_results(input["Limit"].as_i64(), 60, 60);
+    let token = input["PaginationToken"].as_str();
+    let page = paginate(users, limit, token, |u| u.username.clone())?;
 
-    // Apply Limit
-    let limit = input["Limit"].as_u64().unwrap_or(60) as usize;
-    let has_more = users.len() > limit;
-    let next_token = if has_more {
-        users.get(limit - 1).map(|u| u.username.clone())
-    } else {
-        None
-    };
-    users.truncate(limit);
-
-    let user_values: Vec<Value> = users.iter().map(|u| user_to_value(u)).collect();
+    let user_values: Vec<Value> = page.items.iter().map(user_to_value).collect();
 
     let mut resp = json!({ "Users": user_values });
-    if let Some(token) = next_token {
-        resp["PaginationToken"] = json!(token);
+    if let Some(next) = page.next_token {
+        resp["PaginationToken"] = json!(next);
     }
     Ok(resp)
 }

@@ -4,7 +4,7 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::jwt::{self, GroupRolePair};
-use crate::state::{CognitoState, MfaSession, UserPool, UserPoolClient};
+use crate::state::{CognitoState, CognitoUser, MfaSession, UserPool, UserPoolClient};
 
 struct TokenValidity {
     access: u64,
@@ -41,6 +41,308 @@ fn now_epoch() -> u64 {
 
 fn session_still_valid(issued_at: u64) -> bool {
     now_epoch().saturating_sub(issued_at) < SESSION_VALIDITY_SECS
+}
+
+/// `pending_verifications` key under which a freshly issued SMS_MFA code is
+/// stashed for `RespondToAuthChallenge(SMS_MFA)`.
+const SMS_MFA_KEY: &str = "SMS_MFA";
+/// `pending_verifications` key for an issued EMAIL_OTP code.
+const EMAIL_OTP_KEY: &str = "EMAIL_OTP";
+
+/// Generate a 6-digit numeric MFA / OTP code.
+fn generate_mfa_code() -> String {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    format!("{:06}", rng.gen_range(0..1_000_000u32))
+}
+
+/// The MFA challenge to issue after a user's password is verified, when MFA is
+/// required. Branches on the user's preferred factor and the factors actually
+/// configured. When SMS or email is chosen, a code is generated and stashed on
+/// the user (under `pending_verifications`) so the response arm can verify it.
+enum MfaChallenge {
+    /// SMS_MFA: a code was stashed; carry the masked destination back.
+    Sms { destination: String },
+    /// EMAIL_OTP: a code was stashed; carry the masked destination back.
+    EmailOtp { destination: String },
+    /// SELECT_MFA_TYPE: multiple factors are enabled with no clear preference.
+    Select,
+    /// SOFTWARE_TOKEN_MFA (the default).
+    SoftwareToken,
+}
+
+/// Whether the user can complete a software-token (TOTP) challenge.
+fn software_factor_enabled(user: &CognitoUser) -> bool {
+    user.totp_verified
+}
+
+/// Whether the user can receive an SMS_MFA code. awsim has no dedicated
+/// per-factor enabled flag beyond the preference, so SMS counts as available
+/// when the user prefers it or has a phone number on file with MFA enabled.
+fn sms_factor_enabled(user: &CognitoUser) -> bool {
+    user.mfa_preferred.as_deref() == Some("SMS_MFA")
+        || (user.mfa_enabled && user.attributes.contains_key("phone_number"))
+}
+
+/// Whether the user can receive an EMAIL_OTP code. Driven purely by the
+/// preference, since awsim has no separate email-MFA enabled flag.
+fn email_factor_enabled(user: &CognitoUser) -> bool {
+    user.mfa_preferred.as_deref() == Some("EMAIL_OTP")
+}
+
+/// Mask an SMS / email destination the way Cognito does in
+/// `CodeDeliveryDetails`, e.g. `+12345550100` -> `+*******0100`.
+fn mask_destination(value: &str) -> String {
+    let chars: Vec<char> = value.chars().collect();
+    if chars.len() <= 4 {
+        return "*".repeat(chars.len());
+    }
+    let keep = 4;
+    let masked: String = chars[..chars.len() - keep].iter().map(|_| '*').collect();
+    let tail: String = chars[chars.len() - keep..].iter().collect();
+    format!("{masked}{tail}")
+}
+
+/// Decide which MFA challenge to issue and, for code-based factors, stash a
+/// fresh code on the user. Returns `None` when no MFA factor is configured.
+fn issue_mfa_challenge(user: &mut CognitoUser) -> Option<MfaChallenge> {
+    let software = software_factor_enabled(user);
+    let sms = sms_factor_enabled(user);
+
+    match user.mfa_preferred.as_deref() {
+        Some("SMS_MFA") if sms => {
+            let code = generate_mfa_code();
+            let destination = user
+                .attributes
+                .get("phone_number")
+                .map(|p| mask_destination(p))
+                .unwrap_or_else(|| "+*******".to_string());
+            user.pending_verifications
+                .insert(SMS_MFA_KEY.to_string(), code);
+            user.pending_verifications_issued
+                .insert(SMS_MFA_KEY.to_string(), now_epoch());
+            Some(MfaChallenge::Sms { destination })
+        }
+        Some("EMAIL_OTP") => {
+            let code = generate_mfa_code();
+            let destination = user
+                .attributes
+                .get("email")
+                .map(|e| mask_destination(e))
+                .unwrap_or_else(|| "*@*".to_string());
+            user.pending_verifications
+                .insert(EMAIL_OTP_KEY.to_string(), code);
+            user.pending_verifications_issued
+                .insert(EMAIL_OTP_KEY.to_string(), now_epoch());
+            Some(MfaChallenge::EmailOtp { destination })
+        }
+        Some("SOFTWARE_TOKEN_MFA") if software => Some(MfaChallenge::SoftwareToken),
+        // No explicit (or no usable) preference: SELECT_MFA_TYPE when more than
+        // one factor is on, otherwise fall back to whichever single factor is
+        // configured, defaulting to software-token.
+        _ => {
+            if software && sms {
+                Some(MfaChallenge::Select)
+            } else if sms {
+                let code = generate_mfa_code();
+                let destination = user
+                    .attributes
+                    .get("phone_number")
+                    .map(|p| mask_destination(p))
+                    .unwrap_or_else(|| "+*******".to_string());
+                user.pending_verifications
+                    .insert(SMS_MFA_KEY.to_string(), code);
+                user.pending_verifications_issued
+                    .insert(SMS_MFA_KEY.to_string(), now_epoch());
+                Some(MfaChallenge::Sms { destination })
+            } else if software {
+                Some(MfaChallenge::SoftwareToken)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Build the JSON challenge response for an [`MfaChallenge`], inserting the
+/// session into the MFA session store.
+fn mfa_challenge_response(
+    state: &CognitoState,
+    pool_id: &str,
+    username: &str,
+    challenge: MfaChallenge,
+) -> Value {
+    let session_id = Uuid::new_v4().to_string();
+    state.mfa_sessions.insert(
+        session_id.clone(),
+        MfaSession {
+            pool_id: pool_id.to_string(),
+            username: username.to_string(),
+            issued_at: now_epoch(),
+        },
+    );
+
+    match challenge {
+        MfaChallenge::Sms { destination } => json!({
+            "ChallengeName": "SMS_MFA",
+            "Session": session_id,
+            "ChallengeParameters": {
+                "USER_ID_FOR_SRP": username,
+                "CODE_DELIVERY_DELIVERY_MEDIUM": "SMS",
+                "CODE_DELIVERY_DESTINATION": destination,
+            },
+            "CodeDeliveryDetails": {
+                "DeliveryMedium": "SMS",
+                "Destination": destination,
+                "AttributeName": "phone_number",
+            }
+        }),
+        MfaChallenge::EmailOtp { destination } => json!({
+            "ChallengeName": "EMAIL_OTP",
+            "Session": session_id,
+            "ChallengeParameters": {
+                "USER_ID_FOR_SRP": username,
+                "CODE_DELIVERY_DELIVERY_MEDIUM": "EMAIL",
+                "CODE_DELIVERY_DESTINATION": destination,
+            },
+            "CodeDeliveryDetails": {
+                "DeliveryMedium": "EMAIL",
+                "Destination": destination,
+                "AttributeName": "email",
+            }
+        }),
+        MfaChallenge::Select => json!({
+            "ChallengeName": "SELECT_MFA_TYPE",
+            "Session": session_id,
+            "ChallengeParameters": {
+                "USER_ID_FOR_SRP": username,
+                "MFAS_CAN_CHOOSE": "[\"SMS_MFA\",\"SOFTWARE_TOKEN_MFA\"]",
+            }
+        }),
+        MfaChallenge::SoftwareToken => json!({
+            "ChallengeName": "SOFTWARE_TOKEN_MFA",
+            "Session": session_id,
+            "ChallengeParameters": {
+                "USER_ID_FOR_SRP": username,
+            }
+        }),
+    }
+}
+
+/// Build the concrete-factor challenge JSON after `SELECT_MFA_TYPE`, reusing
+/// the caller's existing session id so the follow-up response resolves back to
+/// the same user.
+fn mfa_select_followup(session_id: &str, username: &str, challenge: MfaChallenge) -> Value {
+    match challenge {
+        MfaChallenge::Sms { destination } => json!({
+            "ChallengeName": "SMS_MFA",
+            "Session": session_id,
+            "ChallengeParameters": {
+                "USER_ID_FOR_SRP": username,
+                "CODE_DELIVERY_DELIVERY_MEDIUM": "SMS",
+                "CODE_DELIVERY_DESTINATION": destination,
+            },
+            "CodeDeliveryDetails": {
+                "DeliveryMedium": "SMS",
+                "Destination": destination,
+                "AttributeName": "phone_number",
+            }
+        }),
+        _ => json!({
+            "ChallengeName": "SOFTWARE_TOKEN_MFA",
+            "Session": session_id,
+            "ChallengeParameters": {
+                "USER_ID_FOR_SRP": username,
+            }
+        }),
+    }
+}
+
+/// Verify a code-based MFA challenge (SMS_MFA / EMAIL_OTP) against the value
+/// stashed on the user, mint tokens on success, and consume the session.
+///
+/// `code_field` is the `ChallengeResponses` key carrying the submitted code
+/// (`SMS_MFA_CODE` / `EMAIL_OTP_CODE`) and `stash_key` is the
+/// `pending_verifications` key the issuance side wrote under.
+fn verify_code_mfa(
+    state: &CognitoState,
+    client_id: &str,
+    region: &str,
+    input: &Value,
+    code_field: &str,
+    stash_key: &str,
+) -> Result<Value, AwsError> {
+    let session_id = input["Session"].as_str().unwrap_or("");
+    let user_code = input["ChallengeResponses"][code_field]
+        .as_str()
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidParameterException",
+                format!("ChallengeResponses.{code_field} is required"),
+            )
+        })?;
+
+    let session_meta = state
+        .mfa_sessions
+        .get(session_id)
+        .map(|e| e.value().clone())
+        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid session"))?;
+    if !session_still_valid(session_meta.issued_at) {
+        state.mfa_sessions.remove(session_id);
+        return Err(AwsError::forbidden(
+            "NotAuthorizedException",
+            "MFA session has expired; restart the auth flow",
+        ));
+    }
+
+    let pool = state
+        .user_pools
+        .get(&session_meta.pool_id)
+        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", "Pool not found"))?;
+    let user = pool
+        .users
+        .get(&session_meta.username)
+        .ok_or_else(|| AwsError::not_found("UserNotFoundException", "User not found"))?;
+    let expected = user
+        .pending_verifications
+        .get(stash_key)
+        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "No MFA code was issued"))?;
+    if expected.as_str() != user_code {
+        return Err(AwsError::bad_request(
+            "CodeMismatchException",
+            "Invalid MFA code",
+        ));
+    }
+
+    let pairs = group_role_pairs(&pool, &user.groups);
+    let validity = pool
+        .clients
+        .get(client_id)
+        .map(TokenValidity::from_client)
+        .unwrap_or_else(TokenValidity::defaults);
+    let result = build_auth_result_validity(
+        &user.sub,
+        &user.username,
+        region,
+        &session_meta.pool_id,
+        client_id,
+        &user.attributes,
+        &crate::operations::users::client_read_set(&pool, client_id).unwrap_or_default(),
+        &pairs,
+        &validity,
+    );
+    drop(pool);
+
+    // Clear the consumed code and session.
+    if let Some(mut pool) = state.user_pools.get_mut(&session_meta.pool_id)
+        && let Some(user) = pool.users.get_mut(&session_meta.username)
+    {
+        user.pending_verifications.remove(stash_key);
+        user.pending_verifications_issued.remove(stash_key);
+    }
+    state.mfa_sessions.remove(session_id);
+    info!(username = %session_meta.username, challenge = %stash_key, "Cognito: code-based MFA success");
+    Ok(result)
 }
 
 /// Build the list of GroupRolePair for a user from pool group data.
@@ -213,6 +515,38 @@ fn invoke_trigger(ctx: &RequestContext, trigger_source: &str, lambda_arn: &str, 
     }
 }
 
+/// Decide whether a requested `AuthFlow` is permitted by a client's
+/// `ExplicitAuthFlows`.
+///
+/// An empty `explicit_auth_flows` means "no explicit restriction" and every
+/// supported flow is allowed (matching Cognito's permissive default for
+/// clients that never set the list). When the list is non-empty, the flow is
+/// allowed only if a matching entry is present. Both legacy names
+/// (`USER_PASSWORD_AUTH`, `ADMIN_NO_SRP_AUTH`, `CUSTOM_AUTH_FLOW_ONLY`) and
+/// the modern `ALLOW_`-prefixed names are honoured.
+fn auth_flow_allowed(client: &UserPoolClient, auth_flow: &str) -> bool {
+    let flows = &client.explicit_auth_flows;
+    if flows.is_empty() {
+        return true;
+    }
+    let has = |name: &str| flows.iter().any(|f| f == name);
+    match auth_flow {
+        "USER_SRP_AUTH" => has("ALLOW_USER_SRP_AUTH"),
+        "USER_PASSWORD_AUTH" => has("ALLOW_USER_PASSWORD_AUTH") || has("USER_PASSWORD_AUTH"),
+        // AdminInitiateAuth-only flow; gated by its own ALLOW_ entry or the
+        // legacy ADMIN_NO_SRP_AUTH name.
+        "ADMIN_USER_PASSWORD_AUTH" => {
+            has("ALLOW_ADMIN_USER_PASSWORD_AUTH") || has("ADMIN_NO_SRP_AUTH")
+        }
+        "CUSTOM_AUTH" => has("ALLOW_CUSTOM_AUTH") || has("CUSTOM_AUTH_FLOW_ONLY"),
+        "REFRESH_TOKEN_AUTH" | "REFRESH_TOKEN" => has("ALLOW_REFRESH_TOKEN_AUTH"),
+        "USER_AUTH" => has("ALLOW_USER_AUTH"),
+        // Unknown flow names are left for the downstream match to reject with
+        // its own "Unsupported AuthFlow" error.
+        _ => true,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // InitiateAuth
 // ---------------------------------------------------------------------------
@@ -241,6 +575,22 @@ pub fn initiate_auth(
             format!("No pool found for client: {client_id}"),
         )
     })?;
+
+    // Reject flows the client's ExplicitAuthFlows excludes, before doing any
+    // credential work, mirroring Cognito's up-front validation.
+    {
+        let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
+            AwsError::not_found("ResourceNotFoundException", "User pool not found")
+        })?;
+        if let Some(client) = pool.clients.get(client_id)
+            && !auth_flow_allowed(client, auth_flow)
+        {
+            return Err(AwsError::bad_request(
+                "InvalidParameterException",
+                format!("Auth flow not enabled for this client: {auth_flow}"),
+            ));
+        }
+    }
 
     match auth_flow {
         "USER_SRP_AUTH" => start_srp_challenge(state, client_id, &pool_id, params),
@@ -397,29 +747,43 @@ pub fn initiate_auth(
             // Check whether MFA is required
             let mfa_required = pool.mfa_configuration == "ON"
                 || (pool.mfa_configuration == "OPTIONAL" && user.mfa_enabled);
+            let mfa_eligible = mfa_required
+                && (software_factor_enabled(user)
+                    || sms_factor_enabled(user)
+                    || email_factor_enabled(user));
+            // Release the outer read guard before any mutable re-acquire so we
+            // never hold two guards on the same pool at once.
+            drop(pool);
 
-            if mfa_required && user.totp_verified {
-                // Return SOFTWARE_TOKEN_MFA challenge
-                let session_id = Uuid::new_v4().to_string();
-                let _ = user;
-                drop(pool);
-                state.mfa_sessions.insert(
-                    session_id.clone(),
-                    MfaSession {
-                        pool_id: pool_id.clone(),
-                        username: username.to_string(),
-                        issued_at: now_epoch(),
-                    },
-                );
-                info!(username = %username, "Cognito: InitiateAuth → MFA challenge");
-                return Ok(json!({
-                    "ChallengeName": "SOFTWARE_TOKEN_MFA",
-                    "Session": session_id,
-                    "ChallengeParameters": {
-                        "USER_ID_FOR_SRP": username,
-                    }
-                }));
+            if mfa_eligible {
+                let challenge = {
+                    let mut pool = state.user_pools.get_mut(&pool_id).ok_or_else(|| {
+                        AwsError::not_found("ResourceNotFoundException", "User pool not found")
+                    })?;
+                    let user = pool.users.get_mut(username).ok_or_else(|| {
+                        AwsError::not_found(
+                            "UserNotFoundException",
+                            format!("User not found: {username}"),
+                        )
+                    })?;
+                    issue_mfa_challenge(user)
+                };
+                if let Some(challenge) = challenge {
+                    info!(username = %username, "Cognito: InitiateAuth → MFA challenge");
+                    return Ok(mfa_challenge_response(state, &pool_id, username, challenge));
+                }
+                // No usable factor materialised; fall through to issue tokens.
             }
+
+            let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
+                AwsError::not_found("ResourceNotFoundException", "User pool not found")
+            })?;
+            let user = pool.users.get(username).ok_or_else(|| {
+                AwsError::not_found(
+                    "UserNotFoundException",
+                    format!("User not found: {username}"),
+                )
+            })?;
 
             // Post-Authentication trigger (fire-and-forget)
             if let Some(arn) = pool.lambda_config.get("PostAuthentication") {
@@ -546,10 +910,20 @@ pub fn admin_initiate_auth(
             )
         })?;
 
-        if !pool.clients.contains_key(client_id) {
-            return Err(AwsError::not_found(
+        let client = pool.clients.get(client_id).ok_or_else(|| {
+            AwsError::not_found(
                 "ResourceNotFoundException",
                 format!("Client not found: {client_id}"),
+            )
+        })?;
+
+        // Reject flows excluded by ExplicitAuthFlows. AdminInitiateAuth may
+        // additionally use ADMIN_USER_PASSWORD_AUTH, gated by
+        // ALLOW_ADMIN_USER_PASSWORD_AUTH.
+        if !auth_flow_allowed(client, auth_flow) {
+            return Err(AwsError::bad_request(
+                "InvalidParameterException",
+                format!("Auth flow not enabled for this client: {auth_flow}"),
             ));
         }
     }
@@ -705,28 +1079,42 @@ pub fn admin_initiate_auth(
             // Check whether MFA is required
             let mfa_required = pool.mfa_configuration == "ON"
                 || (pool.mfa_configuration == "OPTIONAL" && user.mfa_enabled);
+            let mfa_eligible = mfa_required
+                && (software_factor_enabled(user)
+                    || sms_factor_enabled(user)
+                    || email_factor_enabled(user));
+            // Release the outer read guard before any mutable re-acquire so we
+            // never hold two guards on the same pool at once.
+            drop(pool);
 
-            if mfa_required && user.totp_verified {
-                let session_id = Uuid::new_v4().to_string();
-                let _ = user;
-                drop(pool);
-                state.mfa_sessions.insert(
-                    session_id.clone(),
-                    MfaSession {
-                        pool_id: pool_id.to_string(),
-                        username: username.to_string(),
-                        issued_at: now_epoch(),
-                    },
-                );
-                info!(username = %username, pool_id = %pool_id, "Cognito: AdminInitiateAuth → MFA challenge");
-                return Ok(json!({
-                    "ChallengeName": "SOFTWARE_TOKEN_MFA",
-                    "Session": session_id,
-                    "ChallengeParameters": {
-                        "USER_ID_FOR_SRP": username,
-                    }
-                }));
+            if mfa_eligible {
+                let challenge = {
+                    let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
+                        AwsError::not_found("ResourceNotFoundException", "User pool not found")
+                    })?;
+                    let user = pool.users.get_mut(username).ok_or_else(|| {
+                        AwsError::not_found(
+                            "UserNotFoundException",
+                            format!("User not found: {username}"),
+                        )
+                    })?;
+                    issue_mfa_challenge(user)
+                };
+                if let Some(challenge) = challenge {
+                    info!(username = %username, pool_id = %pool_id, "Cognito: AdminInitiateAuth → MFA challenge");
+                    return Ok(mfa_challenge_response(state, pool_id, username, challenge));
+                }
             }
+
+            let pool = state.user_pools.get(pool_id).ok_or_else(|| {
+                AwsError::not_found("ResourceNotFoundException", "User pool not found")
+            })?;
+            let user = pool.users.get(username).ok_or_else(|| {
+                AwsError::not_found(
+                    "UserNotFoundException",
+                    format!("User not found: {username}"),
+                )
+            })?;
 
             // Post-Authentication trigger (fire-and-forget)
             if let Some(arn) = pool.lambda_config.get("PostAuthentication") {
@@ -952,6 +1340,85 @@ pub fn respond_to_auth_challenge(
             state.mfa_sessions.remove(session_id);
             info!(username = %session_meta.username, "Cognito: RespondToAuthChallenge SOFTWARE_TOKEN_MFA success");
             Ok(result)
+        }
+        "SMS_MFA" => verify_code_mfa(
+            state,
+            client_id,
+            &ctx.region,
+            input,
+            "SMS_MFA_CODE",
+            SMS_MFA_KEY,
+        ),
+        "EMAIL_OTP" => verify_code_mfa(
+            state,
+            client_id,
+            &ctx.region,
+            input,
+            "EMAIL_OTP_CODE",
+            EMAIL_OTP_KEY,
+        ),
+        "SELECT_MFA_TYPE" => {
+            // The user picks a factor via ANSWER; we re-issue the concrete
+            // challenge for that factor, reusing the same session.
+            let session_id = input["Session"].as_str().unwrap_or("");
+            let answer = responses["ANSWER"].as_str().ok_or_else(|| {
+                AwsError::bad_request(
+                    "InvalidParameterException",
+                    "ChallengeResponses.ANSWER is required",
+                )
+            })?;
+
+            let session_meta = state
+                .mfa_sessions
+                .get(session_id)
+                .map(|e| e.value().clone())
+                .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid session"))?;
+            if !session_still_valid(session_meta.issued_at) {
+                state.mfa_sessions.remove(session_id);
+                return Err(AwsError::forbidden(
+                    "NotAuthorizedException",
+                    "MFA session has expired; restart the auth flow",
+                ));
+            }
+
+            let challenge = match answer {
+                "SMS_MFA" => {
+                    let mut pool =
+                        state
+                            .user_pools
+                            .get_mut(&session_meta.pool_id)
+                            .ok_or_else(|| {
+                                AwsError::not_found("ResourceNotFoundException", "Pool not found")
+                            })?;
+                    let user = pool.users.get_mut(&session_meta.username).ok_or_else(|| {
+                        AwsError::not_found("UserNotFoundException", "User not found")
+                    })?;
+                    let code = generate_mfa_code();
+                    let destination = user
+                        .attributes
+                        .get("phone_number")
+                        .map(|p| mask_destination(p))
+                        .unwrap_or_else(|| "+*******".to_string());
+                    user.pending_verifications
+                        .insert(SMS_MFA_KEY.to_string(), code);
+                    user.pending_verifications_issued
+                        .insert(SMS_MFA_KEY.to_string(), now_epoch());
+                    MfaChallenge::Sms { destination }
+                }
+                "SOFTWARE_TOKEN_MFA" => MfaChallenge::SoftwareToken,
+                other => {
+                    return Err(AwsError::bad_request(
+                        "InvalidParameterException",
+                        format!("Unsupported MFA selection: {other}"),
+                    ));
+                }
+            };
+
+            // Reuse the existing session id so the chosen-factor response can
+            // resolve back to the same user.
+            let response = mfa_select_followup(session_id, &session_meta.username, challenge);
+            info!(username = %session_meta.username, selection = %answer, "Cognito: SELECT_MFA_TYPE");
+            Ok(response)
         }
         "MFA_SETUP" => Ok(json!({
             "ChallengeName": "MFA_SETUP",
@@ -1665,5 +2132,454 @@ mod session_expiry_tests {
     fn session_past_window_is_expired() {
         // 6 minutes old.
         assert!(!session_still_valid(now_epoch() - 6 * 60));
+    }
+}
+
+#[cfg(test)]
+mod auth_flow_tests {
+    use super::*;
+    use crate::operations::{pools, users};
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("cognito-idp", "us-east-1")
+    }
+
+    /// Create a pool + client + confirmed user. `explicit_flows` populates the
+    /// client's ExplicitAuthFlows; `mfa` sets the pool's MfaConfiguration.
+    /// Returns (state, pool_id, client_id).
+    fn setup(
+        explicit_flows: &[&str],
+        mfa: &str,
+        username: &str,
+        password: &str,
+    ) -> (CognitoState, String, String) {
+        let state = CognitoState::default();
+        let c = ctx();
+
+        let pool = pools::create_user_pool(
+            &state,
+            &json!({ "PoolName": "p", "MfaConfiguration": mfa }),
+            &c,
+        )
+        .unwrap();
+        let pool_id = pool["UserPool"]["Id"].as_str().unwrap().to_string();
+
+        let flows: Vec<Value> = explicit_flows.iter().map(|f| json!(f)).collect();
+        let client = pools::create_user_pool_client(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "ClientName": "c",
+                "ExplicitAuthFlows": flows,
+            }),
+            &c,
+        )
+        .unwrap();
+        let client_id = client["UserPoolClient"]["ClientId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        users::admin_create_user(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Username": username, "MessageAction": "SUPPRESS" }),
+            &c,
+        )
+        .unwrap();
+        users::admin_set_user_password(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": username,
+                "Password": password,
+                "Permanent": true,
+            }),
+            &c,
+        )
+        .unwrap();
+
+        (state, pool_id, client_id)
+    }
+
+    /// Force a user's MFA fields directly (no public op covers totp_verified).
+    fn set_user_mfa(
+        state: &CognitoState,
+        pool_id: &str,
+        username: &str,
+        preferred: Option<&str>,
+        totp_verified: bool,
+        phone: Option<&str>,
+    ) {
+        let mut pool = state.user_pools.get_mut(pool_id).unwrap();
+        let user = pool.users.get_mut(username).unwrap();
+        user.mfa_enabled = true;
+        user.mfa_preferred = preferred.map(String::from);
+        user.totp_verified = totp_verified;
+        if totp_verified {
+            user.totp_secret = Some("JBSWY3DPEHPK3PXP".to_string());
+        }
+        if let Some(p) = phone {
+            user.attributes
+                .insert("phone_number".to_string(), p.to_string());
+        }
+    }
+
+    #[test]
+    fn initiate_auth_rejects_flow_absent_from_explicit_flows() {
+        let (state, _pool, client_id) =
+            setup(&["ALLOW_USER_SRP_AUTH"], "OFF", "alice", "Passw0rd!");
+        let err = initiate_auth(
+            &state,
+            &json!({
+                "ClientId": client_id,
+                "AuthFlow": "USER_PASSWORD_AUTH",
+                "AuthParameters": { "USERNAME": "alice", "PASSWORD": "Passw0rd!" }
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn initiate_auth_accepts_listed_flow() {
+        let (state, _pool, client_id) =
+            setup(&["ALLOW_USER_PASSWORD_AUTH"], "OFF", "bob", "Passw0rd!");
+        let res = initiate_auth(
+            &state,
+            &json!({
+                "ClientId": client_id,
+                "AuthFlow": "USER_PASSWORD_AUTH",
+                "AuthParameters": { "USERNAME": "bob", "PASSWORD": "Passw0rd!" }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(res["AuthenticationResult"]["AccessToken"].is_string());
+    }
+
+    #[test]
+    fn admin_initiate_auth_rejects_flow_absent_from_explicit_flows() {
+        let (state, pool_id, client_id) =
+            setup(&["ALLOW_USER_SRP_AUTH"], "OFF", "carol", "Passw0rd!");
+        let err = admin_initiate_auth(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "ClientId": client_id,
+                "AuthFlow": "ADMIN_USER_PASSWORD_AUTH",
+                "AuthParameters": { "USERNAME": "carol", "PASSWORD": "Passw0rd!" }
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn admin_initiate_auth_accepts_admin_user_password_flow() {
+        let (state, pool_id, client_id) = setup(
+            &["ALLOW_ADMIN_USER_PASSWORD_AUTH"],
+            "OFF",
+            "dave",
+            "Passw0rd!",
+        );
+        let res = admin_initiate_auth(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "ClientId": client_id,
+                "AuthFlow": "ADMIN_USER_PASSWORD_AUTH",
+                "AuthParameters": { "USERNAME": "dave", "PASSWORD": "Passw0rd!" }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(res["AuthenticationResult"]["AccessToken"].is_string());
+    }
+
+    #[test]
+    fn sms_mfa_issuance_and_response() {
+        let (state, pool_id, client_id) = setup(&[], "ON", "eve", "Passw0rd!");
+        set_user_mfa(
+            &state,
+            &pool_id,
+            "eve",
+            Some("SMS_MFA"),
+            false,
+            Some("+12345550100"),
+        );
+
+        let challenge = initiate_auth(
+            &state,
+            &json!({
+                "ClientId": client_id,
+                "AuthFlow": "USER_PASSWORD_AUTH",
+                "AuthParameters": { "USERNAME": "eve", "PASSWORD": "Passw0rd!" }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(challenge["ChallengeName"], "SMS_MFA");
+        assert_eq!(challenge["CodeDeliveryDetails"]["DeliveryMedium"], "SMS");
+        let session = challenge["Session"].as_str().unwrap().to_string();
+
+        // Pull the stashed code so the response can pass.
+        let code = {
+            let pool = state.user_pools.get(&pool_id).unwrap();
+            pool.users
+                .get("eve")
+                .unwrap()
+                .pending_verifications
+                .get(SMS_MFA_KEY)
+                .unwrap()
+                .clone()
+        };
+
+        let res = respond_to_auth_challenge(
+            &state,
+            &json!({
+                "ClientId": client_id,
+                "ChallengeName": "SMS_MFA",
+                "Session": session,
+                "ChallengeResponses": { "USERNAME": "eve", "SMS_MFA_CODE": code }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(res["AuthenticationResult"]["AccessToken"].is_string());
+    }
+
+    #[test]
+    fn sms_mfa_response_rejects_wrong_code() {
+        let (state, pool_id, client_id) = setup(&[], "ON", "frank", "Passw0rd!");
+        set_user_mfa(
+            &state,
+            &pool_id,
+            "frank",
+            Some("SMS_MFA"),
+            false,
+            Some("+12345550100"),
+        );
+        let challenge = initiate_auth(
+            &state,
+            &json!({
+                "ClientId": client_id,
+                "AuthFlow": "USER_PASSWORD_AUTH",
+                "AuthParameters": { "USERNAME": "frank", "PASSWORD": "Passw0rd!" }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let session = challenge["Session"].as_str().unwrap().to_string();
+        let err = respond_to_auth_challenge(
+            &state,
+            &json!({
+                "ClientId": client_id,
+                "ChallengeName": "SMS_MFA",
+                "Session": session,
+                "ChallengeResponses": { "USERNAME": "frank", "SMS_MFA_CODE": "000000" }
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "CodeMismatchException");
+    }
+
+    #[test]
+    fn email_otp_issuance_and_response() {
+        let (state, pool_id, client_id) = setup(&[], "ON", "grace", "Passw0rd!");
+        {
+            let mut pool = state.user_pools.get_mut(&pool_id).unwrap();
+            let user = pool.users.get_mut("grace").unwrap();
+            user.mfa_enabled = true;
+            user.mfa_preferred = Some("EMAIL_OTP".to_string());
+            user.attributes
+                .insert("email".to_string(), "grace@example.com".to_string());
+        }
+
+        let challenge = initiate_auth(
+            &state,
+            &json!({
+                "ClientId": client_id,
+                "AuthFlow": "USER_PASSWORD_AUTH",
+                "AuthParameters": { "USERNAME": "grace", "PASSWORD": "Passw0rd!" }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(challenge["ChallengeName"], "EMAIL_OTP");
+        let session = challenge["Session"].as_str().unwrap().to_string();
+        let code = {
+            let pool = state.user_pools.get(&pool_id).unwrap();
+            pool.users
+                .get("grace")
+                .unwrap()
+                .pending_verifications
+                .get(EMAIL_OTP_KEY)
+                .unwrap()
+                .clone()
+        };
+
+        let res = respond_to_auth_challenge(
+            &state,
+            &json!({
+                "ClientId": client_id,
+                "ChallengeName": "EMAIL_OTP",
+                "Session": session,
+                "ChallengeResponses": { "USERNAME": "grace", "EMAIL_OTP_CODE": code }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(res["AuthenticationResult"]["AccessToken"].is_string());
+    }
+
+    #[test]
+    fn select_mfa_type_when_multiple_factors_then_choose_software() {
+        let (state, pool_id, client_id) = setup(&[], "ON", "heidi", "Passw0rd!");
+        // Both software-token and SMS enabled, no preference => SELECT_MFA_TYPE.
+        set_user_mfa(&state, &pool_id, "heidi", None, true, Some("+12345550100"));
+
+        let challenge = initiate_auth(
+            &state,
+            &json!({
+                "ClientId": client_id,
+                "AuthFlow": "USER_PASSWORD_AUTH",
+                "AuthParameters": { "USERNAME": "heidi", "PASSWORD": "Passw0rd!" }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(challenge["ChallengeName"], "SELECT_MFA_TYPE");
+        let session = challenge["Session"].as_str().unwrap().to_string();
+
+        // Choosing SOFTWARE_TOKEN_MFA re-issues that challenge on the same session.
+        let next = respond_to_auth_challenge(
+            &state,
+            &json!({
+                "ClientId": client_id,
+                "ChallengeName": "SELECT_MFA_TYPE",
+                "Session": session,
+                "ChallengeResponses": { "USERNAME": "heidi", "ANSWER": "SOFTWARE_TOKEN_MFA" }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(next["ChallengeName"], "SOFTWARE_TOKEN_MFA");
+        assert!(next["Session"].is_string());
+    }
+
+    #[test]
+    fn select_mfa_type_choosing_sms_issues_code() {
+        let (state, pool_id, client_id) = setup(&[], "ON", "ivan", "Passw0rd!");
+        set_user_mfa(&state, &pool_id, "ivan", None, true, Some("+12345550100"));
+
+        let challenge = initiate_auth(
+            &state,
+            &json!({
+                "ClientId": client_id,
+                "AuthFlow": "USER_PASSWORD_AUTH",
+                "AuthParameters": { "USERNAME": "ivan", "PASSWORD": "Passw0rd!" }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(challenge["ChallengeName"], "SELECT_MFA_TYPE");
+        let session = challenge["Session"].as_str().unwrap().to_string();
+
+        let next = respond_to_auth_challenge(
+            &state,
+            &json!({
+                "ClientId": client_id,
+                "ChallengeName": "SELECT_MFA_TYPE",
+                "Session": session,
+                "ChallengeResponses": { "USERNAME": "ivan", "ANSWER": "SMS_MFA" }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(next["ChallengeName"], "SMS_MFA");
+        // A code is now stashed for the SMS challenge.
+        let pool = state.user_pools.get(&pool_id).unwrap();
+        assert!(
+            pool.users
+                .get("ivan")
+                .unwrap()
+                .pending_verifications
+                .contains_key(SMS_MFA_KEY)
+        );
+    }
+
+    #[test]
+    fn software_token_remains_default_when_only_factor() {
+        let (state, pool_id, client_id) = setup(&[], "ON", "judy", "Passw0rd!");
+        set_user_mfa(&state, &pool_id, "judy", None, true, None);
+        let challenge = initiate_auth(
+            &state,
+            &json!({
+                "ClientId": client_id,
+                "AuthFlow": "USER_PASSWORD_AUTH",
+                "AuthParameters": { "USERNAME": "judy", "PASSWORD": "Passw0rd!" }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(challenge["ChallengeName"], "SOFTWARE_TOKEN_MFA");
+    }
+
+    #[test]
+    fn list_users_cursor_round_trip() {
+        let (state, pool_id, _client_id) = setup(&[], "OFF", "u-a", "Passw0rd!");
+        let c = ctx();
+        for name in ["u-b", "u-c", "u-d", "u-e"] {
+            users::admin_create_user(
+                &state,
+                &json!({ "UserPoolId": pool_id, "Username": name, "MessageAction": "SUPPRESS" }),
+                &c,
+            )
+            .unwrap();
+        }
+
+        let p1 =
+            users::list_users(&state, &json!({ "UserPoolId": pool_id, "Limit": 2 }), &c).unwrap();
+        let page1: Vec<String> = p1["Users"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|u| u["Username"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(page1, vec!["u-a", "u-b"]);
+        let token = p1["PaginationToken"].as_str().expect("page1 token");
+
+        let p2 = users::list_users(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Limit": 2, "PaginationToken": token }),
+            &c,
+        )
+        .unwrap();
+        let page2: Vec<String> = p2["Users"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|u| u["Username"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(page2, vec!["u-c", "u-d"]);
+        let token2 = p2["PaginationToken"].as_str().expect("page2 token");
+
+        let p3 = users::list_users(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Limit": 2, "PaginationToken": token2 }),
+            &c,
+        )
+        .unwrap();
+        let page3: Vec<String> = p3["Users"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|u| u["Username"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(page3, vec!["u-e"]);
+        assert!(p3.get("PaginationToken").is_none());
     }
 }
