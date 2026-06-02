@@ -14,11 +14,11 @@ When enforcement is enabled, requests are evaluated against the full IAM decisio
 
 The engine models the AWS IAM policy evaluation logic:
 
-- **Identity policies** — inline and managed policies attached to the calling user, its groups, or the assumed role.
-- **Resource policies** — policies attached to the target resource (e.g. S3 bucket policy, KMS key policy).
-- **Permissions boundaries** — the maximum permissions a user or role can have.
-- **Service control policies (SCPs)** — organization-level allow/deny guardrails.
-- **Session policies** — inline policies passed to `AssumeRole` that further scope the session.
+- **Identity policies** - inline and managed policies attached to the calling user, its groups, or the assumed role.
+- **Resource policies** - policies attached to the target resource (e.g. S3 bucket policy, KMS key policy).
+- **Permissions boundaries** - the maximum permissions a user or role can have.
+- **Service control policies (SCPs)** - organization-level allow/deny guardrails.
+- **Session policies** - inline policies passed to `AssumeRole` that further scope the session.
 
 Decision order follows AWS: an explicit `Deny` anywhere wins; then SCPs must allow; then an `Allow` must be present in identity or resource policies; otherwise the request is implicitly denied.
 
@@ -45,7 +45,7 @@ services:
       - "4566:4566"
 ```
 
-When enforcement is off (default), every request is allowed regardless of policy — useful for rapid prototyping. Turn it on to unit-test IAM policies and negative paths in your IaC.
+When enforcement is off (default), every request is allowed regardless of policy - useful for rapid prototyping. Turn it on to unit-test IAM policies and negative paths in your IaC.
 
 ## Quick Start
 
@@ -80,7 +80,7 @@ AWS_ACCESS_KEY_ID=$AK AWS_SECRET_ACCESS_KEY=$SK \
 # => AccessDenied
 ```
 
-The same call via curl (SigV4 signed — shown here with a placeholder signature for brevity):
+The same call via curl (SigV4 signed - shown here with a placeholder signature for brevity):
 
 ```bash
 curl -s -X GET "http://localhost:4566/allowed-bucket?list-type=2" \
@@ -106,9 +106,9 @@ All 26 AWS condition operators are implemented:
 
 Each base operator may be wrapped with one prefix and/or one suffix:
 
-- **`ForAllValues:<op>`** — matches only when every value in a multi-valued context key satisfies the condition.
-- **`ForAnyValue:<op>`** — matches when at least one value in the context key satisfies it.
-- **`<op>IfExists`** — only applies the check when the context key is present; absent keys pass.
+- **`ForAllValues:<op>`** - matches only when every value in a multi-valued context key satisfies the condition.
+- **`ForAnyValue:<op>`** - matches when at least one value in the context key satisfies it.
+- **`<op>IfExists`** - only applies the check when the context key is present; absent keys pass.
 
 These compose: `ForAllValues:StringEqualsIfExists` is a valid operator.
 
@@ -119,19 +119,64 @@ The gateway checks identity policies for every request, but only a subset of ser
 | Service | Identity policy | Resource policy |
 |---------|-----------------|-----------------|
 | S3 | Yes | Bucket policies |
-| DynamoDB | Yes | — |
+| DynamoDB | Yes | - |
 | KMS | Yes | Key policies |
 | SQS | Yes | Queue policies |
-| SNS | Yes | — |
+| SNS | Yes | - |
 | Secrets Manager | Yes | Resource-based policies |
 | Lambda | Yes | Function policies |
-| IAM | Yes | — |
+| IAM | Yes | - |
 
-Services not listed above are **silently bypassed** — the enforcement hook is not wired in yet, so requests succeed regardless of policy. This lets you roll out enforcement incrementally without breaking existing tests.
+Services not listed above are **silently bypassed** - the enforcement hook is not wired in yet, so requests succeed regardless of policy. This lets you roll out enforcement incrementally without breaking existing tests.
+
+## Wiring a Service
+
+Enforcement is driven entirely from the gateway: for every request it asks the
+service handler for an action and a resource, and only when both are present
+does it run the policy check. Adding a service is therefore two trait methods
+on its `ServiceHandler` - no per-call-site plumbing:
+
+```rust
+fn iam_action(&self, operation: &str) -> Option<String> {
+    match operation {
+        "CreateTable" => Some("dynamodb:CreateTable".into()),
+        "PutItem" => Some("dynamodb:PutItem".into()),
+        // ...one arm per guarded operation; unmapped ops return None
+        _ => None,
+    }
+}
+
+fn iam_resource(
+    &self,
+    operation: &str,
+    input: &serde_json::Value,
+    ctx: &RequestContext,
+) -> Option<String> {
+    // Derive the ARN the action targets, honoring the request context.
+    let table = input["TableName"].as_str()?;
+    Some(arn::build(ctx, "dynamodb", format!("table/{table}")))
+}
+```
+
+The default impls return `None`, so an un-wired service is silently bypassed
+(its row is simply absent from the table above). Returning `Some` for an
+operation opts it into the check; `AWSIM_IAM_ENFORCE=true` then evaluates the
+caller's identity policies (and any registered resource policy) against that
+action/resource pair.
+
+Two extras for services that need them:
+
+- **`iam:PassRole`** - when an operation accepts a `RoleArn` (Lambda
+  `CreateFunction`, ECS `RunTask`, ...), call `AuthzEngine::check_pass_role` so
+  the caller is checked for permission to pass that role to the service.
+- **Resource policies** - services with their own resource-based policies
+  (bucket / key / queue / function policies) register a resource-policy lookup
+  at startup so cross-account grants are evaluated. See `S3ResourcePolicyLookup`
+  / `LambdaResourcePolicyLookup` for the pattern.
 
 ## Policy Simulator API
 
-`SimulateCustomPolicy` and `SimulatePrincipalPolicy` are no longer stubs — they run the real engine against the supplied policy documents and return one `EvaluationResult` per action/resource pair with `EvalDecision` set to `allowed`, `explicitDeny`, or `implicitDeny`.
+`SimulateCustomPolicy` and `SimulatePrincipalPolicy` are no longer stubs - they run the real engine against the supplied policy documents and return one `EvaluationResult` per action/resource pair with `EvalDecision` set to `allowed`, `explicitDeny`, or `implicitDeny`.
 
 ```bash
 aws --endpoint-url http://localhost:4566 iam simulate-custom-policy \
@@ -150,26 +195,26 @@ Returns two results: `s3:GetObject` → `allowed`, `s3:PutObject` → `implicitD
 Syntax errors in policy. unknown condition operator: StringEqualsFoo
 ```
 
-Validation runs regardless of `AWSIM_IAM_ENFORCE` — a bad policy is always rejected at write time.
+Validation runs regardless of `AWSIM_IAM_ENFORCE` - a bad policy is always rejected at write time.
 
 ## AssumeRole Trust Policies
 
 `sts:AssumeRole` (and its WebIdentity / SAML variants) routes the calling principal through the target role's `AssumeRolePolicyDocument`. The trust policy is evaluated as a resource-based policy with the role ARN as the resource and these condition variables populated from the request:
 
-- `sts:ExternalId` — set from the `ExternalId` request parameter. Use with `StringEquals` to harden cross-account assumes against the confused-deputy attack.
-- `aws:MultiFactorAuthPresent` — `true` when the caller supplied both `SerialNumber` and `TokenCode`, `false` otherwise. Use with `Bool` to gate the role behind an MFA challenge.
-- `aws:MultiFactorAuthAge` — set to `0` when MFA is present. Use with `NumericLessThan` to enforce a recent challenge.
-- `aws:SourceIp` — taken from the request's client IP. Use with `IpAddress` to restrict the role to a known network.
-- `aws:PrincipalArn` / `aws:PrincipalAccount` / `aws:SourceAccount` — mirror the caller's identity for `StringEquals` checks.
+- `sts:ExternalId` - set from the `ExternalId` request parameter. Use with `StringEquals` to harden cross-account assumes against the confused-deputy attack.
+- `aws:MultiFactorAuthPresent` - `true` when the caller supplied both `SerialNumber` and `TokenCode`, `false` otherwise. Use with `Bool` to gate the role behind an MFA challenge.
+- `aws:MultiFactorAuthAge` - set to `0` when MFA is present. Use with `NumericLessThan` to enforce a recent challenge.
+- `aws:SourceIp` - taken from the request's client IP. Use with `IpAddress` to restrict the role to a known network.
+- `aws:PrincipalArn` / `aws:PrincipalAccount` / `aws:SourceAccount` - mirror the caller's identity for `StringEquals` checks.
 
 A trust policy that declares any of these conditions rejects the assume request with `AccessDenied` when the condition isn't satisfied.
 
 ## Not Yet Implemented
 
-- **Session tags** (`aws:PrincipalTag/*`, `aws:ResourceTag/*`) — parsed but empty context.
-- **CloudTrail audit log** — denied requests are not recorded.
-- **IAM Access Analyzer** — no public-access or external-principal findings.
-- **VPC endpoint policies** — not modeled; no VPC concept in AWSim.
-- **Resource control policies (RCPs)** — not evaluated.
+- **Session tags** (`aws:PrincipalTag/*`, `aws:ResourceTag/*`) - parsed but empty context.
+- **CloudTrail audit log** - denied requests are not recorded.
+- **IAM Access Analyzer** - no public-access or external-principal findings.
+- **VPC endpoint policies** - not modeled; no VPC concept in AWSim.
+- **Resource control policies (RCPs)** - not evaluated.
 
 See the [IAM & STS](/services/iam) service page for the operation catalog.
