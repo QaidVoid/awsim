@@ -56,6 +56,11 @@ struct Entry<V> {
 #[derive(Debug)]
 pub struct IdempotencyCache<V: Clone> {
     inner: Mutex<HashMap<String, Entry<V>>>,
+    /// Per-token guards so concurrent calls with the same token
+    /// serialize: the first runs `compute`, later callers wait on the
+    /// guard and then observe the cached result. Idle guards (held only
+    /// by this map) are reclaimed in [`Self::sweep`].
+    in_flight: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     ttl: Duration,
 }
 
@@ -69,6 +74,7 @@ impl<V: Clone> IdempotencyCache<V> {
     pub fn with_ttl(ttl: Duration) -> Self {
         Self {
             inner: Mutex::new(HashMap::new()),
+            in_flight: Mutex::new(HashMap::new()),
             ttl,
         }
     }
@@ -116,11 +122,16 @@ impl<V: Clone> IdempotencyCache<V> {
     /// Errors from `compute` are propagated unchanged and not cached
     /// (AWS only replays successful results on retry).
     ///
-    /// Note: this is intentionally NOT async-aware. Concurrent calls
-    /// with the same token may both run `compute`; the loser of the
-    /// race silently overwrites the earlier insert. That matches AWS
-    /// semantics as long as `compute` is idempotent itself, which is
-    /// the whole point of the operations that use this cache.
+    /// Concurrent calls with the same token are serialized: the first
+    /// runs `compute`; later callers block on a per-token guard and,
+    /// once it is released, observe the first caller's cached result
+    /// instead of recomputing. This matches AWS, which replays the
+    /// original result for an in-flight token rather than running the
+    /// side effect twice.
+    ///
+    /// Deadlock note: `compute` must not re-enter `lookup_or_insert`
+    /// for the same token on the same thread - it would block on the
+    /// guard it already holds.
     pub fn lookup_or_insert<F>(
         &self,
         token: &str,
@@ -130,12 +141,28 @@ impl<V: Clone> IdempotencyCache<V> {
     where
         F: FnOnce() -> Result<V, AwsError>,
     {
+        // Fast path: a settled hit or mismatch needs no guard.
+        match self.lookup(token, request_hash) {
+            Lookup::Hit(v) => return Ok(v),
+            Lookup::Mismatch => return Err(mismatch_error()),
+            Lookup::Miss => {}
+        }
+
+        // Block on the per-token guard so a concurrent first caller
+        // finishes its compute + insert before we proceed.
+        let guard = {
+            let mut g = self.in_flight.lock().unwrap();
+            Arc::clone(
+                g.entry(token.to_string())
+                    .or_insert_with(|| Arc::new(Mutex::new(()))),
+            )
+        };
+        let _held = guard.lock().unwrap();
+
+        // Double-check: the winner may have inserted while we waited.
         match self.lookup(token, request_hash) {
             Lookup::Hit(v) => Ok(v),
-            Lookup::Mismatch => Err(AwsError::bad_request(
-                "IdempotencyParameterMismatchException",
-                "Request parameters do not match those used in a prior call with the same ClientToken.",
-            )),
+            Lookup::Mismatch => Err(mismatch_error()),
             Lookup::Miss => {
                 let value = compute()?;
                 self.insert(token, request_hash, value.clone());
@@ -144,11 +171,20 @@ impl<V: Clone> IdempotencyCache<V> {
         }
     }
 
-    /// Drop entries past their TTL. Call from the tick loop.
+    /// Drop entries past their TTL, and reclaim idle per-token guards.
+    /// Call from the tick loop.
     pub fn sweep(&self) {
         let ttl = self.ttl;
-        let mut g = self.inner.lock().unwrap();
-        g.retain(|_, e| e.inserted_at.elapsed() <= ttl);
+        self.inner
+            .lock()
+            .unwrap()
+            .retain(|_, e| e.inserted_at.elapsed() <= ttl);
+        // A guard with a strong count of 1 is held only by this map, so
+        // no caller is parked on it and it is safe to drop.
+        self.in_flight
+            .lock()
+            .unwrap()
+            .retain(|_, g| Arc::strong_count(g) > 1);
     }
 
     /// Number of live entries. Surfaced for diagnostics / tests.
@@ -166,6 +202,15 @@ impl<V: Clone> Default for IdempotencyCache<V> {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// The error returned when a token is replayed with different request
+/// parameters than the original call.
+fn mismatch_error() -> AwsError {
+    AwsError::bad_request(
+        "IdempotencyParameterMismatchException",
+        "Request parameters do not match those used in a prior call with the same ClientToken.",
+    )
 }
 
 /// Idempotency cache scoped per `(account_id, region)`.
@@ -317,6 +362,43 @@ mod tests {
         sleep(Duration::from_millis(20));
         cache.sweep();
         assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn concurrent_same_token_computes_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let cache: Arc<IdempotencyCache<u64>> = Arc::new(IdempotencyCache::new());
+        let computes = Arc::new(AtomicUsize::new(0));
+
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let cache = Arc::clone(&cache);
+                let computes = Arc::clone(&computes);
+                std::thread::spawn(move || {
+                    cache
+                        .lookup_or_insert("shared-token", 1, || {
+                            computes.fetch_add(1, Ordering::SeqCst);
+                            // Hold the per-token guard long enough that
+                            // the other threads pile up behind it.
+                            sleep(Duration::from_millis(30));
+                            Ok(7u64)
+                        })
+                        .unwrap()
+                })
+            })
+            .collect();
+
+        let results: Vec<u64> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+        // Exactly one thread ran compute; the rest observed its result.
+        assert_eq!(computes.load(Ordering::SeqCst), 1);
+        assert!(results.iter().all(|&v| v == 7));
+        assert_eq!(cache.len(), 1);
+
+        // The idle guard is reclaimed on sweep.
+        cache.sweep();
+        assert_eq!(cache.len(), 1);
     }
 
     #[test]
