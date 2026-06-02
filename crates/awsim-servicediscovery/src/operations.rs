@@ -31,17 +31,11 @@ fn instance_key(service_id: &str, instance_id: &str) -> String {
 }
 
 fn namespace_arn(ctx: &RequestContext, id: &str) -> String {
-    format!(
-        "arn:aws:servicediscovery:{}:{}:namespace/{}",
-        ctx.region, ctx.account_id, id
-    )
+    awsim_core::arn::build(ctx, "servicediscovery", format!("namespace/{id}"))
 }
 
 fn service_arn(ctx: &RequestContext, id: &str) -> String {
-    format!(
-        "arn:aws:servicediscovery:{}:{}:service/{}",
-        ctx.region, ctx.account_id, id
-    )
+    awsim_core::arn::build(ctx, "servicediscovery", format!("service/{id}"))
 }
 
 /// Build the per-type `Properties` block AWS returns in
@@ -2111,5 +2105,33 @@ mod revision_tests {
             &ctx(),
         )
         .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod partition_tests {
+    use super::*;
+
+    #[test]
+    fn namespace_and_service_arns_honor_request_partition() {
+        let mut ctx = RequestContext::new("servicediscovery", "us-east-1");
+        ctx.partition = "aws-cn".to_string();
+        let state = ServiceDiscoveryState::default();
+        create_http_namespace(&state, &json!({ "Name": "n" }), &ctx).unwrap();
+        let ns = state.namespaces.iter().next().unwrap();
+        assert!(
+            ns.arn.starts_with("arn:aws-cn:servicediscovery:"),
+            "namespace arn was {}",
+            ns.arn
+        );
+        let ns_id = ns.id.clone();
+        drop(ns);
+        create_service(&state, &json!({ "Name": "s", "NamespaceId": ns_id }), &ctx).unwrap();
+        let svc = state.services.iter().next().unwrap();
+        assert!(
+            svc.arn.starts_with("arn:aws-cn:servicediscovery:"),
+            "service arn was {}",
+            svc.arn
+        );
     }
 }
