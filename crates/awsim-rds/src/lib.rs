@@ -4,6 +4,7 @@ mod operations;
 mod state;
 
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use async_trait::async_trait;
 use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler};
@@ -184,6 +185,36 @@ impl ServiceHandler for RdsService {
             }
 
             _ => Err(AwsError::unknown_operation(operation)),
+        }
+    }
+
+    /// Apply staged `ModifyDBInstance` diffs whose maintenance window
+    /// has come due. `ModifyDBInstance` with `ApplyImmediately=false`
+    /// parks the requested values under `pending_modified_values`; AWS
+    /// flushes them onto the live instance during the instance's
+    /// weekly `PreferredMaintenanceWindow`. We mirror that here:
+    /// each tick scans every account/region for instances that have a
+    /// pending diff and whose window matches the current wall clock,
+    /// applying and clearing the diff. Absolute-time gated and
+    /// idempotent, so a missed or repeated tick never loses or
+    /// double-applies state.
+    async fn tick(&self) {
+        let now = SystemTime::now();
+        for (_, state) in self.store.iter_all() {
+            for mut entry in state.instances.iter_mut() {
+                let inst = entry.value_mut();
+                if inst.pending_modified_values.is_empty() {
+                    continue;
+                }
+                let matches = inst
+                    .preferred_maintenance_window
+                    .as_deref()
+                    .map(|w| operations::instances::maintenance_window_matches(w, now))
+                    .unwrap_or(false);
+                if matches {
+                    operations::instances::apply_pending_modified_values(inst);
+                }
+            }
         }
     }
 

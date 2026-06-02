@@ -1,3 +1,5 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -613,6 +615,110 @@ pub fn modify_db_instance(
     Ok(json!({ "DBInstance": result }))
 }
 
+/// Flush every staged key in `pending_modified_values` back onto the
+/// live `DbInstance` fields, then clear the map. Mirrors the immediate
+/// apply path in [`modify_db_instance`]: this is what the maintenance
+/// window runs when `ApplyImmediately` was false. Pure and
+/// wall-clock-free so it can be unit-tested in isolation; the tick
+/// driver decides *when* to call it.
+pub fn apply_pending_modified_values(instance: &mut DbInstance) {
+    if instance.pending_modified_values.is_empty() {
+        return;
+    }
+    if let Some(v) = instance
+        .pending_modified_values
+        .get("DBInstanceClass")
+        .and_then(|v| v.as_str())
+    {
+        instance.instance_class = v.to_string();
+    }
+    if let Some(v) = instance
+        .pending_modified_values
+        .get("AllocatedStorage")
+        .and_then(|v| v.as_u64())
+    {
+        instance.allocated_storage = v as u32;
+    }
+    if let Some(v) = instance
+        .pending_modified_values
+        .get("MultiAZ")
+        .and_then(|v| v.as_bool())
+    {
+        instance.multi_az = v;
+    }
+    if let Some(v) = instance
+        .pending_modified_values
+        .get("PubliclyAccessible")
+        .and_then(|v| v.as_bool())
+    {
+        instance.publicly_accessible = v;
+    }
+    if let Some(v) = instance
+        .pending_modified_values
+        .get("StorageType")
+        .and_then(|v| v.as_str())
+    {
+        instance.storage_type = v.to_string();
+    }
+    if let Some(v) = instance
+        .pending_modified_values
+        .get("LicenseModel")
+        .and_then(|v| v.as_str())
+    {
+        instance.license_model = Some(v.to_string());
+    }
+    instance.pending_modified_values.clear();
+}
+
+/// Whether `now` falls inside the AWS preferred-maintenance-window
+/// `window` (`ddd:hh24:mi-ddd:hh24:mi`). We compare against the
+/// window's *start* anchor at minute granularity: a match means the
+/// current weekday/hour/minute equals the start of the window, which
+/// is when the tick driver flushes staged changes. Malformed windows
+/// never match. No chrono: the day/hour/minute are derived from the
+/// unix timestamp with the same arithmetic style as the rest of the
+/// crate (unix epoch 1970-01-01 was a Thursday).
+pub fn maintenance_window_matches(window: &str, now: SystemTime) -> bool {
+    let Some((start, _end)) = window.split_once('-') else {
+        return false;
+    };
+    let parts: Vec<&str> = start.split(':').collect();
+    if parts.len() != 3 {
+        return false;
+    }
+    let Some(start_day) = day_index(parts[0]) else {
+        return false;
+    };
+    let (Ok(start_hour), Ok(start_minute)) = (parts[1].parse::<u64>(), parts[2].parse::<u64>())
+    else {
+        return false;
+    };
+
+    let secs = now.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let minute = (secs / 60) % 60;
+    let hour = (secs / 3600) % 24;
+    let days = secs / 86_400;
+    // 1970-01-01 was a Thursday; mon=0..sun=6 to match `day_index`.
+    let weekday = ((days % 7) + 3) % 7;
+
+    weekday == start_day && hour == start_hour && minute == start_minute
+}
+
+/// Map an AWS day-of-week abbreviation to a Monday-based index
+/// (mon=0..sun=6). Returns `None` for anything outside the set.
+fn day_index(day: &str) -> Option<u64> {
+    match day {
+        "mon" => Some(0),
+        "tue" => Some(1),
+        "wed" => Some(2),
+        "thu" => Some(3),
+        "fri" => Some(4),
+        "sat" => Some(5),
+        "sun" => Some(6),
+        _ => None,
+    }
+}
+
 pub fn start_db_instance(
     state: &RdsState,
     input: &Value,
@@ -1134,5 +1240,73 @@ mod modify_db_instance_tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "InvalidParameterValue");
+    }
+
+    #[test]
+    fn apply_pending_modified_values_flushes_staged_diff() {
+        let state = RdsState::default();
+        seed(&state);
+        // Stage a diff with ApplyImmediately=false.
+        modify_db_instance(
+            &state,
+            &json!({
+                "DBInstanceIdentifier": "prod-db",
+                "DBInstanceClass": "db.t3.large",
+                "AllocatedStorage": 200,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        // The window applying the change calls the pure helper directly.
+        let mut inst = state.instances.get_mut("prod-db").unwrap();
+        apply_pending_modified_values(&mut inst);
+        assert_eq!(inst.instance_class, "db.t3.large");
+        assert_eq!(inst.allocated_storage, 200);
+        assert!(inst.pending_modified_values.is_empty());
+    }
+
+    #[test]
+    fn maintenance_window_non_match_leaves_pending_intact() {
+        let state = RdsState::default();
+        seed(&state);
+        modify_db_instance(
+            &state,
+            &json!({
+                "DBInstanceIdentifier": "prod-db",
+                "DBInstanceClass": "db.t3.large",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        // A window the clock is not currently inside must not apply.
+        // UNIX_EPOCH is Thursday 00:00, so a Monday-00:00 window can
+        // never match at that instant.
+        assert!(!maintenance_window_matches(
+            "mon:00:00-mon:00:30",
+            UNIX_EPOCH
+        ));
+        // Guard: nothing flushed because the tick gate stayed closed.
+        let inst = state.instances.get("prod-db").unwrap();
+        assert_eq!(inst.instance_class, "db.t3.micro");
+        assert_eq!(
+            inst.pending_modified_values.get("DBInstanceClass"),
+            Some(&json!("db.t3.large"))
+        );
+    }
+
+    #[test]
+    fn maintenance_window_matches_start_anchor() {
+        // UNIX_EPOCH itself is Thursday 00:00 UTC.
+        assert!(maintenance_window_matches(
+            "thu:00:00-thu:00:30",
+            UNIX_EPOCH
+        ));
+        // Wrong weekday at the same wall-clock minute does not match.
+        assert!(!maintenance_window_matches(
+            "wed:00:00-wed:00:30",
+            UNIX_EPOCH
+        ));
+        // Malformed windows never match.
+        assert!(!maintenance_window_matches("garbage", UNIX_EPOCH));
     }
 }
