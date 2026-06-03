@@ -375,7 +375,7 @@ fn validate_redrive_policy(policy: &str) -> Result<(), AwsError> {
                 "RedrivePolicy.deadLetterTargetArn is required.",
             )
         })?;
-    if !target.starts_with("arn:aws:sqs:") {
+    if !(target.starts_with("arn:") && target.contains(":sqs:")) {
         return Err(AwsError::bad_request(
             "InvalidParameter",
             format!("RedrivePolicy.deadLetterTargetArn `{target}` must be an SQS queue ARN."),
