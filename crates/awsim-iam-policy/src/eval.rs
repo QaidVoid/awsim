@@ -870,23 +870,33 @@ fn condition_eval(c: &Condition, context: &HashMap<String, ContextValue>) -> boo
         return absent == expect_null;
     }
 
-    if val.is_none() {
-        return c.operator.if_exists;
+    // A present-but-empty multivalued key counts as absent.
+    let context_strings = val.map(ContextValue::as_strings).unwrap_or_default();
+    if context_strings.is_empty() {
+        // The key is not in the request context. AWS resolves this per the set
+        // qualifier and operator family rather than uniformly failing:
+        //   - ForAllValues is vacuously true over the empty set;
+        //   - a negated single-valued operator matches an absent key;
+        //   - IfExists makes any operator pass;
+        //   - everything else fails.
+        return match c.operator.set_qualifier {
+            SetQualifier::ForAllValues => true,
+            SetQualifier::ForAnyValue => c.operator.if_exists,
+            SetQualifier::None => c.operator.if_exists || c.operator.base.is_negated(),
+        };
     }
-    let val = val.unwrap();
-    let context_strings = val.as_strings();
+
+    // A non-empty `context_strings` means the key resolved to a value.
+    let Some(val) = val else { return false };
 
     match c.operator.set_qualifier {
         SetQualifier::None => {
             let single = context_strings.first().cloned().unwrap_or_default();
             scalar_match(c.operator.base, &single, &c.values, val)
         }
-        SetQualifier::ForAllValues => {
-            !context_strings.is_empty()
-                && context_strings
-                    .iter()
-                    .all(|cv| scalar_match(c.operator.base, cv, &c.values, val))
-        }
+        SetQualifier::ForAllValues => context_strings
+            .iter()
+            .all(|cv| scalar_match(c.operator.base, cv, &c.values, val)),
         SetQualifier::ForAnyValue => context_strings
             .iter()
             .any(|cv| scalar_match(c.operator.base, cv, &c.values, val)),
@@ -1019,4 +1029,118 @@ fn ip_match(cv: &str, pvs: &[String]) -> bool {
         }
         false
     })
+}
+
+#[cfg(test)]
+mod condition_tests {
+    use super::*;
+    use crate::document::{BaseOperator, ConditionOperator, SetQualifier};
+
+    fn cond(
+        base: BaseOperator,
+        qualifier: SetQualifier,
+        if_exists: bool,
+        key: &str,
+        values: &[&str],
+    ) -> Condition {
+        Condition {
+            operator: ConditionOperator {
+                base,
+                if_exists,
+                set_qualifier: qualifier,
+            },
+            key: key.to_string(),
+            values: values.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    fn ctx(pairs: &[(&str, ContextValue)]) -> HashMap<String, ContextValue> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn negated_operator_matches_absent_key() {
+        let c = cond(
+            BaseOperator::StringNotEquals,
+            SetQualifier::None,
+            false,
+            "aws:username",
+            &["alice"],
+        );
+        assert!(condition_eval(&c, &ctx(&[])));
+    }
+
+    #[test]
+    fn affirmative_operator_fails_absent_key() {
+        let c = cond(
+            BaseOperator::StringEquals,
+            SetQualifier::None,
+            false,
+            "aws:username",
+            &["alice"],
+        );
+        assert!(!condition_eval(&c, &ctx(&[])));
+    }
+
+    #[test]
+    fn if_exists_passes_absent_key() {
+        let c = cond(
+            BaseOperator::StringEquals,
+            SetQualifier::None,
+            true,
+            "aws:username",
+            &["alice"],
+        );
+        assert!(condition_eval(&c, &ctx(&[])));
+    }
+
+    #[test]
+    fn for_all_values_vacuously_true_on_absent_or_empty_key() {
+        let c = cond(
+            BaseOperator::StringEquals,
+            SetQualifier::ForAllValues,
+            false,
+            "aws:TagKeys",
+            &["env"],
+        );
+        assert!(condition_eval(&c, &ctx(&[])));
+        let empty = ctx(&[("aws:TagKeys", ContextValue::StringList(vec![]))]);
+        assert!(condition_eval(&c, &empty));
+    }
+
+    #[test]
+    fn for_all_values_checks_every_member() {
+        let c = cond(
+            BaseOperator::StringEquals,
+            SetQualifier::ForAllValues,
+            false,
+            "aws:TagKeys",
+            &["env", "team"],
+        );
+        let ok = ctx(&[(
+            "aws:TagKeys",
+            ContextValue::StringList(vec!["env".into(), "team".into()]),
+        )]);
+        assert!(condition_eval(&c, &ok));
+        let bad = ctx(&[(
+            "aws:TagKeys",
+            ContextValue::StringList(vec!["env".into(), "other".into()]),
+        )]);
+        assert!(!condition_eval(&c, &bad));
+    }
+
+    #[test]
+    fn for_any_value_fails_absent_key() {
+        let c = cond(
+            BaseOperator::StringEquals,
+            SetQualifier::ForAnyValue,
+            false,
+            "aws:TagKeys",
+            &["env"],
+        );
+        assert!(!condition_eval(&c, &ctx(&[])));
+    }
 }

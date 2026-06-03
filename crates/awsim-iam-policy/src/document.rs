@@ -124,6 +124,26 @@ pub enum BaseOperator {
     Null,
 }
 
+impl BaseOperator {
+    /// Whether this is a negated (`*Not*`) operator. AWS treats an absent
+    /// context key as a match for these, which is why negated operators are
+    /// called out as risky: a condition like `StringNotEquals aws:username`
+    /// passes when the key is missing entirely.
+    pub fn is_negated(self) -> bool {
+        matches!(
+            self,
+            BaseOperator::StringNotEquals
+                | BaseOperator::StringNotEqualsIgnoreCase
+                | BaseOperator::StringNotLike
+                | BaseOperator::NumericNotEquals
+                | BaseOperator::DateNotEquals
+                | BaseOperator::NotIpAddress
+                | BaseOperator::ArnNotEquals
+                | BaseOperator::ArnNotLike
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConditionOperator {
     pub base: BaseOperator,

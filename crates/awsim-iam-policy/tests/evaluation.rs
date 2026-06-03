@@ -1409,16 +1409,17 @@ fn condition_for_any_value_no_overlap_denies() {
 }
 
 #[test]
-fn condition_for_all_values_empty_list_no_match() {
-    // ForAllValues over an empty multivalued context key must not
-    // vacuously allow — AWS treats an empty/missing multivalue
-    // as not matching.
+fn condition_for_all_values_empty_list_vacuously_allows() {
+    // ForAllValues is vacuously true over an empty or missing multivalued
+    // context key: every member of the empty set trivially matches. AWS
+    // documents this behaviour (pair with a Null false check to avoid an
+    // over-permissive Allow).
     let mut ctx = HashMap::new();
     ctx.insert("aws:TagKeys".into(), ContextValue::StringList(Vec::new()));
     assert_decision(
         allow_with_condition(r#"{"ForAllValues:StringEquals":{"aws:TagKeys":["env"]}}"#),
         &ctx,
-        Decision::ImplicitDeny,
+        Decision::Allow,
     );
 }
 
