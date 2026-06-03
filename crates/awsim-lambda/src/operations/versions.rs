@@ -104,48 +104,57 @@ pub fn list_versions_by_function(
         .get(name)
         .ok_or_else(|| resource_not_found("function", name))?;
 
-    // Build the full list ($LATEST first, then numeric versions in order)
-    // and let the shared paginator carve out the requested slice.
-    let mut entries: Vec<Value> = vec![json!({
-        "FunctionName": f.name,
-        "FunctionArn": f.arn,
-        "Runtime": f.runtime,
-        "Role": f.role,
-        "Handler": f.handler,
-        "Description": f.description,
-        "Timeout": f.timeout,
-        "MemorySize": f.memory_size,
-        "CodeSha256": f.code_sha256,
-        "CodeSize": f.code_size,
-        "Version": "$LATEST",
-        "LastModified": f.last_modified,
-        "State": f.state,
-    })];
-    for ver in &f.versions {
-        entries.push(json!({
+    // Build the full list ($LATEST first, then numeric versions ascending).
+    // The paginator compares keys as strings, so the sort key is a
+    // zero-padded version number ($LATEST keyed below 1) to keep numeric
+    // order intact past version 9 and avoid re-emitting versions across pages.
+    let mut entries: Vec<(String, Value)> = vec![(
+        "0".repeat(20),
+        json!({
             "FunctionName": f.name,
-            "FunctionArn": format!("{}:{}", f.arn, ver.version),
+            "FunctionArn": f.arn,
             "Runtime": f.runtime,
             "Role": f.role,
             "Handler": f.handler,
-            "Description": ver.description,
+            "Description": f.description,
             "Timeout": f.timeout,
             "MemorySize": f.memory_size,
-            "CodeSha256": ver.code_sha256,
-            "CodeSize": ver.code_size,
-            "Version": ver.version,
-            "LastModified": ver.last_modified,
-            "State": "Active",
-        }));
+            "CodeSha256": f.code_sha256,
+            "CodeSize": f.code_size,
+            "Version": "$LATEST",
+            "LastModified": f.last_modified,
+            "State": f.state,
+        }),
+    )];
+    for ver in &f.versions {
+        let n: u64 = ver.version.parse().unwrap_or(0);
+        entries.push((
+            format!("{n:020}"),
+            json!({
+                "FunctionName": f.name,
+                "FunctionArn": format!("{}:{}", f.arn, ver.version),
+                "Runtime": f.runtime,
+                "Role": f.role,
+                "Handler": f.handler,
+                "Description": ver.description,
+                "Timeout": f.timeout,
+                "MemorySize": f.memory_size,
+                "CodeSha256": ver.code_sha256,
+                "CodeSize": ver.code_size,
+                "Version": ver.version,
+                "LastModified": ver.last_modified,
+                "State": "Active",
+            }),
+        ));
     }
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
 
     let max = cap_max_results(input.get("MaxItems").and_then(Value::as_i64), 50, 50);
     let marker = input.get("Marker").and_then(Value::as_str);
-    let page = paginate(entries, max, marker, |v| {
-        v["Version"].as_str().unwrap_or("").to_string()
-    })?;
+    let page = paginate(entries, max, marker, |(k, _)| k.clone())?;
+    let versions: Vec<Value> = page.items.into_iter().map(|(_, v)| v).collect();
 
-    let mut result = json!({ "Versions": page.items });
+    let mut result = json!({ "Versions": versions });
     if let Some(token) = page.next_token {
         result["NextMarker"] = json!(token);
     }
@@ -190,6 +199,54 @@ mod tests {
         create_test_fn(&state);
         let resp = publish_version(&state, &json!({ "FunctionName": "f" }), &ctx()).unwrap();
         assert_eq!(resp["Version"], json!("1"));
+    }
+
+    #[test]
+    fn list_versions_by_function_paginates_past_version_nine() {
+        let state = LambdaState::default();
+        create_test_fn(&state);
+        {
+            let mut f = state.functions.get_mut("f").unwrap();
+            for n in 1..=12u64 {
+                f.versions.push(crate::state::FunctionVersion {
+                    version: n.to_string(),
+                    description: String::new(),
+                    code_sha256: "sha".to_string(),
+                    code_size: 0,
+                    code: None,
+                    last_modified: String::new(),
+                });
+            }
+        }
+
+        let mut seen: Vec<String> = Vec::new();
+        let mut marker: Option<String> = None;
+        loop {
+            let mut input = json!({ "FunctionName": "f", "MaxItems": 5 });
+            if let Some(m) = &marker {
+                input["Marker"] = json!(m);
+            }
+            let page = list_versions_by_function(&state, &input, &ctx()).unwrap();
+            for v in page["Versions"].as_array().unwrap() {
+                seen.push(v["Version"].as_str().unwrap().to_string());
+            }
+            match page["NextMarker"].as_str() {
+                Some(m) => marker = Some(m.to_string()),
+                None => break,
+            }
+        }
+
+        // $LATEST plus versions 1..=12, each returned exactly once, in order.
+        assert_eq!(seen[0], "$LATEST");
+        let mut uniq = seen.clone();
+        uniq.sort();
+        uniq.dedup();
+        assert_eq!(
+            uniq.len(),
+            13,
+            "no version repeated or dropped across pages"
+        );
+        assert_eq!(seen.len(), 13);
     }
 
     #[test]
