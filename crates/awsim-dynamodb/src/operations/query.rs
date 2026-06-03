@@ -1635,16 +1635,20 @@ mod tests {
     }
 
     fn make_state_with_tenant_gsi() -> DynamoState {
+        make_state_with_tenant_gsi_named("byTenant", "tenant", "gsi_sk")
+    }
+
+    fn make_state_with_tenant_gsi_named(index: &str, hash: &str, range: &str) -> DynamoState {
         use crate::state::{GlobalSecondaryIndex, Projection};
         make_state_with_gsi(vec![GlobalSecondaryIndex {
-            index_name: "byTenant".into(),
+            index_name: index.into(),
             key_schema: vec![
                 KeySchemaElement {
-                    attribute_name: "tenant".into(),
+                    attribute_name: hash.into(),
                     key_type: "HASH".into(),
                 },
                 KeySchemaElement {
-                    attribute_name: "gsi_sk".into(),
+                    attribute_name: range.into(),
                     key_type: "RANGE".into(),
                 },
             ],
@@ -1745,6 +1749,119 @@ mod tests {
             pks,
             vec!["i1", "i2", "i3"],
             "items sharing a gsi sort key must not be dropped across pages"
+        );
+    }
+
+    #[test]
+    fn gsi_begins_with_filter_desc_limit_paginates_like_chat_get() {
+        // Mirrors a real client: query a GSI (ByUserStatus) with
+        //   GSI_PK = :pk AND begins_with(GSI_SK, "ACTIVE#")
+        // plus FilterExpression attribute_not_exists(deletedAt),
+        // ScanIndexForward=false, Limit=50 -- then follow LastEvaluatedKey.
+        let state = make_state_with_tenant_gsi_named("ByUserStatus", "GSI_PK", "GSI_SK");
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        for i in 0..120 {
+            put_item(
+                &state,
+                &sqlite,
+                &json!({
+                    "TableName": "t",
+                    "Item": {
+                        "pk": {"S": format!("sess-{i:03}")},
+                        "sk": {"S": "meta"},
+                        "GSI_PK": {"S": "tenant#user"},
+                        "GSI_SK": {"S": format!("ACTIVE#{i:03}")},
+                    },
+                }),
+                &c,
+            )
+            .unwrap();
+        }
+
+        let req = json!({
+            "TableName": "t",
+            "IndexName": "ByUserStatus",
+            "KeyConditionExpression": "GSI_PK = :pk AND begins_with(GSI_SK, :pfx)",
+            "ExpressionAttributeValues": {
+                ":pk": {"S": "tenant#user"},
+                ":pfx": {"S": "ACTIVE#"},
+            },
+            "FilterExpression": "attribute_not_exists(deletedAt)",
+            "ScanIndexForward": false,
+            "Limit": 50,
+        });
+
+        // Page 1 LEK must carry both index keys AND the base primary key.
+        let page1 = query(&state, &sqlite, &req, &c).unwrap();
+        assert_eq!(page1["Count"], json!(50));
+        let lek = &page1["LastEvaluatedKey"];
+        assert!(lek.get("GSI_PK").is_some(), "LEK missing GSI_PK: {lek}");
+        assert!(lek.get("GSI_SK").is_some(), "LEK missing GSI_SK: {lek}");
+        assert!(lek.get("pk").is_some(), "LEK missing base pk: {lek}");
+        assert!(!lek.as_object().unwrap().is_empty(), "LEK must not be {{}}");
+
+        let pks = paginate_pks(&state, &sqlite, &req);
+        let mut uniq = pks.clone();
+        uniq.sort();
+        uniq.dedup();
+        assert_eq!(
+            uniq.len(),
+            120,
+            "all 120 sessions reachable, none lost/looped"
+        );
+        // Descending order: first item returned is the highest ACTIVE#.
+        assert_eq!(pks.first().map(String::as_str), Some("sess-119"));
+    }
+
+    #[test]
+    fn gsi_query_with_all_sort_keys_tied_paginates_without_loss() {
+        // The real failure mode: a status-prefixed GSI sort key that repeats
+        // across every session (here all 120 share GSI_SK="ACTIVE#"). Before
+        // the base-key tiebreaker, page 1 returned 50 and "load more" came
+        // back empty, stranding the other 70.
+        let state = make_state_with_tenant_gsi_named("ByUserStatus", "GSI_PK", "GSI_SK");
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        for i in 0..120 {
+            put_item(
+                &state,
+                &sqlite,
+                &json!({
+                    "TableName": "t",
+                    "Item": {
+                        "pk": {"S": format!("sess-{i:03}")},
+                        "sk": {"S": "meta"},
+                        "GSI_PK": {"S": "tenant#user"},
+                        "GSI_SK": {"S": "ACTIVE#"},
+                    },
+                }),
+                &c,
+            )
+            .unwrap();
+        }
+
+        let req = json!({
+            "TableName": "t",
+            "IndexName": "ByUserStatus",
+            "KeyConditionExpression": "GSI_PK = :pk AND begins_with(GSI_SK, :pfx)",
+            "ExpressionAttributeValues": {
+                ":pk": {"S": "tenant#user"},
+                ":pfx": {"S": "ACTIVE#"},
+            },
+            "FilterExpression": "attribute_not_exists(deletedAt)",
+            "ScanIndexForward": false,
+            "Limit": 50,
+        });
+
+        let pks = paginate_pks(&state, &sqlite, &req);
+        let mut uniq = pks.clone();
+        uniq.sort();
+        uniq.dedup();
+        assert_eq!(
+            uniq.len(),
+            120,
+            "tied sort keys must not strand sessions on later pages"
         );
     }
 
