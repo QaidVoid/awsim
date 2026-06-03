@@ -345,6 +345,86 @@ fn verify_code_mfa(
     Ok(result)
 }
 
+/// Verify a SOFTWARE_TOKEN_MFA (TOTP) challenge response and, on success, mint
+/// tokens. Shared by `RespondToAuthChallenge` and `AdminRespondToAuthChallenge`
+/// so the admin and non-admin flows cannot drift apart on verification.
+///
+/// The session is looked up without being consumed so that a wrong code
+/// surfaces `CodeMismatchException` and can be retried; the session is dropped
+/// only once the code verifies.
+fn complete_software_token_mfa(
+    state: &CognitoState,
+    client_id: &str,
+    region: &str,
+    input: &Value,
+) -> Result<Value, AwsError> {
+    let session_id = input["Session"].as_str().unwrap_or("");
+    let user_code = input["ChallengeResponses"]["SOFTWARE_TOKEN_MFA_CODE"]
+        .as_str()
+        .ok_or_else(|| {
+            AwsError::bad_request(
+                "InvalidParameterException",
+                "ChallengeResponses.SOFTWARE_TOKEN_MFA_CODE is required",
+            )
+        })?;
+
+    let session_meta = state
+        .mfa_sessions
+        .get(session_id)
+        .map(|e| e.value().clone())
+        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid session"))?;
+    if !session_still_valid(session_meta.issued_at) {
+        state.mfa_sessions.remove(session_id);
+        return Err(AwsError::forbidden(
+            "NotAuthorizedException",
+            "MFA session has expired; restart the auth flow",
+        ));
+    }
+
+    let pool = state
+        .user_pools
+        .get(&session_meta.pool_id)
+        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", "Pool not found"))?;
+    let user = pool
+        .users
+        .get(&session_meta.username)
+        .ok_or_else(|| AwsError::not_found("UserNotFoundException", "User not found"))?;
+    let secret = user.totp_secret.as_deref().ok_or_else(|| {
+        AwsError::forbidden(
+            "NotAuthorizedException",
+            "User has no software token configured",
+        )
+    })?;
+    if !awsim_core::totp::verify_str(secret, user_code, 1) {
+        return Err(AwsError::bad_request(
+            "CodeMismatchException",
+            "Invalid software token code",
+        ));
+    }
+
+    let pairs = group_role_pairs(&pool, &user.groups);
+    let validity = pool
+        .clients
+        .get(client_id)
+        .map(TokenValidity::from_client)
+        .unwrap_or_else(TokenValidity::defaults);
+    let result = build_auth_result_validity(
+        &user.sub,
+        &user.username,
+        region,
+        &session_meta.pool_id,
+        client_id,
+        &user.attributes,
+        &crate::operations::users::client_read_set(&pool, client_id).unwrap_or_default(),
+        &pairs,
+        &validity,
+    );
+    drop(pool);
+    state.mfa_sessions.remove(session_id);
+    info!(username = %session_meta.username, "Cognito: SOFTWARE_TOKEN_MFA success");
+    Ok(result)
+}
+
 /// Build the list of GroupRolePair for a user from pool group data.
 fn group_role_pairs(pool: &UserPool, user_groups: &[String]) -> Vec<GroupRolePair> {
     user_groups
@@ -1270,77 +1350,7 @@ pub fn respond_to_auth_challenge(
             info!(username = %username, "Cognito: RespondToAuthChallenge NEW_PASSWORD_REQUIRED success");
             Ok(result)
         }
-        "SOFTWARE_TOKEN_MFA" => {
-            let session_id = input["Session"].as_str().unwrap_or("");
-            let user_code = input["ChallengeResponses"]["SOFTWARE_TOKEN_MFA_CODE"]
-                .as_str()
-                .ok_or_else(|| {
-                    AwsError::bad_request(
-                        "InvalidParameterException",
-                        "ChallengeResponses.SOFTWARE_TOKEN_MFA_CODE is required",
-                    )
-                })?;
-
-            // Look up the session without consuming it so that an invalid
-            // code surfaces NotAuthorizedException and the user can retry,
-            // matching real Cognito's behaviour. Only on a successful
-            // verify do we drop the session.
-            let session_meta = state
-                .mfa_sessions
-                .get(session_id)
-                .map(|e| e.value().clone())
-                .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid session"))?;
-            if !session_still_valid(session_meta.issued_at) {
-                state.mfa_sessions.remove(session_id);
-                return Err(AwsError::forbidden(
-                    "NotAuthorizedException",
-                    "MFA session has expired; restart the auth flow",
-                ));
-            }
-
-            let pool = state.user_pools.get(&session_meta.pool_id).ok_or_else(|| {
-                AwsError::not_found("ResourceNotFoundException", "Pool not found")
-            })?;
-            let user = pool
-                .users
-                .get(&session_meta.username)
-                .ok_or_else(|| AwsError::not_found("UserNotFoundException", "User not found"))?;
-            let secret = user.totp_secret.as_deref().ok_or_else(|| {
-                AwsError::forbidden(
-                    "NotAuthorizedException",
-                    "User has no software token configured",
-                )
-            })?;
-            if !awsim_core::totp::verify_str(secret, user_code, 1) {
-                return Err(AwsError::bad_request(
-                    "CodeMismatchException",
-                    "Invalid software token code",
-                ));
-            }
-
-            let pairs = group_role_pairs(&pool, &user.groups);
-            let validity = pool
-                .clients
-                .get(client_id)
-                .map(TokenValidity::from_client)
-                .unwrap_or_else(TokenValidity::defaults);
-            let result = build_auth_result_validity(
-                &user.sub,
-                &user.username,
-                &ctx.region,
-                &session_meta.pool_id,
-                client_id,
-                &user.attributes,
-                &crate::operations::users::client_read_set(&pool, client_id).unwrap_or_default(),
-                &pairs,
-                &validity,
-            );
-            // Drop the consumed session only after the code passed.
-            drop(pool);
-            state.mfa_sessions.remove(session_id);
-            info!(username = %session_meta.username, "Cognito: RespondToAuthChallenge SOFTWARE_TOKEN_MFA success");
-            Ok(result)
-        }
+        "SOFTWARE_TOKEN_MFA" => complete_software_token_mfa(state, client_id, &ctx.region, input),
         "SMS_MFA" => verify_code_mfa(
             state,
             client_id,
@@ -1526,45 +1536,23 @@ pub fn admin_respond_to_auth_challenge(
             info!(username = %username, pool_id = %pool_id, "Cognito: AdminRespondToAuthChallenge NEW_PASSWORD_REQUIRED success");
             Ok(result)
         }
-        "SOFTWARE_TOKEN_MFA" => {
-            let session_id = input["Session"].as_str().unwrap_or("");
-            if let Some(session) = state.mfa_sessions.remove(session_id) {
-                if !session_still_valid(session.1.issued_at) {
-                    return Err(AwsError::forbidden(
-                        "NotAuthorizedException",
-                        "MFA session has expired; restart the auth flow",
-                    ));
-                }
-                let pool = state.user_pools.get(&session.1.pool_id).ok_or_else(|| {
-                    AwsError::not_found("ResourceNotFoundException", "Pool not found")
-                })?;
-                let user = pool.users.get(&session.1.username).ok_or_else(|| {
-                    AwsError::not_found("UserNotFoundException", "User not found")
-                })?;
-                let pairs = group_role_pairs(&pool, &user.groups);
-                let validity = pool
-                    .clients
-                    .get(client_id)
-                    .map(TokenValidity::from_client)
-                    .unwrap_or_else(TokenValidity::defaults);
-                let result = build_auth_result_validity(
-                    &user.sub,
-                    &user.username,
-                    &ctx.region,
-                    &session.1.pool_id,
-                    client_id,
-                    &user.attributes,
-                    &crate::operations::users::client_read_set(&pool, client_id)
-                        .unwrap_or_default(),
-                    &pairs,
-                    &validity,
-                );
-                info!(username = %session.1.username, pool_id = %pool_id, "Cognito: AdminRespondToAuthChallenge SOFTWARE_TOKEN_MFA success");
-                Ok(result)
-            } else {
-                Ok(json!({ "AuthenticationResult": {} }))
-            }
-        }
+        "SOFTWARE_TOKEN_MFA" => complete_software_token_mfa(state, client_id, &ctx.region, input),
+        "SMS_MFA" => verify_code_mfa(
+            state,
+            client_id,
+            &ctx.region,
+            input,
+            "SMS_MFA_CODE",
+            SMS_MFA_KEY,
+        ),
+        "EMAIL_OTP" => verify_code_mfa(
+            state,
+            client_id,
+            &ctx.region,
+            input,
+            "EMAIL_OTP_CODE",
+            EMAIL_OTP_KEY,
+        ),
         name => Err(AwsError::bad_request(
             "InvalidParameter",
             format!("Unsupported ChallengeName: {name}"),
@@ -2581,5 +2569,98 @@ mod auth_flow_tests {
             .collect();
         assert_eq!(page3, vec!["u-e"]);
         assert!(p3.get("PaginationToken").is_none());
+    }
+
+    /// Drive AdminInitiateAuth to a SOFTWARE_TOKEN_MFA challenge and verify the
+    /// admin response path actually checks the TOTP code: a wrong code is
+    /// rejected and only the correct code mints tokens. Guards against the
+    /// admin flow issuing tokens on session validity alone.
+    #[test]
+    fn admin_software_token_mfa_requires_valid_totp_code() {
+        let (state, pool_id, client_id) = setup(
+            &["ALLOW_ADMIN_USER_PASSWORD_AUTH"],
+            "ON",
+            "tina",
+            "Passw0rd!",
+        );
+        set_user_mfa(&state, &pool_id, "tina", None, true, None);
+        let c = ctx();
+
+        let challenge = admin_initiate_auth(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "ClientId": client_id,
+                "AuthFlow": "ADMIN_USER_PASSWORD_AUTH",
+                "AuthParameters": { "USERNAME": "tina", "PASSWORD": "Passw0rd!" }
+            }),
+            &c,
+        )
+        .unwrap();
+        assert_eq!(challenge["ChallengeName"], "SOFTWARE_TOKEN_MFA");
+        let session = challenge["Session"].as_str().unwrap().to_string();
+
+        let err = admin_respond_to_auth_challenge(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "ClientId": client_id,
+                "ChallengeName": "SOFTWARE_TOKEN_MFA",
+                "Session": session,
+                "ChallengeResponses": { "SOFTWARE_TOKEN_MFA_CODE": "000000" }
+            }),
+            &c,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "CodeMismatchException");
+
+        let secret = awsim_core::totp::decode_base32("JBSWY3DPEHPK3PXP").unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let code = format!("{:06}", awsim_core::totp::code_at(&secret, now));
+        let ok = admin_respond_to_auth_challenge(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "ClientId": client_id,
+                "ChallengeName": "SOFTWARE_TOKEN_MFA",
+                "Session": session,
+                "ChallengeResponses": { "SOFTWARE_TOKEN_MFA_CODE": code }
+            }),
+            &c,
+        )
+        .unwrap();
+        assert!(
+            ok["AuthenticationResult"]["AccessToken"].as_str().is_some(),
+            "a valid TOTP code should mint tokens"
+        );
+    }
+
+    /// An unknown or expired session on AdminRespondToAuthChallenge must fail
+    /// with NotAuthorizedException, not return an empty 200 AuthenticationResult.
+    #[test]
+    fn admin_respond_unknown_session_is_not_authorized() {
+        let (state, pool_id, client_id) = setup(
+            &["ALLOW_ADMIN_USER_PASSWORD_AUTH"],
+            "ON",
+            "vic",
+            "Passw0rd!",
+        );
+        set_user_mfa(&state, &pool_id, "vic", None, true, None);
+        let err = admin_respond_to_auth_challenge(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "ClientId": client_id,
+                "ChallengeName": "SOFTWARE_TOKEN_MFA",
+                "Session": "does-not-exist",
+                "ChallengeResponses": { "SOFTWARE_TOKEN_MFA_CODE": "000000" }
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "NotAuthorizedException");
     }
 }
