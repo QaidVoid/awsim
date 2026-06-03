@@ -1,5 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use awsim_core::pagination::{cap_max_results, paginate};
 use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 use tracing::{debug, info};
@@ -578,20 +579,20 @@ pub fn describe_parameters(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let max_results = input["MaxResults"].as_u64().unwrap_or(50) as usize;
+    let max_results = cap_max_results(input["MaxResults"].as_i64(), 50, 50);
 
     // AWS exposes two filter-shape parameters. `Filters` (legacy) only
     // accepts Name / Type / KeyId / Tag with Equals semantics, while
     // `ParameterFilters` (newer) honors Option (Equals / BeginsWith /
     // Contains / Recursive / OneLevel) across a wider key set. Honor
-    // both shapes — both can be supplied per AWS docs.
+    // both shapes; both can be supplied per AWS docs.
     let legacy_filters = input["Filters"].as_array().cloned().unwrap_or_default();
     let new_filters = input["ParameterFilters"]
         .as_array()
         .cloned()
         .unwrap_or_default();
 
-    let mut params: Vec<Value> = state
+    let mut items: Vec<(String, Value)> = state
         .parameters
         .iter()
         .filter(|entry| {
@@ -609,18 +610,20 @@ pub fn describe_parameters(
             }
             true
         })
-        .map(|entry| parameter_metadata(entry.value()))
-        .take(max_results)
+        .map(|entry| (entry.key().clone(), parameter_metadata(entry.value())))
         .collect();
+    items.sort_by(|a, b| a.0.cmp(&b.0));
 
-    params.sort_by(|a, b| {
-        a["Name"]
-            .as_str()
-            .unwrap_or("")
-            .cmp(b["Name"].as_str().unwrap_or(""))
-    });
+    let page = paginate(items, max_results, input["NextToken"].as_str(), |(k, _)| {
+        k.clone()
+    })?;
+    let params: Vec<Value> = page.items.into_iter().map(|(_, v)| v).collect();
 
-    Ok(json!({ "Parameters": params }))
+    let mut resp = json!({ "Parameters": params });
+    if let Some(token) = page.next_token {
+        resp["NextToken"] = json!(token);
+    }
+    Ok(resp)
 }
 
 /// Legacy `Filters[]` keys: Name / Type / KeyId (Tag pass-through since
@@ -708,35 +711,54 @@ pub fn get_parameter_history(
         AwsError::bad_request("ParameterNotFound", format!("Parameter {name} not found"))
     })?;
 
-    // Build history: all previous versions + current
-    let mut history: Vec<Value> = param
+    // Build history: all previous versions + current. The zero-padded
+    // version is the paginator key so pages stay in numeric version order.
+    let mut entries: Vec<(String, Value)> = param
         .history
         .iter()
         .map(|h| {
-            json!({
-                "Name": param.name,
-                "Type": param.param_type,
-                "Value": h.value,
-                "Version": h.version,
-                "LastModifiedDate": h.date,
-                "Description": h.description,
-                "Labels": h.labels,
-            })
+            (
+                format!("{:020}", h.version),
+                json!({
+                    "Name": param.name,
+                    "Type": param.param_type,
+                    "Value": h.value,
+                    "Version": h.version,
+                    "LastModifiedDate": h.date,
+                    "Description": h.description,
+                    "Labels": h.labels,
+                }),
+            )
         })
         .collect();
+    entries.push((
+        format!("{:020}", param.version),
+        json!({
+            "Name": param.name,
+            "Type": param.param_type,
+            "Value": param.value,
+            "Version": param.version,
+            "LastModifiedDate": param.last_modified_date,
+            "Description": param.description,
+            "Labels": param.labels,
+        }),
+    ));
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
 
-    // Append current version
-    history.push(json!({
-        "Name": param.name,
-        "Type": param.param_type,
-        "Value": param.value,
-        "Version": param.version,
-        "LastModifiedDate": param.last_modified_date,
-        "Description": param.description,
-        "Labels": param.labels,
-    }));
+    let max_results = cap_max_results(input["MaxResults"].as_i64(), 50, 50);
+    let page = paginate(
+        entries,
+        max_results,
+        input["NextToken"].as_str(),
+        |(k, _)| k.clone(),
+    )?;
+    let history: Vec<Value> = page.items.into_iter().map(|(_, v)| v).collect();
 
-    Ok(json!({ "Parameters": history }))
+    let mut resp = json!({ "Parameters": history });
+    if let Some(token) = page.next_token {
+        resp["NextToken"] = json!(token);
+    }
+    Ok(resp)
 }
 
 // ---------------------------------------------------------------------------

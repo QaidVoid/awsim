@@ -451,6 +451,44 @@ mod tests {
         assert_eq!(result["Parameters"].as_array().unwrap().len(), 2);
     }
 
+    #[test]
+    fn test_describe_parameters_paginates() {
+        let svc = SsmService::new();
+        let ctx = ctx();
+        for n in ["/p/a", "/p/b", "/p/c"] {
+            block_on(svc.handle(
+                "PutParameter",
+                json!({ "Name": n, "Value": "v", "Type": "String" }),
+                &ctx,
+            ))
+            .unwrap();
+        }
+
+        let mut seen: Vec<String> = Vec::new();
+        let mut token: Option<String> = None;
+        loop {
+            let mut input = json!({ "MaxResults": 2 });
+            if let Some(t) = &token {
+                input["NextToken"] = json!(t);
+            }
+            let page = block_on(svc.handle("DescribeParameters", input, &ctx)).unwrap();
+            for p in page["Parameters"].as_array().unwrap() {
+                seen.push(p["Name"].as_str().unwrap().to_string());
+            }
+            match page["NextToken"].as_str() {
+                Some(t) => token = Some(t.to_string()),
+                None => break,
+            }
+        }
+        seen.sort();
+        seen.dedup();
+        assert_eq!(
+            seen.len(),
+            3,
+            "every parameter returned exactly once across pages"
+        );
+    }
+
     // -----------------------------------------------------------------------
     // GetParameterHistory
     // -----------------------------------------------------------------------
