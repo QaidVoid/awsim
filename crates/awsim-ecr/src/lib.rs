@@ -275,6 +275,54 @@ mod tests {
     }
 
     #[test]
+    fn test_list_images_paginates() {
+        let svc = EcrService::new();
+        let ctx = ctx();
+        block_on(svc.handle(
+            "CreateRepository",
+            json!({ "repositoryName": "page-repo" }),
+            &ctx,
+        ))
+        .unwrap();
+        for tag in ["t1", "t2", "t3"] {
+            block_on(svc.handle(
+                "PutImage",
+                json!({
+                    "repositoryName": "page-repo",
+                    "imageManifest": format!(r#"{{"schemaVersion":2,"tag":"{tag}"}}"#),
+                    "imageTag": tag
+                }),
+                &ctx,
+            ))
+            .unwrap();
+        }
+
+        let mut seen: Vec<String> = Vec::new();
+        let mut token: Option<String> = None;
+        loop {
+            let mut input = json!({ "repositoryName": "page-repo", "maxResults": 2 });
+            if let Some(t) = &token {
+                input["nextToken"] = json!(t);
+            }
+            let page = block_on(svc.handle("ListImages", input, &ctx)).unwrap();
+            for id in page["imageIds"].as_array().unwrap() {
+                seen.push(id["imageTag"].as_str().unwrap_or("").to_string());
+            }
+            match page["nextToken"].as_str() {
+                Some(t) => token = Some(t.to_string()),
+                None => break,
+            }
+        }
+        seen.sort();
+        seen.dedup();
+        assert_eq!(
+            seen.len(),
+            3,
+            "every image returned exactly once across pages"
+        );
+    }
+
+    #[test]
     fn test_batch_get_image() {
         let svc = EcrService::new();
         let ctx = ctx();

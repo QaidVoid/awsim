@@ -1,3 +1,4 @@
+use awsim_core::pagination::{cap_max_results, paginate};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -379,7 +380,8 @@ pub fn list_images(
         )
     })?;
 
-    let image_ids: Vec<Value> = repo
+    let max_results = cap_max_results(input["maxResults"].as_i64(), 100, 1000);
+    let mut items: Vec<(String, Value)> = repo
         .images
         .iter()
         .map(|img| {
@@ -387,11 +389,26 @@ pub fn list_images(
             if let Some(tag) = &img.image_tag {
                 id["imageTag"] = json!(tag);
             }
-            id
+            let key = format!(
+                "{}|{}",
+                img.image_digest,
+                img.image_tag.as_deref().unwrap_or("")
+            );
+            (key, id)
         })
         .collect();
+    items.sort_by(|a, b| a.0.cmp(&b.0));
 
-    Ok(json!({ "imageIds": image_ids }))
+    let page = paginate(items, max_results, input["nextToken"].as_str(), |(k, _)| {
+        k.clone()
+    })?;
+    let image_ids: Vec<Value> = page.items.into_iter().map(|(_, v)| v).collect();
+
+    let mut resp = json!({ "imageIds": image_ids });
+    if let Some(token) = page.next_token {
+        resp["nextToken"] = json!(token);
+    }
+    Ok(resp)
 }
 
 // ---------------------------------------------------------------------------
@@ -414,8 +431,9 @@ pub fn describe_images(
         )
     })?;
 
-    let details: Vec<Value> = if let Some(ids) = input["imageIds"].as_array() {
-        ids.iter()
+    if let Some(ids) = input["imageIds"].as_array() {
+        let details: Vec<Value> = ids
+            .iter()
             .filter_map(|id| {
                 let tag = id["imageTag"].as_str();
                 let digest = id["imageDigest"].as_str();
@@ -430,15 +448,35 @@ pub fn describe_images(
                 })
             })
             .map(|img| image_detail_to_json(img, repo_name, &ctx.account_id))
-            .collect()
-    } else {
-        repo.images
-            .iter()
-            .map(|img| image_detail_to_json(img, repo_name, &ctx.account_id))
-            .collect()
-    };
+            .collect();
+        return Ok(json!({ "imageDetails": details }));
+    }
 
-    Ok(json!({ "imageDetails": details }))
+    let max_results = cap_max_results(input["maxResults"].as_i64(), 100, 1000);
+    let mut items: Vec<(String, Value)> = repo
+        .images
+        .iter()
+        .map(|img| {
+            let key = format!(
+                "{}|{}",
+                img.image_digest,
+                img.image_tag.as_deref().unwrap_or("")
+            );
+            (key, image_detail_to_json(img, repo_name, &ctx.account_id))
+        })
+        .collect();
+    items.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let page = paginate(items, max_results, input["nextToken"].as_str(), |(k, _)| {
+        k.clone()
+    })?;
+    let details: Vec<Value> = page.items.into_iter().map(|(_, v)| v).collect();
+
+    let mut resp = json!({ "imageDetails": details });
+    if let Some(token) = page.next_token {
+        resp["nextToken"] = json!(token);
+    }
+    Ok(resp)
 }
 
 // ---------------------------------------------------------------------------

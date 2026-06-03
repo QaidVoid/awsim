@@ -1,5 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use awsim_core::pagination::{cap_max_results, paginate};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 use tracing::{info, warn};
@@ -224,7 +225,7 @@ pub fn describe_repositories(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let repos: Vec<Value> = if let Some(names) = input["repositoryNames"].as_array() {
+    if let Some(names) = input["repositoryNames"].as_array() {
         let mut result = Vec::new();
         for name_val in names {
             let name = name_val.as_str().unwrap_or("");
@@ -236,16 +237,27 @@ pub fn describe_repositories(
             })?;
             result.push(repo_to_json(&repo));
         }
-        result
-    } else {
-        state
-            .repositories
-            .iter()
-            .map(|entry| repo_to_json(entry.value()))
-            .collect()
-    };
+        return Ok(json!({ "repositories": result }));
+    }
 
-    Ok(json!({ "repositories": repos }))
+    let max_results = cap_max_results(input["maxResults"].as_i64(), 100, 1000);
+    let mut items: Vec<(String, Value)> = state
+        .repositories
+        .iter()
+        .map(|entry| (entry.key().clone(), repo_to_json(entry.value())))
+        .collect();
+    items.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let page = paginate(items, max_results, input["nextToken"].as_str(), |(k, _)| {
+        k.clone()
+    })?;
+    let repos: Vec<Value> = page.items.into_iter().map(|(_, v)| v).collect();
+
+    let mut resp = json!({ "repositories": repos });
+    if let Some(token) = page.next_token {
+        resp["nextToken"] = json!(token);
+    }
+    Ok(resp)
 }
 
 /// Validate an ECR repository name against AWS's regex.
