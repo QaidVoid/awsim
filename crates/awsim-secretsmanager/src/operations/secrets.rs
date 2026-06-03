@@ -22,8 +22,8 @@ fn resolve_name(state: &SecretsState, secret_id: &str) -> Result<String, AwsErro
         return Ok(secret_id.to_string());
     }
 
-    // ARN lookup — ARN format: arn:aws:secretsmanager:{region}:{account}:secret:{name}-{suffix}
-    if secret_id.starts_with("arn:aws:secretsmanager:") {
+    // ARN lookup. Format: arn:{partition}:secretsmanager:{region}:{account}:secret:{name}-{suffix}
+    if secret_id.starts_with("arn:") && secret_id.contains(":secretsmanager:") {
         for entry in state.secrets.iter() {
             if entry.value().arn == secret_id {
                 return Ok(entry.key().clone());
