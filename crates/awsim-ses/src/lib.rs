@@ -799,19 +799,15 @@ struct ParsedSesArn {
 }
 
 fn parse_ses_identity_arn(arn: &str) -> Option<ParsedSesArn> {
-    // Format: arn:aws:ses:{region}:{account}:identity/{identity}
-    let rest = arn.strip_prefix("arn:aws:ses:")?;
-    let parts: Vec<&str> = rest.splitn(3, ':').collect();
-    if parts.len() != 3 {
+    // Format: arn:{partition}:ses:{region}:{account}:identity/{identity}
+    let parts: Vec<&str> = arn.splitn(6, ':').collect();
+    if parts.len() != 6 || parts[0] != "arn" || parts[2] != "ses" {
         return None;
     }
-    let region = parts[0];
-    let account = parts[1];
-    let resource = parts[2];
-    let identity = resource.strip_prefix("identity/")?;
+    let identity = parts[5].strip_prefix("identity/")?;
     Some(ParsedSesArn {
-        account: account.to_string(),
-        region: region.to_string(),
+        account: parts[4].to_string(),
+        region: parts[3].to_string(),
         identity: identity.to_string(),
     })
 }
