@@ -425,6 +425,45 @@ mod tests {
     }
 
     #[test]
+    fn test_list_secrets_paginates() {
+        let svc = SecretsManagerService::new();
+        let ctx = ctx();
+        for n in ["s1", "s2", "s3"] {
+            block_on(svc.handle(
+                "CreateSecret",
+                json!({ "Name": n, "SecretString": "v" }),
+                &ctx,
+            ))
+            .unwrap();
+        }
+
+        let mut seen: Vec<String> = Vec::new();
+        let mut token: Option<String> = None;
+        loop {
+            let mut input = json!({ "MaxResults": 2 });
+            if let Some(t) = &token {
+                input["NextToken"] = json!(t);
+            }
+            let page = block_on(svc.handle("ListSecrets", input, &ctx)).unwrap();
+            for s in page["SecretList"].as_array().unwrap() {
+                seen.push(s["Name"].as_str().unwrap().to_string());
+            }
+            match page["NextToken"].as_str() {
+                Some(t) => token = Some(t.to_string()),
+                None => break,
+            }
+        }
+
+        seen.sort();
+        seen.dedup();
+        assert_eq!(
+            seen.len(),
+            3,
+            "every secret returned exactly once across pages"
+        );
+    }
+
+    #[test]
     fn test_update_secret_description() {
         let svc = SecretsManagerService::new();
         let ctx = ctx();

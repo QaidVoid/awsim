@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use awsim_core::pagination::{cap_max_results, paginate};
 use awsim_core::{AccountRegionStore, AwsError, RequestContext};
 use serde_json::{Value, json};
 use tracing::info;
@@ -546,7 +547,7 @@ pub fn list_secrets(
     let filters = parse_list_filters(input)?;
     let include_planned_deletion = input["IncludePlannedDeletion"].as_bool().unwrap_or(false);
 
-    let mut secrets: Vec<Secret> = state
+    let secrets: Vec<Secret> = state
         .secrets
         .iter()
         .filter(|entry| {
@@ -559,21 +560,35 @@ pub fn list_secrets(
         .map(|entry| entry.value().clone())
         .collect();
 
-    // SortOrder operates on the secret's CreatedDate per AWS docs.
+    // SortOrder operates on the secret's CreatedDate per AWS docs. Build a
+    // fixed-width sort key so the paginator preserves that ordering across
+    // pages while the ARN tiebreak keeps each key unique.
+    let max_results = cap_max_results(input["MaxResults"].as_i64(), 100, 100);
     let sort_order = input["SortOrder"].as_str().unwrap_or("asc");
-    secrets.sort_by(|a, b| match sort_order {
-        "desc" => b
-            .created_date
-            .partial_cmp(&a.created_date)
-            .unwrap_or(std::cmp::Ordering::Equal),
-        _ => a
-            .created_date
-            .partial_cmp(&b.created_date)
-            .unwrap_or(std::cmp::Ordering::Equal),
-    });
+    let mut keyed: Vec<(String, Value)> = secrets
+        .iter()
+        .map(|s| {
+            let millis = (s.created_date * 1000.0) as i64;
+            let rank = if sort_order == "desc" {
+                i64::MAX - millis
+            } else {
+                millis
+            };
+            (format!("{:019}|{}", rank.max(0), s.arn), secret_metadata(s))
+        })
+        .collect();
+    keyed.sort_by(|a, b| a.0.cmp(&b.0));
 
-    let list: Vec<Value> = secrets.iter().map(secret_metadata).collect();
-    Ok(json!({ "SecretList": list }))
+    let page = paginate(keyed, max_results, input["NextToken"].as_str(), |(k, _)| {
+        k.clone()
+    })?;
+    let list: Vec<Value> = page.items.into_iter().map(|(_, v)| v).collect();
+
+    let mut resp = json!({ "SecretList": list });
+    if let Some(token) = page.next_token {
+        resp["NextToken"] = json!(token);
+    }
+    Ok(resp)
 }
 
 /// A single Filter entry from the ListSecrets request.
@@ -1539,7 +1554,7 @@ pub fn list_secret_version_ids(
         .get(&name)
         .ok_or_else(|| error::resource_not_found(secret_id))?;
 
-    let versions: Vec<Value> = secret
+    let mut keyed: Vec<(String, Value)> = secret
         .versions
         .iter()
         .filter(|(_, v)| include_deprecated || !v.stages.is_empty())
@@ -1556,16 +1571,26 @@ pub fn list_secret_version_ids(
             if let Some(ts) = secret.last_rotated_date {
                 entry["LastRotatedDate"] = json!(ts);
             }
-            entry
+            (vid.clone(), entry)
         })
         .collect();
+    keyed.sort_by(|a, b| a.0.cmp(&b.0));
 
-    Ok(json!({
+    let max_results = cap_max_results(input["MaxResults"].as_i64(), 100, 100);
+    let page = paginate(keyed, max_results, input["NextToken"].as_str(), |(k, _)| {
+        k.clone()
+    })?;
+    let versions: Vec<Value> = page.items.into_iter().map(|(_, v)| v).collect();
+
+    let mut resp = json!({
         "ARN": secret.arn,
         "Name": secret.name,
         "Versions": versions,
-        "Truncated": false,
-    }))
+    });
+    if let Some(token) = page.next_token {
+        resp["NextToken"] = json!(token);
+    }
+    Ok(resp)
 }
 
 // ---------------------------------------------------------------------------
