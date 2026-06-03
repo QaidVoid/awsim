@@ -211,8 +211,8 @@ impl ServiceHandler for SqsService {
                 let queue_url = input.get("QueueUrl").and_then(|v| v.as_str())?;
                 let name = queue_url.rsplit('/').next().filter(|s| !s.is_empty())?;
                 Some(format!(
-                    "arn:aws:sqs:{}:{}:{}",
-                    ctx.region, ctx.account_id, name
+                    "arn:{}:sqs:{}:{}:{}",
+                    ctx.partition, ctx.region, ctx.account_id, name
                 ))
             }
         }

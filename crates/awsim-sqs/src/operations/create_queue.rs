@@ -42,8 +42,8 @@ pub fn handle(state: &SqsState, input: &Value, ctx: &RequestContext) -> Result<V
         ctx.region, ctx.account_id, queue_name
     );
     let arn = format!(
-        "arn:aws:sqs:{}:{}:{}",
-        ctx.region, ctx.account_id, queue_name
+        "arn:{}:sqs:{}:{}:{}",
+        ctx.partition, ctx.region, ctx.account_id, queue_name
     );
     let created_at = chrono_now_epoch();
 
