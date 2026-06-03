@@ -34,6 +34,22 @@ mod embedded_migrations {
 /// slot; raising this further would mean another schema migration.
 pub const MAX_GSI_SLOTS: usize = 20;
 
+/// Resume cursor for a GSI page: the prior page's last item expressed as
+/// its index sort key plus the base table primary key. The base key is the
+/// tiebreaker that keeps the cursor unique even when the GSI sort key
+/// repeats across items (or is absent, for a hash-only GSI). Real DynamoDB
+/// includes the base primary key in a GSI query's `LastEvaluatedKey` for
+/// exactly this reason.
+pub struct GsiResume<'a> {
+    /// GSI sort key of the boundary item, or `None` for a hash-only GSI.
+    pub gsi_sk: Option<&'a str>,
+    /// Base table partition key of the boundary item.
+    pub base_pk: &'a str,
+    /// Base table sort key of the boundary item (`""` when the base table
+    /// has no sort key).
+    pub base_sk: &'a str,
+}
+
 /// Build the comma-separated `gsi1_pk, gsi1_sk, ..., gsiN_pk, gsiN_sk`
 /// column list for use in INSERT column declarations and DO UPDATE SET.
 fn gsi_column_list() -> String {
@@ -400,11 +416,16 @@ impl SqliteStore {
     /// `start_after_sk` is the `ExclusiveStartKey`'s sort key value; rows
     /// with that exact sk are skipped. (For tables without a sort key it
     /// is meaningless and should be `None`.)
-    #[allow(clippy::too_many_arguments)]
     /// Query a GSI partition. `slot` is the zero-based GSI index
     /// (`gsi{slot+1}_*` in the storage schema). Returns rows where the
-    /// indexed `pk` column equals `pk`, ordered by the indexed `sk`.
-    /// `start_after_sk` resumes from a prior page's last item.
+    /// indexed `pk` column equals `pk`, ordered by the indexed `sk` then
+    /// the base table primary key. `resume`, when set, continues strictly
+    /// after a prior page's last item using the composite
+    /// `(gsi_sk, base_pk, base_sk)` cursor, so no item is skipped or
+    /// repeated even when GSI sort keys collide or are absent (hash-only
+    /// GSI). A hash-only GSI stores NULL in the sk column; the cursor and
+    /// ordering both `COALESCE` it to the empty string so a single total
+    /// order is agreed on.
     #[allow(clippy::too_many_arguments)]
     pub fn query_gsi_partition<F>(
         &self,
@@ -414,7 +435,7 @@ impl SqliteStore {
         slot: usize,
         pk: &str,
         forward: bool,
-        start_after_sk: Option<&str>,
+        resume: Option<GsiResume<'_>>,
         mut visit: F,
     ) -> Result<(), AwsError>
     where
@@ -429,30 +450,43 @@ impl SqliteStore {
         let i = slot + 1;
         let pk_col = format!("gsi{i}_pk");
         let sk_col = format!("gsi{i}_sk");
+        // Coalesce NULL (hash-only GSI) to '' so ORDER BY and the resume
+        // predicate share one total order over the index sort key.
+        let sk_expr = format!("COALESCE({sk_col}, '')");
         let conn = self.conn()?;
         let order = if forward { "ASC" } else { "DESC" };
+        let cmp = if forward { ">" } else { "<" };
 
-        let sql = match start_after_sk {
-            Some(_) => {
-                let cmp = if forward { ">" } else { "<" };
-                format!(
-                    "SELECT pk, sk, {sk_col}, attrs_json FROM items
-                     WHERE account = ?1 AND region = ?2 AND table_name = ?3
-                       AND {pk_col} = ?4 AND {sk_col} {cmp} ?5
-                     ORDER BY {sk_col} {order}"
-                )
-            }
+        let sql = match &resume {
+            // Lexicographic "strictly after" on the (gsi_sk, pk, sk) triple.
+            Some(_) => format!(
+                "SELECT pk, sk, {sk_col}, attrs_json FROM items
+                 WHERE account = ?1 AND region = ?2 AND table_name = ?3
+                   AND {pk_col} = ?4
+                   AND ( {sk_expr} {cmp} ?5
+                         OR ( {sk_expr} = ?5
+                              AND ( pk {cmp} ?6 OR ( pk = ?6 AND sk {cmp} ?7 ) ) ) )
+                 ORDER BY {sk_expr} {order}, pk {order}, sk {order}"
+            ),
             None => format!(
                 "SELECT pk, sk, {sk_col}, attrs_json FROM items
                  WHERE account = ?1 AND region = ?2 AND table_name = ?3
                    AND {pk_col} = ?4
-                 ORDER BY {sk_col} {order}"
+                 ORDER BY {sk_expr} {order}, pk {order}, sk {order}"
             ),
         };
 
         let mut stmt = conn.prepare(&sql).map_err(sqlite_err)?;
-        let mut rows = match start_after_sk {
-            Some(start) => stmt.query(params![account, region, table, pk, start]),
+        let mut rows = match &resume {
+            Some(r) => stmt.query(params![
+                account,
+                region,
+                table,
+                pk,
+                r.gsi_sk.unwrap_or(""),
+                r.base_pk,
+                r.base_sk
+            ]),
             None => stmt.query(params![account, region, table, pk]),
         }
         .map_err(sqlite_err)?;

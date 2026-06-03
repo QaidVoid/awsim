@@ -114,21 +114,34 @@ impl IndexProjection {
     }
 }
 
-/// Build the LastEvaluatedKey JSON object from an item by extracting just
-/// the table's hash + range key attributes.
+/// Build the LastEvaluatedKey JSON object from an item.
+///
+/// For a base-table query the index key names equal the base key names, so
+/// the result is just the item's primary key. For a GSI query the index
+/// names are the GSI's hash/range while the base names are the table's
+/// pk/sk; AWS returns BOTH in the LEK because GSI sort keys aren't unique,
+/// and the base primary key is what disambiguates the resume point. Keys
+/// are inserted idempotently, so overlap (base == index) collapses cleanly.
 fn last_evaluated_key(
     item: &DynamoItem,
-    hash_key_name: &str,
-    range_key_name: Option<&str>,
+    index_hash: &str,
+    index_range: Option<&str>,
+    base_hash: &str,
+    base_range: Option<&str>,
 ) -> DynamoItem {
     let mut lek = DynamoItem::new();
-    if let Some(hk_val) = item.get(hash_key_name) {
-        lek.insert(hash_key_name.to_string(), hk_val.clone());
+    let mut copy = |name: &str| {
+        if let Some(val) = item.get(name) {
+            lek.insert(name.to_string(), val.clone());
+        }
+    };
+    copy(index_hash);
+    if let Some(r) = index_range {
+        copy(r);
     }
-    if let Some(rk) = range_key_name
-        && let Some(sk_val) = item.get(rk)
-    {
-        lek.insert(rk.to_string(), sk_val.clone());
+    copy(base_hash);
+    if let Some(r) = base_range {
+        copy(r);
     }
     lek
 }
@@ -176,6 +189,13 @@ pub fn query(
     let filter_condition = filter_expr.map(parse_condition).transpose()?;
 
     let projection_paths: Vec<String> = projection_expr.map(parse_projection).unwrap_or_default();
+
+    // Base-table key names, captured while `table` is still borrowed. A GSI
+    // query's LastEvaluatedKey must carry these as a resume tiebreaker even
+    // though the index resolution below rebinds hash_key_name/range_key_name
+    // to the GSI's own keys.
+    let base_hash_name = table.hash_key().unwrap_or("").to_string();
+    let base_range_name = table.range_key().map(|s| s.to_string());
 
     // Resolve which key schema applies. With IndexName, GSI/LSI metadata
     // names different attributes than the base table; we look up the
@@ -272,12 +292,30 @@ pub fn query(
         &expr_attr_values,
     );
 
-    // Convert ExclusiveStartKey → SQL pagination markers.
-    let start_after_sk = exclusive_start_key
-        .as_ref()
-        .and_then(|esk| range_key_name.as_deref().and_then(|rk| esk.get(rk)))
-        .and_then(extract_scalar_str)
-        .map(|s| s.to_string());
+    // Convert ExclusiveStartKey into resume cursors. The base-table query
+    // (and LSI, which executes over the base partition) resumes on the base
+    // sort key, which is unique within a partition. The GSI path additionally
+    // needs the index sort key plus the base primary key as a tiebreaker,
+    // since GSI sort keys repeat.
+    let esk_base_pk = exclusive_start_key.as_ref().and_then(|esk| {
+        esk.get(&base_hash_name)
+            .and_then(extract_scalar_str)
+            .map(|s| s.to_string())
+    });
+    let esk_base_sk = exclusive_start_key.as_ref().and_then(|esk| {
+        base_range_name
+            .as_deref()
+            .and_then(|br| esk.get(br))
+            .and_then(extract_scalar_str)
+            .map(|s| s.to_string())
+    });
+    let esk_index_sk = exclusive_start_key.as_ref().and_then(|esk| {
+        range_key_name
+            .as_deref()
+            .and_then(|rk| esk.get(rk))
+            .and_then(extract_scalar_str)
+            .map(|s| s.to_string())
+    });
 
     let mut scanned_count = 0usize;
     let mut items: Vec<DynamoItem> = Vec::new();
@@ -342,6 +380,16 @@ pub fn query(
 
     if let Some(ref pk) = pk_value {
         if let Some(slot) = gsi_slot {
+            // Resume strictly after (gsi_sk, base_pk, base_sk). The presence
+            // of a base pk in the ExclusiveStartKey is what triggers a
+            // resume; our own LEK always carries it.
+            let resume = esk_base_pk
+                .as_deref()
+                .map(|base_pk| crate::sqlite_store::GsiResume {
+                    gsi_sk: esk_index_sk.as_deref(),
+                    base_pk,
+                    base_sk: esk_base_sk.as_deref().unwrap_or(""),
+                });
             sqlite.query_gsi_partition(
                 &ctx.account_id,
                 &ctx.region,
@@ -349,7 +397,7 @@ pub fn query(
                 slot,
                 pk,
                 scan_index_forward,
-                start_after_sk.as_deref(),
+                resume,
                 |_base_pk, _base_sk, _gsi_sk, attrs| {
                     let item = storage_value_to_item(attrs).ok_or_else(|| {
                         AwsError::internal("DynamoDB stored attrs is not an object")
@@ -358,13 +406,16 @@ pub fn query(
                 },
             )?;
         } else {
+            // Base table and LSI both stream the base partition ordered by
+            // the base sort key, which is unique per partition, so the base
+            // sort key alone is a sufficient resume cursor.
             sqlite.query_partition(
                 &ctx.account_id,
                 &ctx.region,
                 table_name,
                 pk,
                 scan_index_forward,
-                start_after_sk.as_deref(),
+                esk_base_sk.as_deref(),
                 |_sk, attrs| {
                     let item = storage_value_to_item(attrs).ok_or_else(|| {
                         AwsError::internal("DynamoDB stored attrs is not an object")
@@ -375,10 +426,11 @@ pub fn query(
         }
     } else {
         // No usable hash-key constraint extracted — fall back to a full
-        // table scan (matches the legacy in-memory behaviour).
+        // table scan (matches the legacy in-memory behaviour). Resume on the
+        // base primary key, which is what scan_table orders by.
         let scan_start = exclusive_start_key.as_ref().and_then(|esk| {
-            let pk = esk.get(&hash_key_name).and_then(extract_scalar_str)?;
-            let sk = range_key_name
+            let pk = esk.get(&base_hash_name).and_then(extract_scalar_str)?;
+            let sk = base_range_name
                 .as_deref()
                 .and_then(|rk| esk.get(rk))
                 .and_then(extract_scalar_str)
@@ -409,7 +461,13 @@ pub fn query(
     });
 
     if hit_limit && let Some(item) = last_item {
-        let lek = last_evaluated_key(&item, &hash_key_name, range_key_name.as_deref());
+        let lek = last_evaluated_key(
+            &item,
+            &hash_key_name,
+            range_key_name.as_deref(),
+            &base_hash_name,
+            base_range_name.as_deref(),
+        );
         result["LastEvaluatedKey"] = item_to_json(&lek);
     }
 
@@ -563,7 +621,15 @@ pub fn scan(
     });
 
     if hit_limit && let Some(item) = last_item {
-        let lek = last_evaluated_key(&item, &hash_key_name, range_key_name.as_deref());
+        // Scan always streams the base table, so the index and base key
+        // names coincide here.
+        let lek = last_evaluated_key(
+            &item,
+            &hash_key_name,
+            range_key_name.as_deref(),
+            &hash_key_name,
+            range_key_name.as_deref(),
+        );
         result["LastEvaluatedKey"] = item_to_json(&lek);
     }
 
@@ -1521,5 +1587,143 @@ mod tests {
         .unwrap();
         let item = &resp["Items"][0];
         assert!(item.get("secret").is_some());
+    }
+
+    /// Page through a Query, following LastEvaluatedKey, collecting the base
+    /// `pk` of every returned item. Panics if pagination fails to terminate
+    /// (an infinite-loop bug), so a non-advancing cursor is caught loudly.
+    fn paginate_pks(state: &DynamoState, sqlite: &SqliteStore, base_req: &Value) -> Vec<String> {
+        let c = ctx();
+        let mut pks = Vec::new();
+        let mut esk: Option<Value> = None;
+        for _ in 0..1000 {
+            let mut req = base_req.clone();
+            if let Some(k) = &esk {
+                req["ExclusiveStartKey"] = k.clone();
+            }
+            let resp = query(state, sqlite, &req, &c).unwrap();
+            for item in resp["Items"].as_array().unwrap() {
+                pks.push(item["pk"]["S"].as_str().unwrap().to_string());
+            }
+            match resp.get("LastEvaluatedKey") {
+                Some(k) if !k.is_null() => esk = Some(k.clone()),
+                _ => return pks,
+            }
+        }
+        panic!("pagination did not terminate within 1000 pages (cursor never advanced)");
+    }
+
+    fn make_state_with_tenant_gsi() -> DynamoState {
+        use crate::state::{GlobalSecondaryIndex, Projection};
+        make_state_with_gsi(vec![GlobalSecondaryIndex {
+            index_name: "byTenant".into(),
+            key_schema: vec![
+                KeySchemaElement {
+                    attribute_name: "tenant".into(),
+                    key_type: "HASH".into(),
+                },
+                KeySchemaElement {
+                    attribute_name: "gsi_sk".into(),
+                    key_type: "RANGE".into(),
+                },
+            ],
+            projection: Projection {
+                projection_type: "ALL".into(),
+                non_key_attributes: vec![],
+            },
+            status: "ACTIVE".into(),
+        }])
+    }
+
+    #[test]
+    fn hashonly_gsi_query_lek_carries_base_key_and_paginates() {
+        // A GSI with only a HASH key. Every item shares the same index hash,
+        // so without a base-key tiebreaker the cursor cannot advance and the
+        // client loops on page 1 forever.
+        let state = make_state_with_by_tag_gsi("ALL", vec![]);
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        for i in 0..5 {
+            put_item(
+                &state,
+                &sqlite,
+                &json!({
+                    "TableName": "t",
+                    "Item": {
+                        "pk": {"S": format!("p{i}")},
+                        "sk": {"S": "row"},
+                        "tag": {"S": "shared"},
+                    },
+                }),
+                &c,
+            )
+            .unwrap();
+        }
+
+        let req = json!({
+            "TableName": "t",
+            "IndexName": "byTag",
+            "KeyConditionExpression": "tag = :t",
+            "ExpressionAttributeValues": { ":t": {"S": "shared"} },
+            "Limit": 2,
+        });
+
+        // The page-1 LEK must include the base primary key (pk + sk), not just
+        // the GSI hash, or there is nothing to resume from.
+        let page1 = query(&state, &sqlite, &req, &c).unwrap();
+        let lek = &page1["LastEvaluatedKey"];
+        assert!(lek.get("pk").is_some(), "GSI LEK missing base pk: {lek}");
+        assert!(lek.get("sk").is_some(), "GSI LEK missing base sk: {lek}");
+
+        let mut pks = paginate_pks(&state, &sqlite, &req);
+        pks.sort();
+        assert_eq!(
+            pks,
+            vec!["p0", "p1", "p2", "p3", "p4"],
+            "every item must be returned exactly once across pages"
+        );
+    }
+
+    #[test]
+    fn gsi_query_with_tied_sort_key_paginates_without_loss() {
+        // Three items in one GSI partition that all share the SAME gsi sort
+        // key. A strict `gsi_sk > boundary` resume would skip the tied items
+        // straddling a page boundary; the base-key tiebreaker prevents that.
+        let state = make_state_with_tenant_gsi();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        for i in 1..=3 {
+            put_item(
+                &state,
+                &sqlite,
+                &json!({
+                    "TableName": "t",
+                    "Item": {
+                        "pk": {"S": format!("i{i}")},
+                        "sk": {"S": "row"},
+                        "tenant": {"S": "a"},
+                        "gsi_sk": {"S": "2025-01-01"},
+                    },
+                }),
+                &c,
+            )
+            .unwrap();
+        }
+
+        let req = json!({
+            "TableName": "t",
+            "IndexName": "byTenant",
+            "KeyConditionExpression": "tenant = :t",
+            "ExpressionAttributeValues": { ":t": {"S": "a"} },
+            "Limit": 1,
+        });
+
+        let mut pks = paginate_pks(&state, &sqlite, &req);
+        pks.sort();
+        assert_eq!(
+            pks,
+            vec!["i1", "i2", "i3"],
+            "items sharing a gsi sort key must not be dropped across pages"
+        );
     }
 }
