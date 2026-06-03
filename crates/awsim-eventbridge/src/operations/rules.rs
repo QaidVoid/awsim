@@ -58,7 +58,13 @@ pub fn put_rule(
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
 
-    let arn = arn::build(ctx, "events", format!("rule/{bus_name}/{name}"));
+    // AWS omits the bus segment for the default event bus: a default-bus
+    // rule ARN is `...:rule/{name}`, a custom-bus rule is `...:rule/{bus}/{name}`.
+    let arn = if bus_name == "default" {
+        arn::build(ctx, "events", format!("rule/{name}"))
+    } else {
+        arn::build(ctx, "events", format!("rule/{bus_name}/{name}"))
+    };
 
     // AWS rejects mutations to a managed rule unless the caller is
     // the owning service. External callers (no ManagedBy on the

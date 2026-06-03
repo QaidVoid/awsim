@@ -137,7 +137,9 @@ mod tests {
         ))
         .unwrap();
         let arn = result["RuleArn"].as_str().unwrap();
-        assert!(arn.contains("rule/default/my-rule"), "arn={arn}");
+        // Default-bus rule ARNs omit the bus segment: `...:rule/my-rule`.
+        assert!(arn.ends_with(":rule/my-rule"), "arn={arn}");
+        assert!(!arn.contains("rule/default/"), "arn={arn}");
     }
 
     #[test]
