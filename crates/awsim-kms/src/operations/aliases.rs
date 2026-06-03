@@ -84,8 +84,8 @@ pub fn list_aliases(
             let alias_name = entry.key().clone();
             let target_key_id = entry.value().clone();
             let alias_arn = format!(
-                "arn:{}:kms:us-east-1:000000000000:{alias_name}",
-                ctx.partition
+                "arn:{}:kms:{}:{}:{alias_name}",
+                ctx.partition, ctx.region, ctx.account_id
             );
             (
                 alias_name.clone(),

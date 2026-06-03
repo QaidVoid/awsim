@@ -312,12 +312,12 @@ pub fn update_key_description(
 /// to the canonical KeyId string.
 ///
 /// The order matters: alias ARNs are checked before key ARNs because
-/// both share the `arn:aws:kms:` prefix — a generic `arn:aws:kms:…/X`
+/// both share the `arn:{partition}:kms:` prefix; a generic `:kms:…/X`
 /// match would otherwise treat the alias name as a raw key ID and fail
 /// the key-table lookup before the alias path is considered.
 pub fn resolve_key_id(state: &KmsState, input: &str) -> Result<String, AwsError> {
-    // Alias ARN: arn:aws:kms:{region}:{account}:alias/{name}
-    if input.starts_with("arn:aws:kms:") && input.contains(":alias/") {
+    // Alias ARN: arn:{partition}:kms:{region}:{account}:alias/{name}
+    if input.starts_with("arn:") && input.contains(":kms:") && input.contains(":alias/") {
         let alias_part = input
             .split(":alias/")
             .nth(1)
@@ -329,8 +329,8 @@ pub fn resolve_key_id(state: &KmsState, input: &str) -> Result<String, AwsError>
         return Err(error::not_found("Alias"));
     }
 
-    // Key ARN: arn:aws:kms:{region}:{account}:key/{uuid}
-    if input.starts_with("arn:aws:kms:") {
+    // Key ARN: arn:{partition}:kms:{region}:{account}:key/{uuid}
+    if input.starts_with("arn:") && input.contains(":kms:") {
         let key_id = input
             .rsplit('/')
             .next()
