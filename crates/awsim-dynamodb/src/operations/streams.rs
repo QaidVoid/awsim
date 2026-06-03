@@ -177,8 +177,11 @@ pub fn list_streams(
 ) -> Result<Value, AwsError> {
     let filter_table = opt_str(input, "TableName");
     let limit = input.get("Limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
+    let exclusive_start = opt_str(input, "ExclusiveStartStreamArn");
 
-    let streams: Vec<Value> = state
+    // Pair each stream with its ARN and order by it for a stable pagination
+    // cursor (state.tables is an unordered DashMap).
+    let mut streams: Vec<(String, Value)> = state
         .tables
         .iter()
         .filter(|entry| {
@@ -186,25 +189,41 @@ pub fn list_streams(
             if !t.stream_enabled || t.stream_arn.is_none() {
                 return false;
             }
-            if let Some(name) = filter_table {
-                t.name == name
-            } else {
-                true
-            }
+            filter_table.map(|name| t.name == name).unwrap_or(true)
         })
-        .take(limit)
         .map(|entry| {
             let t = entry.value();
-            let arn = t.stream_arn.as_deref().unwrap_or("");
-            json!({
+            let arn = t.stream_arn.clone().unwrap_or_default();
+            let value = json!({
                 "StreamArn": arn,
-                "StreamLabel": stream_label_from_arn(arn),
+                "StreamLabel": stream_label_from_arn(&arn),
                 "TableName": t.name,
-            })
+            });
+            (arn, value)
         })
         .collect();
+    streams.sort_by(|a, b| a.0.cmp(&b.0));
 
-    Ok(json!({ "Streams": streams }))
+    // Resume strictly after ExclusiveStartStreamArn.
+    let start_idx = exclusive_start
+        .and_then(|start| streams.iter().position(|(arn, _)| arn == start))
+        .map(|i| i + 1)
+        .unwrap_or(0);
+
+    let page: Vec<&(String, Value)> = streams[start_idx..].iter().take(limit).collect();
+    let last = if page.len() == limit && start_idx + limit < streams.len() {
+        page.last().map(|(arn, _)| arn.clone())
+    } else {
+        None
+    };
+
+    let mut result = json!({
+        "Streams": page.iter().map(|(_, v)| v.clone()).collect::<Vec<_>>(),
+    });
+    if let Some(arn) = last {
+        result["LastEvaluatedStreamArn"] = json!(arn);
+    }
+    Ok(result)
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -329,5 +348,72 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "ExpiredIteratorException");
+    }
+
+    fn streamed_table(name: &str, arn: &str) -> Table {
+        Table {
+            name: name.to_string(),
+            arn: format!("arn:aws:dynamodb:us-east-1:000000000000:table/{name}"),
+            key_schema: vec![KeySchemaElement {
+                attribute_name: "PK".into(),
+                key_type: "HASH".into(),
+            }],
+            attribute_definitions: vec![],
+            billing_mode: "PAY_PER_REQUEST".to_string(),
+            status: "ACTIVE".to_string(),
+            created_at: 0.0,
+            gsi: vec![],
+            lsi: vec![],
+            stream_enabled: true,
+            stream_arn: Some(arn.to_string()),
+            stream_view_type: Some("NEW_AND_OLD_IMAGES".to_string()),
+            stream_records: VecDeque::new(),
+            stream_sequence: 0,
+            ttl: TtlSpecification::default(),
+            tags: Default::default(),
+            deletion_protection_enabled: false,
+            sse: Default::default(),
+            read_capacity_units: 0,
+            write_capacity_units: 0,
+        }
+    }
+
+    #[test]
+    fn list_streams_paginates_with_exclusive_start() {
+        // More streams than the page size: every one must be reachable via
+        // LastEvaluatedStreamArn, exactly once, with no silent truncation.
+        let state = DynamoState::default();
+        for i in 0..5 {
+            let name = format!("tbl-{i}");
+            let arn =
+                format!("arn:aws:dynamodb:us-east-1:000000000000:table/{name}/stream/2026-01-0{i}");
+            state
+                .tables
+                .insert(name.clone(), streamed_table(&name, &arn));
+        }
+        let c = ctx();
+
+        let mut seen = Vec::new();
+        let mut start: Option<String> = None;
+        for _ in 0..10 {
+            let mut req = json!({ "Limit": 2 });
+            if let Some(s) = &start {
+                req["ExclusiveStartStreamArn"] = json!(s);
+            }
+            let resp = list_streams(&state, &req, &c).unwrap();
+            for s in resp["Streams"].as_array().unwrap() {
+                seen.push(s["StreamArn"].as_str().unwrap().to_string());
+            }
+            match resp.get("LastEvaluatedStreamArn") {
+                Some(v) if !v.is_null() => start = Some(v.as_str().unwrap().to_string()),
+                _ => break,
+            }
+        }
+
+        assert_eq!(seen.len(), 5, "every stream listed once, no dup/loss/loop");
+        let mut uniq = seen.clone();
+        uniq.sort();
+        uniq.dedup();
+        assert_eq!(uniq.len(), 5);
     }
 }

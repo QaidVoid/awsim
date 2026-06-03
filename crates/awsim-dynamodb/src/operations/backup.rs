@@ -179,8 +179,11 @@ pub fn list_backups(
 ) -> Result<Value, AwsError> {
     let table_filter = opt_str(input, "TableName");
     let limit = input.get("Limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
+    let exclusive_start = opt_str(input, "ExclusiveStartBackupArn");
 
-    let mut summaries: Vec<Value> = state
+    // Pair each summary with its BackupArn and order by it, so pagination
+    // has a stable cursor (state.backups is an unordered DashMap).
+    let mut summaries: Vec<(String, Value)> = state
         .backups
         .iter()
         .filter(|e| {
@@ -190,7 +193,7 @@ pub fn list_backups(
         })
         .map(|e| {
             let r = e.value();
-            json!({
+            let value = json!({
                 "TableName": r.table_name,
                 "TableArn": r.table_arn,
                 "BackupArn": r.backup_arn,
@@ -199,13 +202,33 @@ pub fn list_backups(
                 "BackupType": r.backup_type,
                 "BackupCreationDateTime": r.backup_creation_date_time,
                 "BackupSizeBytes": r.backup_size_bytes
-            })
+            });
+            (r.backup_arn.clone(), value)
         })
         .collect();
+    summaries.sort_by(|a, b| a.0.cmp(&b.0));
 
-    summaries.truncate(limit);
+    // Resume strictly after ExclusiveStartBackupArn.
+    let start_idx = exclusive_start
+        .and_then(|start| summaries.iter().position(|(arn, _)| arn == start))
+        .map(|i| i + 1)
+        .unwrap_or(0);
 
-    Ok(json!({ "BackupSummaries": summaries }))
+    let page: Vec<&(String, Value)> = summaries[start_idx..].iter().take(limit).collect();
+    // Emit a continuation token only when more results remain.
+    let last = if page.len() == limit && start_idx + limit < summaries.len() {
+        page.last().map(|(arn, _)| arn.clone())
+    } else {
+        None
+    };
+
+    let mut result = json!({
+        "BackupSummaries": page.iter().map(|(_, v)| v.clone()).collect::<Vec<_>>(),
+    });
+    if let Some(arn) = last {
+        result["LastEvaluatedBackupArn"] = json!(arn);
+    }
+    Ok(result)
 }
 
 pub fn restore_table_from_backup(
@@ -553,5 +576,55 @@ mod tests {
         )
         .unwrap();
         assert_eq!(resp["Count"], json!(1));
+    }
+
+    fn backup_record(arn: &str) -> BackupRecord {
+        BackupRecord {
+            backup_arn: arn.to_string(),
+            backup_name: "b".to_string(),
+            table_name: "t".to_string(),
+            table_arn: "arn:aws:dynamodb:us-east-1:000000000000:table/t".to_string(),
+            backup_status: "AVAILABLE".to_string(),
+            backup_type: "USER".to_string(),
+            backup_creation_date_time: 0.0,
+            backup_size_bytes: 0,
+            schema_snapshot: None,
+            items: vec![],
+        }
+    }
+
+    #[test]
+    fn list_backups_paginates_with_exclusive_start() {
+        // More backups than the page size: every one must be reachable via
+        // LastEvaluatedBackupArn, exactly once, with no silent truncation.
+        let state = DynamoState::default();
+        for i in 0..5 {
+            let arn = format!("arn:aws:dynamodb:us-east-1:000000000000:table/t/backup/{i:03}");
+            state.backups.insert(arn.clone(), backup_record(&arn));
+        }
+        let c = ctx();
+
+        let mut seen = Vec::new();
+        let mut start: Option<String> = None;
+        for _ in 0..10 {
+            let mut req = json!({ "Limit": 2 });
+            if let Some(s) = &start {
+                req["ExclusiveStartBackupArn"] = json!(s);
+            }
+            let resp = list_backups(&state, &req, &c).unwrap();
+            for b in resp["BackupSummaries"].as_array().unwrap() {
+                seen.push(b["BackupArn"].as_str().unwrap().to_string());
+            }
+            match resp.get("LastEvaluatedBackupArn") {
+                Some(v) if !v.is_null() => start = Some(v.as_str().unwrap().to_string()),
+                _ => break,
+            }
+        }
+
+        assert_eq!(seen.len(), 5, "every backup listed once, no dup/loss/loop");
+        let mut uniq = seen.clone();
+        uniq.sort();
+        uniq.dedup();
+        assert_eq!(uniq.len(), 5);
     }
 }
