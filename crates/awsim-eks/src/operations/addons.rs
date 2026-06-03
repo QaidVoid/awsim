@@ -1,3 +1,4 @@
+use awsim_core::pagination::{cap_max_results, paginate};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -181,6 +182,7 @@ pub fn list_addons(
         AwsError::bad_request("InvalidParameterException", "clusterName is required.")
     })?;
     require_cluster(state, cluster_name)?;
+    let max_results = cap_max_results(input["maxResults"].as_i64(), 100, 100);
     let mut addons: Vec<String> = state
         .addons
         .iter()
@@ -188,7 +190,14 @@ pub fn list_addons(
         .map(|e| e.key().1.clone())
         .collect();
     addons.sort();
-    Ok(json!({ "addons": addons }))
+    let page = paginate(addons, max_results, input["nextToken"].as_str(), |s| {
+        s.clone()
+    })?;
+    let mut resp = json!({ "addons": page.items });
+    if let Some(token) = page.next_token {
+        resp["nextToken"] = json!(token);
+    }
+    Ok(resp)
 }
 
 pub fn update_addon(

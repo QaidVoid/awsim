@@ -1,6 +1,7 @@
 use std::time::{Duration, SystemTime};
 
 use awsim_core::lifecycle::LifecycleSm;
+use awsim_core::pagination::{cap_max_results, paginate};
 use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
@@ -133,11 +134,20 @@ pub fn delete_cluster(
 
 pub fn list_clusters(
     state: &EksState,
-    _input: &Value,
+    input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let clusters: Vec<String> = state.clusters.iter().map(|e| e.key().clone()).collect();
-    Ok(json!({ "clusters": clusters }))
+    let max_results = cap_max_results(input["maxResults"].as_i64(), 100, 100);
+    let mut clusters: Vec<String> = state.clusters.iter().map(|e| e.key().clone()).collect();
+    clusters.sort();
+    let page = paginate(clusters, max_results, input["nextToken"].as_str(), |s| {
+        s.clone()
+    })?;
+    let mut resp = json!({ "clusters": page.items });
+    if let Some(token) = page.next_token {
+        resp["nextToken"] = json!(token);
+    }
+    Ok(resp)
 }
 
 pub fn update_cluster_config(

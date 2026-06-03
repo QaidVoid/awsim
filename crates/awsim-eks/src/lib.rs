@@ -295,6 +295,44 @@ mod tests {
     }
 
     #[test]
+    fn list_clusters_paginates() {
+        let svc = EksService::new();
+        let ctx = ctx();
+        for name in ["c1", "c2", "c3"] {
+            block_on(svc.handle(
+                "CreateCluster",
+                json!({ "name": name, "roleArn": "arn:aws:iam::000000000000:role/eks" }),
+                &ctx,
+            ))
+            .unwrap();
+        }
+
+        let mut seen: Vec<String> = Vec::new();
+        let mut token: Option<String> = None;
+        loop {
+            let mut input = json!({ "maxResults": 2 });
+            if let Some(t) = &token {
+                input["nextToken"] = json!(t);
+            }
+            let page = block_on(svc.handle("ListClusters", input, &ctx)).unwrap();
+            for c in page["clusters"].as_array().unwrap() {
+                seen.push(c.as_str().unwrap().to_string());
+            }
+            match page["nextToken"].as_str() {
+                Some(t) => token = Some(t.to_string()),
+                None => break,
+            }
+        }
+        seen.sort();
+        seen.dedup();
+        assert_eq!(
+            seen.len(),
+            3,
+            "every cluster returned exactly once across pages"
+        );
+    }
+
+    #[test]
     fn associate_encryption_config_replaces_cluster_encryption_config() {
         let svc = EksService::new();
         let ctx = ctx();

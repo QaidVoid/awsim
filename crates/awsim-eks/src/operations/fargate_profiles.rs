@@ -1,3 +1,4 @@
+use awsim_core::pagination::{cap_max_results, paginate};
 use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
@@ -105,13 +106,22 @@ pub fn list_fargate_profiles(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let cluster = input["clusterName"].as_str().unwrap_or("");
-    let names: Vec<String> = state
+    let max_results = cap_max_results(input["maxResults"].as_i64(), 100, 100);
+    let mut names: Vec<String> = state
         .fargate_profiles
         .iter()
         .filter(|e| e.key().0 == cluster)
         .map(|e| e.key().1.clone())
         .collect();
-    Ok(json!({ "fargateProfileNames": names }))
+    names.sort();
+    let page = paginate(names, max_results, input["nextToken"].as_str(), |s| {
+        s.clone()
+    })?;
+    let mut resp = json!({ "fargateProfileNames": page.items });
+    if let Some(token) = page.next_token {
+        resp["nextToken"] = json!(token);
+    }
+    Ok(resp)
 }
 
 fn serialize_fp(fp: &FargateProfile) -> Value {
