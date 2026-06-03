@@ -229,6 +229,30 @@ fn mfa_challenge_response(
     }
 }
 
+/// Build an MFA_SETUP challenge for a user who must configure MFA before
+/// sign-in can complete (the pool's MfaConfiguration is ON but the user has no
+/// usable factor yet). Registers a session so the follow-up
+/// AssociateSoftwareToken / SetUserMFAPreference flow resolves back to the user.
+fn mfa_setup_challenge(state: &CognitoState, pool_id: &str, username: &str) -> Value {
+    let session_id = Uuid::new_v4().to_string();
+    state.mfa_sessions.insert(
+        session_id.clone(),
+        MfaSession {
+            pool_id: pool_id.to_string(),
+            username: username.to_string(),
+            issued_at: now_epoch(),
+        },
+    );
+    json!({
+        "ChallengeName": "MFA_SETUP",
+        "Session": session_id,
+        "ChallengeParameters": {
+            "USER_ID_FOR_SRP": username,
+            "MFAS_CAN_SETUP": "[\"SOFTWARE_TOKEN_MFA\"]",
+        }
+    })
+}
+
 /// Build the concrete-factor challenge JSON after `SELECT_MFA_TYPE`, reusing
 /// the caller's existing session id so the follow-up response resolves back to
 /// the same user.
@@ -858,6 +882,10 @@ pub fn initiate_auth(
                 && (software_factor_enabled(user)
                     || sms_factor_enabled(user)
                     || email_factor_enabled(user));
+            // A pool with MfaConfiguration ON forces every user to have MFA, so
+            // a user with no usable factor must set one up before sign-in
+            // completes rather than receiving tokens.
+            let mfa_setup_required = pool.mfa_configuration == "ON";
             // Release the outer read guard before any mutable re-acquire so we
             // never hold two guards on the same pool at once.
             drop(pool);
@@ -876,10 +904,14 @@ pub fn initiate_auth(
                     issue_mfa_challenge(user)
                 };
                 if let Some(challenge) = challenge {
-                    info!(username = %username, "Cognito: InitiateAuth → MFA challenge");
+                    info!(username = %username, "Cognito: InitiateAuth -> MFA challenge");
                     return Ok(mfa_challenge_response(state, &pool_id, username, challenge));
                 }
-                // No usable factor materialised; fall through to issue tokens.
+            }
+
+            if mfa_setup_required {
+                info!(username = %username, "Cognito: InitiateAuth -> MFA_SETUP");
+                return Ok(mfa_setup_challenge(state, &pool_id, username));
             }
 
             let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
@@ -1190,6 +1222,9 @@ pub fn admin_initiate_auth(
                 && (software_factor_enabled(user)
                     || sms_factor_enabled(user)
                     || email_factor_enabled(user));
+            // MfaConfiguration ON forces MFA: a user with no usable factor must
+            // set one up before sign-in completes rather than receiving tokens.
+            let mfa_setup_required = pool.mfa_configuration == "ON";
             // Release the outer read guard before any mutable re-acquire so we
             // never hold two guards on the same pool at once.
             drop(pool);
@@ -1208,9 +1243,14 @@ pub fn admin_initiate_auth(
                     issue_mfa_challenge(user)
                 };
                 if let Some(challenge) = challenge {
-                    info!(username = %username, pool_id = %pool_id, "Cognito: AdminInitiateAuth → MFA challenge");
+                    info!(username = %username, pool_id = %pool_id, "Cognito: AdminInitiateAuth -> MFA challenge");
                     return Ok(mfa_challenge_response(state, pool_id, username, challenge));
                 }
+            }
+
+            if mfa_setup_required {
+                info!(username = %username, pool_id = %pool_id, "Cognito: AdminInitiateAuth -> MFA_SETUP");
+                return Ok(mfa_setup_challenge(state, pool_id, username));
             }
 
             let pool = state.user_pools.get(pool_id).ok_or_else(|| {
@@ -2831,5 +2871,26 @@ mod auth_flow_tests {
         )
         .unwrap();
         assert!(ok["AuthenticationResult"]["AccessToken"].as_str().is_some());
+    }
+
+    /// A pool with MfaConfiguration ON and a user with no configured factor must
+    /// return an MFA_SETUP challenge, never tokens.
+    #[test]
+    fn mfa_on_without_factor_challenges_setup() {
+        let (state, _pool, client_id) =
+            setup(&["ALLOW_USER_PASSWORD_AUTH"], "ON", "mona", "Passw0rd!");
+        let res = initiate_auth(
+            &state,
+            &json!({
+                "ClientId": client_id,
+                "AuthFlow": "USER_PASSWORD_AUTH",
+                "AuthParameters": { "USERNAME": "mona", "PASSWORD": "Passw0rd!" }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(res["ChallengeName"], "MFA_SETUP");
+        assert!(res.get("AuthenticationResult").is_none());
+        assert!(res["Session"].as_str().is_some());
     }
 }
