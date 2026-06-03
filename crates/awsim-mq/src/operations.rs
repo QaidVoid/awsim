@@ -97,14 +97,18 @@ fn broker_summary(b: &Broker) -> Value {
 }
 
 fn broker_describe(b: &Broker, users: Vec<Value>) -> Value {
+    // Endpoints carry the broker's region. The broker ARN already encodes it
+    // (arn:{partition}:mq:{region}:{account}:broker:...), so derive it there
+    // instead of hardcoding us-east-1.
+    let region = b.broker_arn.split(':').nth(3).unwrap_or("us-east-1");
     let mut obj = json!({
         "BrokerId": b.broker_id,
         "BrokerArn": b.broker_arn,
         "BrokerName": b.broker_name,
         "BrokerState": b.broker_state,
         "BrokerInstances": [{
-            "Endpoints": [format!("ssl://{}.mq.{}.amazonaws.com:61617", b.broker_id, "us-east-1")],
-            "ConsoleURL": format!("https://{}.mq.us-east-1.amazonaws.com:8162", b.broker_id),
+            "Endpoints": [format!("ssl://{}.mq.{region}.amazonaws.com:61617", b.broker_id)],
+            "ConsoleURL": format!("https://{}.mq.{region}.amazonaws.com:8162", b.broker_id),
             "IpAddress": "10.0.0.10",
         }],
         "AutoMinorVersionUpgrade": b.auto_minor_version_upgrade,
