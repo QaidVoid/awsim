@@ -335,42 +335,51 @@ pub fn query(
         if !evaluate_condition(&key_condition, &item, &expr_attr_names, &expr_attr_values)? {
             return Ok(true);
         }
+        // This item is "evaluated": the index surfaced it. AWS counts every
+        // evaluated item toward ScannedCount and the Limit, and applies any
+        // FilterExpression only AFTER that accounting.
         scanned_count += 1;
 
-        if let Some(ref filter) = filter_condition
-            && !evaluate_condition(filter, &item, &expr_attr_names, &expr_attr_values)?
-        {
-            return Ok(true);
-        }
+        let passes_filter = match &filter_condition {
+            Some(filter) => evaluate_condition(filter, &item, &expr_attr_names, &expr_attr_values)?,
+            None => true,
+        };
 
-        let projected = if select == "COUNT" {
-            DynamoItem::new()
+        if select == "COUNT" {
+            if passes_filter {
+                items.push(DynamoItem::new());
+            }
         } else {
-            // AWS applies the GSI/LSI Projection BEFORE the request's
-            // own ProjectionExpression: a KEYS_ONLY index can never
-            // surface a non-key attribute even if the caller asks for
-            // it. Match that order so the response shape lines up
-            // with what the index would have stored.
+            // AWS applies the GSI/LSI Projection BEFORE the request's own
+            // ProjectionExpression: a KEYS_ONLY index can never surface a
+            // non-key attribute even if the caller asks for it. The index
+            // view is also what the 1 MiB cap is charged against — examined
+            // bytes, not just matched bytes.
             let after_index = match &index_projection {
                 Some(p) => p.filter(&item),
                 None => item.clone(),
             };
-            apply_projection_to_item(&after_index, &projection_paths, &expr_attr_names)?
-        };
-        if select != "COUNT" {
-            response_bytes += estimate_item_bytes(&projected);
+            if passes_filter {
+                let projected =
+                    apply_projection_to_item(&after_index, &projection_paths, &expr_attr_names)?;
+                items.push(projected);
+            }
+            response_bytes += estimate_item_bytes(&after_index);
         }
-        items.push(projected);
+
+        // The cursor advances for every evaluated item so LastEvaluatedKey
+        // lands on the last item examined, not the last one matched — which
+        // is what AWS returns when a FilterExpression is present.
         last_item = Some(item);
 
+        // Limit caps the number of items EVALUATED (not matched); the 1 MiB
+        // cap tracks examined bytes. Either one ends the page with a LEK.
         if let Some(lim) = limit
-            && items.len() >= lim
+            && scanned_count >= lim
         {
             hit_limit = true;
             return Ok(false);
         }
-        // 1 MiB response cap matches real DynamoDB; clients resume via
-        // LastEvaluatedKey. Skipped for COUNT since payload is empty.
         if select != "COUNT" && response_bytes >= MAX_RESPONSE_BYTES {
             hit_limit = true;
             return Ok(false);
@@ -578,27 +587,39 @@ pub fn scan(
             let item = storage_value_to_item(attrs)
                 .ok_or_else(|| AwsError::internal("DynamoDB stored attrs is not an object"))?;
 
+            // Every row in this segment is "evaluated": it counts toward
+            // ScannedCount and the Limit before the FilterExpression runs.
             scanned_count += 1;
 
-            if let Some(ref filter) = filter_condition
-                && !evaluate_condition(filter, &item, &expr_attr_names, &expr_attr_values)?
-            {
-                return Ok(true);
+            let passes_filter = match &filter_condition {
+                Some(filter) => {
+                    evaluate_condition(filter, &item, &expr_attr_names, &expr_attr_values)?
+                }
+                None => true,
+            };
+
+            if select == "COUNT" {
+                if passes_filter {
+                    items.push(DynamoItem::new());
+                }
+            } else {
+                if passes_filter {
+                    let projected =
+                        apply_projection_to_item(&item, &projection_paths, &expr_attr_names)?;
+                    items.push(projected);
+                }
+                // 1 MiB cap is charged against examined bytes, not matches.
+                response_bytes += estimate_item_bytes(&item);
             }
 
-            let projected = if select == "COUNT" {
-                DynamoItem::new()
-            } else {
-                apply_projection_to_item(&item, &projection_paths, &expr_attr_names)?
-            };
-            if select != "COUNT" {
-                response_bytes += estimate_item_bytes(&projected);
-            }
-            items.push(projected);
+            // Cursor advances for every evaluated row so LastEvaluatedKey
+            // reflects the last item examined (matches AWS under a filter).
             last_item = Some(item);
 
+            // Limit caps EVALUATED items, not matches; 1 MiB caps examined
+            // bytes. Either ends the page and yields a LastEvaluatedKey.
             if let Some(lim) = limit
-                && items.len() >= lim
+                && scanned_count >= lim
             {
                 hit_limit = true;
                 return Ok(false);
@@ -1724,6 +1745,103 @@ mod tests {
             pks,
             vec!["i1", "i2", "i3"],
             "items sharing a gsi sort key must not be dropped across pages"
+        );
+    }
+
+    #[test]
+    fn query_limit_counts_evaluated_items_not_matches() {
+        // AWS defines Limit as the number of items EVALUATED, with the
+        // FilterExpression applied afterwards. 30 items, a filter matching
+        // every 10th. Limit=10 evaluates sk 000..009 (only sk000 matches),
+        // so a single page is Count=1, ScannedCount=10, LEK parked at sk009.
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        for i in 0..30 {
+            put_item(
+                &state,
+                &sqlite,
+                &json!({
+                    "TableName": "t",
+                    "Item": {
+                        "pk": {"S": "p"},
+                        "sk": {"S": format!("{i:03}")},
+                        "bucket": {"N": (i % 10).to_string()},
+                    },
+                }),
+                &c,
+            )
+            .unwrap();
+        }
+
+        let req = json!({
+            "TableName": "t",
+            "KeyConditionExpression": "pk = :pk",
+            "FilterExpression": "bucket = :z",
+            "ExpressionAttributeValues": { ":pk": {"S": "p"}, ":z": {"N": "0"} },
+            "Limit": 10,
+        });
+        let page1 = query(&state, &sqlite, &req, &c).unwrap();
+        assert_eq!(page1["Count"], json!(1), "only sk000 matches in first 10");
+        assert_eq!(
+            page1["ScannedCount"],
+            json!(10),
+            "Limit caps evaluated items"
+        );
+        assert_eq!(
+            page1["LastEvaluatedKey"]["sk"]["S"],
+            json!("009"),
+            "LEK parks on the last EVALUATED item, not the last match"
+        );
+
+        // Full pagination still returns every match exactly once (no loss).
+        let matches = paginate_pks(&state, &sqlite, &req);
+        assert_eq!(matches.len(), 3, "matches are sk 000, 010, 020");
+    }
+
+    #[test]
+    fn scan_limit_counts_evaluated_items_not_matches() {
+        // Same semantics for Scan: 30 rows in 30 partitions, scanned in
+        // (pk,sk) order p000..p029. Limit=10 evaluates p000..p009; only
+        // p000 has bucket 0 -> Count=1, ScannedCount=10, LEK at p009.
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        for i in 0..30 {
+            put_item(
+                &state,
+                &sqlite,
+                &json!({
+                    "TableName": "t",
+                    "Item": {
+                        "pk": {"S": format!("p{i:03}")},
+                        "sk": {"S": "row"},
+                        "bucket": {"N": (i % 10).to_string()},
+                    },
+                }),
+                &c,
+            )
+            .unwrap();
+        }
+
+        let resp = scan(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "FilterExpression": "bucket = :z",
+                "ExpressionAttributeValues": { ":z": {"N": "0"} },
+                "Limit": 10,
+            }),
+            &c,
+        )
+        .unwrap();
+        assert_eq!(resp["ScannedCount"], json!(10), "Limit caps evaluated rows");
+        assert_eq!(resp["Count"], json!(1), "only p000 matches in first 10");
+        assert_eq!(
+            resp["LastEvaluatedKey"]["pk"]["S"],
+            json!("p009"),
+            "LEK parks on the last evaluated row"
         );
     }
 }
