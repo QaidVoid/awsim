@@ -123,8 +123,8 @@ pub fn create_repository(
     }
 
     let arn = format!(
-        "arn:aws:ecr:{}:{}:repository/{}",
-        ctx.region, ctx.account_id, name
+        "arn:{}:ecr:{}:{}:repository/{}",
+        ctx.partition, ctx.region, ctx.account_id, name
     );
     let repository_uri = format!(
         "{}.dkr.ecr.{}.localhost/{}",
