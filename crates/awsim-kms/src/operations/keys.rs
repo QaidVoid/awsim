@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use awsim_core::pagination::{cap_max_results, paginate};
 use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -112,21 +113,30 @@ pub fn describe_key(
 
 pub fn list_keys(
     state: &KmsState,
-    _input: &Value,
+    input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let keys: Vec<Value> = state
+    let limit = cap_max_results(input["Limit"].as_i64(), 100, 1000);
+    let mut items: Vec<(String, Value)> = state
         .keys
         .iter()
         .map(|entry| {
-            json!({
-                "KeyId": entry.key_id,
-                "KeyArn": entry.arn,
-            })
+            (
+                entry.key_id.clone(),
+                json!({ "KeyId": entry.key_id, "KeyArn": entry.arn }),
+            )
         })
         .collect();
+    items.sort_by(|a, b| a.0.cmp(&b.0));
 
-    Ok(json!({ "Keys": keys, "Truncated": false }))
+    let page = paginate(items, limit, input["Marker"].as_str(), |(id, _)| id.clone())?;
+    let keys: Vec<Value> = page.items.into_iter().map(|(_, v)| v).collect();
+
+    let mut resp = json!({ "Keys": keys, "Truncated": page.next_token.is_some() });
+    if let Some(marker) = page.next_token {
+        resp["NextMarker"] = json!(marker);
+    }
+    Ok(resp)
 }
 
 // ---------------------------------------------------------------------------

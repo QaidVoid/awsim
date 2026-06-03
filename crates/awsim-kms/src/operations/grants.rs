@@ -1,5 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use awsim_core::pagination::{cap_max_results, paginate};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -150,14 +151,23 @@ pub fn list_grants(
 
     let resolved_id = resolve_key_id(state, key_id_input)?;
 
-    let grants: Vec<Value> = state
+    let limit = cap_max_results(input["Limit"].as_i64(), 100, 1000);
+    let mut items: Vec<(String, Value)> = state
         .grants
         .iter()
         .filter(|e| e.value().key_id == resolved_id)
-        .map(|e| grant_to_value(e.value()))
+        .map(|e| (e.value().grant_id.clone(), grant_to_value(e.value())))
         .collect();
+    items.sort_by(|a, b| a.0.cmp(&b.0));
 
-    Ok(json!({ "Grants": grants, "Truncated": false }))
+    let page = paginate(items, limit, input["Marker"].as_str(), |(id, _)| id.clone())?;
+    let grants: Vec<Value> = page.items.into_iter().map(|(_, v)| v).collect();
+
+    let mut resp = json!({ "Grants": grants, "Truncated": page.next_token.is_some() });
+    if let Some(marker) = page.next_token {
+        resp["NextMarker"] = json!(marker);
+    }
+    Ok(resp)
 }
 
 // ---------------------------------------------------------------------------

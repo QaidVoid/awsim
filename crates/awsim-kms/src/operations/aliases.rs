@@ -1,3 +1,4 @@
+use awsim_core::pagination::{cap_max_results, paginate};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -72,10 +73,11 @@ pub fn delete_alias(
 
 pub fn list_aliases(
     state: &KmsState,
-    _input: &Value,
+    input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let aliases: Vec<Value> = state
+    let limit = cap_max_results(input["Limit"].as_i64(), 100, 1000);
+    let mut items: Vec<(String, Value)> = state
         .aliases
         .iter()
         .map(|entry| {
@@ -85,15 +87,28 @@ pub fn list_aliases(
                 "arn:{}:kms:us-east-1:000000000000:{alias_name}",
                 ctx.partition
             );
-            json!({
-                "AliasName": alias_name,
-                "AliasArn": alias_arn,
-                "TargetKeyId": target_key_id,
-            })
+            (
+                alias_name.clone(),
+                json!({
+                    "AliasName": alias_name,
+                    "AliasArn": alias_arn,
+                    "TargetKeyId": target_key_id,
+                }),
+            )
         })
         .collect();
+    items.sort_by(|a, b| a.0.cmp(&b.0));
 
-    Ok(json!({ "Aliases": aliases, "Truncated": false }))
+    let page = paginate(items, limit, input["Marker"].as_str(), |(name, _)| {
+        name.clone()
+    })?;
+    let aliases: Vec<Value> = page.items.into_iter().map(|(_, v)| v).collect();
+
+    let mut resp = json!({ "Aliases": aliases, "Truncated": page.next_token.is_some() });
+    if let Some(marker) = page.next_token {
+        resp["NextMarker"] = json!(marker);
+    }
+    Ok(resp)
 }
 
 pub fn update_alias(

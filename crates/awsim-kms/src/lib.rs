@@ -943,4 +943,45 @@ mod tests {
         assert_eq!(described["KeyMetadata"]["KeyState"], json!("Enabled"));
         assert_eq!(described["KeyMetadata"]["Origin"], json!("EXTERNAL"));
     }
+
+    #[test]
+    fn test_list_keys_paginates() {
+        let svc = KmsService::new();
+        let ctx = ctx();
+        for _ in 0..3 {
+            block_on(svc.handle("CreateKey", json!({ "KeySpec": "SYMMETRIC_DEFAULT" }), &ctx))
+                .unwrap();
+        }
+
+        let mut seen: Vec<String> = Vec::new();
+        let mut marker: Option<String> = None;
+        loop {
+            let mut input = json!({ "Limit": 2 });
+            if let Some(m) = &marker {
+                input["Marker"] = json!(m);
+            }
+            let page = block_on(svc.handle("ListKeys", input, &ctx)).unwrap();
+            for key in page["Keys"].as_array().unwrap() {
+                seen.push(key["KeyId"].as_str().unwrap().to_string());
+            }
+            match page["NextMarker"].as_str() {
+                Some(m) => {
+                    assert_eq!(page["Truncated"], json!(true));
+                    marker = Some(m.to_string());
+                }
+                None => {
+                    assert_eq!(page["Truncated"], json!(false));
+                    break;
+                }
+            }
+        }
+
+        seen.sort();
+        seen.dedup();
+        assert_eq!(
+            seen.len(),
+            3,
+            "every key returned exactly once across pages"
+        );
+    }
 }
