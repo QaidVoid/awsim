@@ -419,8 +419,14 @@ pub struct CognitoUser {
     /// cleared once expired or after a successful match.
     #[serde(default)]
     pub code_locked_until_secs: Option<u64>,
-    /// Revoked refresh tokens for this user.
+    /// Explicitly revoked refresh tokens for this user.
     pub revoked_refresh_tokens: Vec<String>,
+    /// Unix seconds of the most recent global sign-out for this user. Refresh
+    /// tokens minted at or before this time are rejected, so GlobalSignOut and
+    /// AdminUserGlobalSignOut invalidate outstanding refresh tokens while a
+    /// fresh sign-in (which mints a newer token) keeps working.
+    #[serde(default)]
+    pub signed_out_at: Option<u64>,
     /// Whether MFA is enabled for this user.
     pub mfa_enabled: bool,
     /// Preferred MFA method: "SOFTWARE_TOKEN_MFA" or "SMS_MFA"

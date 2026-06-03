@@ -157,6 +157,7 @@ fn make_user(
         code_failed_attempts: 0,
         code_locked_until_secs: None,
         revoked_refresh_tokens: Vec::new(),
+        signed_out_at: None,
         mfa_enabled: false,
         mfa_preferred: None,
         totp_secret: None,
@@ -1270,6 +1271,21 @@ pub fn global_sign_out(
         .revoked
         .insert(access_token.to_string(), ());
 
+    // Invalidate the caller's outstanding refresh tokens by stamping the
+    // sign-out time on their user record; tokens minted before now stop
+    // refreshing while a fresh sign-in still works.
+    if let Some(claims) = crate::jwt::verify_access_token(access_token) {
+        let now = now_epoch();
+        for mut pool in state.user_pools.iter_mut() {
+            if pool.clients.contains_key(&claims.client_id) {
+                if let Some(user) = pool.users.get_mut(&claims.username) {
+                    user.signed_out_at = Some(now);
+                }
+                break;
+            }
+        }
+    }
+
     info!("Cognito: global sign out");
     Ok(json!({}))
 }
@@ -1919,6 +1935,7 @@ pub fn admin_user_global_sign_out(
         state.revoked_tokens.revoked.insert(token.clone(), ());
     }
     user.revoked_refresh_tokens.clear();
+    user.signed_out_at = Some(now_epoch());
 
     info!(username = %username, pool_id = %pool_id, "Cognito: admin global sign out");
     Ok(json!({}))
@@ -2109,6 +2126,7 @@ mod tests {
             code_failed_attempts: 0,
             code_locked_until_secs: None,
             revoked_refresh_tokens: Vec::new(),
+            signed_out_at: None,
             mfa_enabled: false,
             mfa_preferred: None,
             totp_secret: None,

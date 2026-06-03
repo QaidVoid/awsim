@@ -167,6 +167,7 @@ pub async fn seed(
                 code_failed_attempts: 0,
                 code_locked_until_secs: None,
                 revoked_refresh_tokens: Vec::new(),
+                signed_out_at: None,
                 mfa_enabled: false,
                 mfa_preferred: None,
                 totp_secret: None,

@@ -425,6 +425,33 @@ fn complete_software_token_mfa(
     Ok(result)
 }
 
+/// Reject a refresh token that was explicitly revoked (RevokeToken) or that
+/// predates the user's most recent global sign-out. Shared by REFRESH_TOKEN_AUTH
+/// and GetTokensFromRefreshToken so both honour revocation. A token whose issue
+/// time cannot be read (legacy format) is treated as stale once the user has
+/// signed out, failing closed.
+fn ensure_refresh_token_active(
+    state: &CognitoState,
+    user: &CognitoUser,
+    refresh_tok: &str,
+) -> Result<(), AwsError> {
+    if state.revoked_tokens.revoked.contains_key(refresh_tok) {
+        return Err(AwsError::forbidden(
+            "NotAuthorizedException",
+            "Refresh Token has been revoked",
+        ));
+    }
+    if let Some(signed_out_at) = user.signed_out_at
+        && jwt::refresh_token_issued_at(refresh_tok).is_none_or(|issued| issued < signed_out_at)
+    {
+        return Err(AwsError::forbidden(
+            "NotAuthorizedException",
+            "Refresh Token has been revoked",
+        ));
+    }
+    Ok(())
+}
+
 /// Build the list of GroupRolePair for a user from pool group data.
 fn group_role_pairs(pool: &UserPool, user_groups: &[String]) -> Vec<GroupRolePair> {
     user_groups
@@ -902,7 +929,6 @@ pub fn initiate_auth(
             Ok(result)
         }
         "REFRESH_TOKEN_AUTH" | "REFRESH_TOKEN" => {
-            // Accept any refresh token for local dev; return fresh tokens.
             let refresh_tok = params["REFRESH_TOKEN"].as_str().ok_or_else(|| {
                 AwsError::bad_request("InvalidParameter", "REFRESH_TOKEN is required")
             })?;
@@ -933,6 +959,7 @@ pub fn initiate_auth(
                 .ok_or_else(|| {
                     AwsError::not_found("UserNotFoundException", "User not found for refresh token")
                 })?;
+            ensure_refresh_token_active(state, user, refresh_tok)?;
 
             let pairs = group_role_pairs(&pool, &user.groups);
             let validity = pool
@@ -1607,6 +1634,7 @@ pub fn get_tokens_from_refresh_token(
         .ok_or_else(|| {
             AwsError::not_found("UserNotFoundException", "User not found for refresh token")
         })?;
+    ensure_refresh_token_active(state, user, refresh_tok)?;
 
     let pairs = group_role_pairs(&pool, &user.groups);
     Ok(build_auth_result_pub(
@@ -2662,5 +2690,146 @@ mod auth_flow_tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "NotAuthorizedException");
+    }
+
+    /// RevokeToken must make a later REFRESH_TOKEN_AUTH fail: the refresh path
+    /// has to consult the revoked-token set.
+    #[test]
+    fn revoked_refresh_token_cannot_mint_tokens() {
+        let (state, _pool, client_id) = setup(
+            &["ALLOW_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"],
+            "OFF",
+            "rita",
+            "Passw0rd!",
+        );
+        let c = ctx();
+        let auth = initiate_auth(
+            &state,
+            &json!({
+                "ClientId": client_id,
+                "AuthFlow": "USER_PASSWORD_AUTH",
+                "AuthParameters": { "USERNAME": "rita", "PASSWORD": "Passw0rd!" }
+            }),
+            &c,
+        )
+        .unwrap();
+        let refresh = auth["AuthenticationResult"]["RefreshToken"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let refreshed = initiate_auth(
+            &state,
+            &json!({
+                "ClientId": client_id,
+                "AuthFlow": "REFRESH_TOKEN_AUTH",
+                "AuthParameters": { "REFRESH_TOKEN": refresh }
+            }),
+            &c,
+        )
+        .unwrap();
+        assert!(
+            refreshed["AuthenticationResult"]["AccessToken"]
+                .as_str()
+                .is_some()
+        );
+
+        users::revoke_token(
+            &state,
+            &json!({ "Token": refresh, "ClientId": client_id }),
+            &c,
+        )
+        .unwrap();
+
+        let err = initiate_auth(
+            &state,
+            &json!({
+                "ClientId": client_id,
+                "AuthFlow": "REFRESH_TOKEN_AUTH",
+                "AuthParameters": { "REFRESH_TOKEN": refresh }
+            }),
+            &c,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "NotAuthorizedException");
+    }
+
+    /// GlobalSignOut must invalidate refresh tokens issued before it while a
+    /// fresh sign-in still mints a usable one.
+    #[test]
+    fn global_sign_out_invalidates_outstanding_refresh_tokens() {
+        let (state, pool_id, client_id) = setup(
+            &["ALLOW_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"],
+            "OFF",
+            "gabe",
+            "Passw0rd!",
+        );
+        let c = ctx();
+        let auth = initiate_auth(
+            &state,
+            &json!({
+                "ClientId": client_id,
+                "AuthFlow": "USER_PASSWORD_AUTH",
+                "AuthParameters": { "USERNAME": "gabe", "PASSWORD": "Passw0rd!" }
+            }),
+            &c,
+        )
+        .unwrap();
+        let access = auth["AuthenticationResult"]["AccessToken"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // A refresh token stamped before the sign-out instant.
+        let sub = state
+            .user_pools
+            .get(&pool_id)
+            .unwrap()
+            .users
+            .get("gabe")
+            .unwrap()
+            .sub
+            .clone();
+        let old_refresh = format!("refresh-{sub}.0.{}", Uuid::new_v4());
+
+        users::global_sign_out(&state, &json!({ "AccessToken": access }), &c).unwrap();
+
+        let err = initiate_auth(
+            &state,
+            &json!({
+                "ClientId": client_id,
+                "AuthFlow": "REFRESH_TOKEN_AUTH",
+                "AuthParameters": { "REFRESH_TOKEN": old_refresh }
+            }),
+            &c,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "NotAuthorizedException");
+
+        let reauth = initiate_auth(
+            &state,
+            &json!({
+                "ClientId": client_id,
+                "AuthFlow": "USER_PASSWORD_AUTH",
+                "AuthParameters": { "USERNAME": "gabe", "PASSWORD": "Passw0rd!" }
+            }),
+            &c,
+        )
+        .unwrap();
+        let fresh_refresh = reauth["AuthenticationResult"]["RefreshToken"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let ok = initiate_auth(
+            &state,
+            &json!({
+                "ClientId": client_id,
+                "AuthFlow": "REFRESH_TOKEN_AUTH",
+                "AuthParameters": { "REFRESH_TOKEN": fresh_refresh }
+            }),
+            &c,
+        )
+        .unwrap();
+        assert!(ok["AuthenticationResult"]["AccessToken"].as_str().is_some());
     }
 }

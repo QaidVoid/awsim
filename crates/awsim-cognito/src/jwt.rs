@@ -253,9 +253,25 @@ pub fn access_token(
     sign(&payload)
 }
 
-/// Generate a refresh token (opaque for local dev, just a UUID).
+/// Generate an opaque refresh token of the form
+/// `refresh-{sub}.{issued_at}.{uuid}`. The embedded issue time lets the auth
+/// endpoints reject tokens minted before a global sign-out without tracking
+/// every outstanding token. The `sub` is a UUID and so never contains a `.`,
+/// keeping the segment layout unambiguous.
 pub fn refresh_token(sub: &str) -> String {
-    format!("refresh-{sub}.{}", uuid::Uuid::new_v4())
+    format!("refresh-{sub}.{}.{}", now_epoch(), uuid::Uuid::new_v4())
+}
+
+/// Extract the issue time (Unix seconds) embedded in a refresh token produced
+/// by [`refresh_token`]. Returns `None` for a malformed token or one minted by
+/// the older timestamp-less format.
+pub fn refresh_token_issued_at(token: &str) -> Option<u64> {
+    token
+        .strip_prefix("refresh-")?
+        .split('.')
+        .nth(1)?
+        .parse()
+        .ok()
 }
 
 /// Verified access-token claims.
