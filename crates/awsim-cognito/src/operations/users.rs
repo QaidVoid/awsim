@@ -809,7 +809,9 @@ pub fn admin_set_user_password(
     let password = input["Password"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Password is required"))?;
-    let permanent = input["Permanent"].as_bool().unwrap_or(true);
+    // AWS defaults Permanent to false: an omitted flag means a temporary
+    // password that the user must change on next sign-in.
+    let permanent = input["Permanent"].as_bool().unwrap_or(false);
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::not_found(

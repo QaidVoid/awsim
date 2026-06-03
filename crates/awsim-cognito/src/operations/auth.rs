@@ -2893,4 +2893,27 @@ mod auth_flow_tests {
         assert!(res.get("AuthenticationResult").is_none());
         assert!(res["Session"].as_str().is_some());
     }
+
+    /// AdminSetUserPassword without Permanent defaults to a temporary password,
+    /// placing the user in FORCE_CHANGE_PASSWORD.
+    #[test]
+    fn admin_set_user_password_defaults_to_temporary() {
+        let (state, pool_id, _client_id) = setup(&[], "OFF", "perry", "Passw0rd!");
+        users::admin_set_user_password(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Username": "perry", "Password": "NewPassw0rd!" }),
+            &ctx(),
+        )
+        .unwrap();
+        let status = state
+            .user_pools
+            .get(&pool_id)
+            .unwrap()
+            .users
+            .get("perry")
+            .unwrap()
+            .status
+            .clone();
+        assert_eq!(status, "FORCE_CHANGE_PASSWORD");
+    }
 }
