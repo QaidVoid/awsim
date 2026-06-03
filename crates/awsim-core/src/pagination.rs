@@ -17,8 +17,10 @@
 //!
 //! The result is a [`Page<T>`] containing the items for this page plus
 //! the token to resume from. The marker stored in the token is the key of
-//! the *first item not yet returned*, so resuming a page hands back
-//! exactly the next slice with no overlap or gap.
+//! the *first item not yet returned* together with how many earlier items
+//! shared that key, so a non-unique sort key cannot re-emit an item across a
+//! page boundary; resuming a page hands back exactly the next slice with no
+//! overlap or gap.
 //!
 //! Items whose keys compare lexicographically less than the marker are
 //! skipped, which means the helper handles a resource being deleted
@@ -203,11 +205,30 @@ pub fn clamp_max_results_strict(
     Ok(n)
 }
 
+/// Encode a resume marker as `{dup_before}:{key}`, where `dup_before` is the
+/// number of already-returned items that share `key`.
+fn join_marker(key: &str, dup_before: usize) -> String {
+    format!("{dup_before}:{key}")
+}
+
+/// Parse a marker written by [`join_marker`]. Tolerates a bare key (treated as
+/// `dup_before` 0) for tokens seeded outside [`paginate`].
+fn split_marker(marker: &str) -> (String, usize) {
+    if let Some((count, key)) = marker.split_once(':')
+        && let Ok(dup) = count.parse::<usize>()
+    {
+        return (key.to_string(), dup);
+    }
+    (marker.to_string(), 0)
+}
+
 /// Paginate a sorted owned `Vec<T>`.
 ///
 /// `key_fn` extracts the marker key from an item. Items must be sorted
 /// by that same key for the resume-after-deletion behavior to work
-/// correctly.
+/// correctly. The key need not be unique: the resume marker records how many
+/// items sharing the boundary key were already returned, so duplicate keys do
+/// not cause an item to be re-emitted or skipped.
 ///
 /// `max_results` is the page size; the caller is expected to have
 /// already applied any service-specific bounds via [`cap_max_results`]
@@ -231,21 +252,40 @@ where
     let start_idx = match starting_token {
         None => 0,
         Some(token) => {
-            let marker = decode_token(token)?;
+            let (marker_key, dup_skip) = split_marker(&decode_token(token)?);
+            let mut equal_seen = 0usize;
             items
                 .iter()
-                .position(|item| key_fn(item) >= marker)
+                .position(|item| {
+                    let k = key_fn(item);
+                    if k < marker_key {
+                        return false;
+                    }
+                    if k == marker_key && equal_seen < dup_skip {
+                        equal_seen += 1;
+                        return false;
+                    }
+                    true
+                })
                 .unwrap_or(items.len())
         }
     };
 
     let total_len = items.len();
     let take_n = max_results.min(total_len.saturating_sub(start_idx));
+    let boundary_idx = start_idx + take_n;
 
-    let mut iter = items.into_iter().skip(start_idx);
-    let page_items: Vec<T> = iter.by_ref().take(take_n).collect();
+    // Derive the resume marker before `items` is consumed.
+    let next_token = (boundary_idx < total_len).then(|| {
+        let boundary_key = key_fn(&items[boundary_idx]);
+        let dup_before = items[..boundary_idx]
+            .iter()
+            .filter(|item| key_fn(item) == boundary_key)
+            .count();
+        encode_token(&join_marker(&boundary_key, dup_before))
+    });
 
-    let next_token = iter.next().map(|next| encode_token(&key_fn(&next)));
+    let page_items: Vec<T> = items.into_iter().skip(start_idx).take(take_n).collect();
 
     Ok(Page {
         items: page_items,
@@ -287,12 +327,30 @@ mod tests {
     #[test]
     fn page_full_with_more_emits_token() {
         let items = vec!["alpha", "bravo", "charlie", "delta"];
-        let page = paginate(items, 2, None, key).unwrap();
+        let page = paginate(items.clone(), 2, None, key).unwrap();
         assert_eq!(page.items, vec!["alpha", "bravo"]);
-        assert_eq!(
-            decode_token(page.next_token.as_deref().unwrap()).unwrap(),
-            "charlie"
-        );
+        let token = page.next_token.expect("more items remain");
+        let next = paginate(items, 2, Some(&token), key).unwrap();
+        assert_eq!(next.items, vec!["charlie", "delta"]);
+    }
+
+    #[test]
+    fn duplicate_keys_are_not_re_emitted_across_pages() {
+        // Two of the four items share the sort key "2"; paging two at a time
+        // must still yield each item exactly once.
+        let items = vec![("a", 2), ("b", 2), ("c", 2), ("d", 3)];
+        let key2 = |it: &(&'static str, i32)| it.1.to_string();
+        let mut seen: Vec<&'static str> = Vec::new();
+        let mut token: Option<String> = None;
+        loop {
+            let page = paginate(items.clone(), 2, token.as_deref(), key2).unwrap();
+            seen.extend(page.items.iter().map(|it| it.0));
+            match page.next_token {
+                Some(t) => token = Some(t),
+                None => break,
+            }
+        }
+        assert_eq!(seen, vec!["a", "b", "c", "d"]);
     }
 
     #[test]
