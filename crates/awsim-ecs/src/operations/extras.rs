@@ -161,13 +161,13 @@ pub fn describe_capacity_providers(
     // Default system providers always available
     let mut providers: Vec<Value> = vec![
         json!({
-            "capacityProviderArn": arn::build_partition(ctx, "ecs", "capacity-provider/FARGATE"),
+            "capacityProviderArn": arn::build(ctx, "ecs", "capacity-provider/FARGATE"),
             "name": "FARGATE",
             "status": "ACTIVE",
             "updateStatus": "DELETE_COMPLETE",
         }),
         json!({
-            "capacityProviderArn": arn::build_partition(ctx, "ecs", "capacity-provider/FARGATE_SPOT"),
+            "capacityProviderArn": arn::build(ctx, "ecs", "capacity-provider/FARGATE_SPOT"),
             "name": "FARGATE_SPOT",
             "status": "ACTIVE",
             "updateStatus": "DELETE_COMPLETE",
@@ -222,7 +222,7 @@ pub fn put_account_setting(
         "setting": {
             "name": name,
             "value": value,
-            "principalArn": format!("arn:{}:iam::000000000000:root", ctx.partition),
+            "principalArn": format!("arn:{}:iam::{}:root", ctx.partition, ctx.account_id),
         }
     }))
 }
@@ -260,7 +260,7 @@ pub fn list_account_settings(
                 json!({
                     "name": name,
                     "value": val,
-                    "principalArn": format!("arn:{}:iam::000000000000:root", ctx.partition),
+                    "principalArn": format!("arn:{}:iam::{}:root", ctx.partition, ctx.account_id),
                 })
             })
             .collect()
@@ -273,7 +273,7 @@ pub fn list_account_settings(
                 json!({
                     "name": e.key(),
                     "value": e.value(),
-                    "principalArn": format!("arn:{}:iam::000000000000:root", ctx.partition),
+                    "principalArn": format!("arn:{}:iam::{}:root", ctx.partition, ctx.account_id),
                 })
             })
             .collect()
@@ -324,7 +324,7 @@ pub fn update_container_agent(
 
     Ok(json!({
         "containerInstance": {
-            "containerInstanceArn": format!("arn:{}:ecs:us-east-1:000000000000:container-instance/{}/stub-instance", ctx.partition, name),
+            "containerInstanceArn": format!("arn:{}:ecs:{}:{}:container-instance/{}/stub-instance", ctx.partition, ctx.region, ctx.account_id, name),
             "ec2InstanceId": "i-stub",
             "agentConnected": true,
             "runningTasksCount": 0,
