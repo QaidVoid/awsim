@@ -71,8 +71,8 @@ pub fn handle(
     }
 
     let arn = format!(
-        "arn:aws:kinesis:{}:{}:stream/{}",
-        ctx.region, ctx.account_id, stream_name
+        "arn:{}:kinesis:{}:{}:stream/{}",
+        ctx.partition, ctx.region, ctx.account_id, stream_name
     );
 
     let ranges = divide_hash_space(shard_count);
