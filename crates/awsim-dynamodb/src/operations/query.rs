@@ -146,6 +146,26 @@ fn last_evaluated_key(
     lek
 }
 
+/// Validate a caller-supplied `ExclusiveStartKey` against the key schema the
+/// operation resumes on. Real DynamoDB rejects a starting key that is missing
+/// any required attribute, including an empty `{}`, with a ValidationException.
+/// Without this the simulator would silently treat a malformed cursor as a
+/// request to start from the beginning, masking client bugs that fail against
+/// real AWS. `required` is the set of key attribute names the resume needs
+/// (the index keys plus the base primary key). Empty names and duplicates are
+/// ignored.
+fn validate_exclusive_start_key(
+    esk: &serde_json::Map<String, Value>,
+    required: &[&str],
+) -> Result<(), AwsError> {
+    for name in required {
+        if !name.is_empty() && !esk.contains_key(*name) {
+            return Err(AwsError::validation("The provided starting key is invalid"));
+        }
+    }
+    Ok(())
+}
+
 pub fn query(
     state: &DynamoState,
     sqlite: &SqliteStore,
@@ -291,6 +311,22 @@ pub fn query(
         &expr_attr_names,
         &expr_attr_values,
     );
+
+    // A supplied ExclusiveStartKey must carry the full key schema the resume
+    // needs (index hash/range plus the base primary key). Reject `{}` and
+    // partial cursors the way real DynamoDB does, rather than silently
+    // restarting from the beginning.
+    if let Some(esk) = exclusive_start_key.as_ref() {
+        validate_exclusive_start_key(
+            esk,
+            &[
+                &hash_key_name,
+                range_key_name.as_deref().unwrap_or(""),
+                &base_hash_name,
+                base_range_name.as_deref().unwrap_or(""),
+            ],
+        )?;
+    }
 
     // Convert ExclusiveStartKey into resume cursors. The base-table query
     // (and LSI, which executes over the base partition) resumes on the base
@@ -550,6 +586,15 @@ pub fn scan(
     // slices. Both must be supplied together; we hash each row's (pk, sk)
     // and only emit those whose hash mod TotalSegments == Segment.
     let segmenting = parse_segments(input)?;
+
+    // A supplied ExclusiveStartKey must carry the base primary key. Reject
+    // `{}` and partial cursors the way real DynamoDB does.
+    if let Some(esk) = exclusive_start_key.as_ref() {
+        validate_exclusive_start_key(
+            esk,
+            &[&hash_key_name, range_key_name.as_deref().unwrap_or("")],
+        )?;
+    }
 
     // Translate ExclusiveStartKey → (pk, sk) tuple SQLite uses for
     // resume. Tables with no sort key encode sk as the empty string.
@@ -1757,7 +1802,7 @@ mod tests {
         // Mirrors a real client: query a GSI (ByUserStatus) with
         //   GSI_PK = :pk AND begins_with(GSI_SK, "ACTIVE#")
         // plus FilterExpression attribute_not_exists(deletedAt),
-        // ScanIndexForward=false, Limit=50 -- then follow LastEvaluatedKey.
+        // ScanIndexForward=false and Limit=50, then follow LastEvaluatedKey.
         let state = make_state_with_tenant_gsi_named("ByUserStatus", "GSI_PK", "GSI_SK");
         let sqlite = SqliteStore::in_memory().unwrap();
         let c = ctx();
@@ -1960,5 +2005,44 @@ mod tests {
             json!("p009"),
             "LEK parks on the last evaluated row"
         );
+    }
+
+    #[test]
+    fn query_rejects_empty_exclusive_start_key() {
+        // An empty {} cursor (a common client bug, since {} is truthy in JS)
+        // must be rejected like real DynamoDB, not silently restarted.
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let err = query(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "KeyConditionExpression": "pk = :p",
+                "ExpressionAttributeValues": { ":p": {"S": "x"} },
+                "ExclusiveStartKey": {},
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn scan_rejects_partial_exclusive_start_key() {
+        // Missing the sort key on a pk+sk table is an invalid cursor.
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let err = scan(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "ExclusiveStartKey": { "pk": {"S": "x"} },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
     }
 }
