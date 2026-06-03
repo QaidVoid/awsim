@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use awsim_core::pagination::{cap_max_results, paginate};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 use tracing::info;
@@ -321,31 +322,38 @@ pub fn describe_state_machine(
 
 pub fn list_state_machines(
     state: &StepFunctionsState,
-    _input: &Value,
+    input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let mut machines: Vec<Value> = state
+    let max_results = cap_max_results(input["maxResults"].as_i64(), 100, 1000);
+    let mut items: Vec<(String, Value)> = state
         .state_machines
         .iter()
         .map(|entry| {
             let sm = entry.value();
-            json!({
-                "stateMachineArn": sm.arn,
-                "name": sm.name,
-                "type": sm.machine_type,
-                "creationDate": sm.creation_date,
-            })
+            (
+                sm.name.clone(),
+                json!({
+                    "stateMachineArn": sm.arn,
+                    "name": sm.name,
+                    "type": sm.machine_type,
+                    "creationDate": sm.creation_date,
+                }),
+            )
         })
         .collect();
+    items.sort_by(|a, b| a.0.cmp(&b.0));
 
-    machines.sort_by(|a, b| {
-        a["name"]
-            .as_str()
-            .unwrap_or("")
-            .cmp(b["name"].as_str().unwrap_or(""))
-    });
+    let page = paginate(items, max_results, input["nextToken"].as_str(), |(k, _)| {
+        k.clone()
+    })?;
+    let machines: Vec<Value> = page.items.into_iter().map(|(_, v)| v).collect();
 
-    Ok(json!({ "stateMachines": machines }))
+    let mut resp = json!({ "stateMachines": machines });
+    if let Some(token) = page.next_token {
+        resp["nextToken"] = json!(token);
+    }
+    Ok(resp)
 }
 
 // ---------------------------------------------------------------------------

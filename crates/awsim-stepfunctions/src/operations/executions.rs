@@ -1,5 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use awsim_core::pagination::{cap_max_results, paginate};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 use tracing::info;
@@ -286,7 +287,8 @@ pub fn list_executions(
     let sm_arn = input["stateMachineArn"].as_str();
     let status_filter = input["statusFilter"].as_str();
 
-    let executions: Vec<Value> = state
+    let max_results = cap_max_results(input["maxResults"].as_i64(), 100, 1000);
+    let mut items: Vec<(String, Value)> = state
         .executions
         .iter()
         .filter(|entry| {
@@ -305,17 +307,30 @@ pub fn list_executions(
         })
         .map(|entry| {
             let exec = entry.value();
-            json!({
-                "executionArn": exec.arn,
-                "stateMachineArn": exec.state_machine_arn,
-                "name": exec.name,
-                "status": exec.status,
-                "startDate": exec.start_date,
-            })
+            (
+                exec.arn.clone(),
+                json!({
+                    "executionArn": exec.arn,
+                    "stateMachineArn": exec.state_machine_arn,
+                    "name": exec.name,
+                    "status": exec.status,
+                    "startDate": exec.start_date,
+                }),
+            )
         })
         .collect();
+    items.sort_by(|a, b| a.0.cmp(&b.0));
 
-    Ok(json!({ "executions": executions }))
+    let page = paginate(items, max_results, input["nextToken"].as_str(), |(k, _)| {
+        k.clone()
+    })?;
+    let executions: Vec<Value> = page.items.into_iter().map(|(_, v)| v).collect();
+
+    let mut resp = json!({ "executions": executions });
+    if let Some(token) = page.next_token {
+        resp["nextToken"] = json!(token);
+    }
+    Ok(resp)
 }
 
 // ---------------------------------------------------------------------------

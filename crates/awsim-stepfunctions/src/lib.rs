@@ -296,6 +296,40 @@ mod tests {
     }
 
     #[test]
+    fn test_list_state_machines_paginates() {
+        let svc = StepFunctionsService::new();
+        let ctx = ctx();
+        for name in ["m1", "m2", "m3"] {
+            block_on(svc.handle(
+                "CreateStateMachine",
+                json!({ "name": name, "definition": pass_definition() }),
+                &ctx,
+            ))
+            .unwrap();
+        }
+
+        let mut seen: Vec<String> = Vec::new();
+        let mut token: Option<String> = None;
+        loop {
+            let mut input = json!({ "maxResults": 2 });
+            if let Some(t) = &token {
+                input["nextToken"] = json!(t);
+            }
+            let page = block_on(svc.handle("ListStateMachines", input, &ctx)).unwrap();
+            for m in page["stateMachines"].as_array().unwrap() {
+                seen.push(m["name"].as_str().unwrap().to_string());
+            }
+            match page["nextToken"].as_str() {
+                Some(t) => token = Some(t.to_string()),
+                None => break,
+            }
+        }
+        seen.sort();
+        seen.dedup();
+        assert_eq!(seen.len(), 3, "every state machine returned exactly once");
+    }
+
+    #[test]
     fn test_delete_state_machine() {
         let svc = StepFunctionsService::new();
         let ctx = ctx();
