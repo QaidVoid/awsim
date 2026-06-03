@@ -1013,16 +1013,29 @@ pub fn list_operations(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let filters = parse_operation_filters(input.get("Filters"))?;
-    let items: Vec<Value> = state
+    let max_results = awsim_core::clamp_max_results_strict(
+        input.get("MaxResults").and_then(Value::as_i64),
+        100,
+        100,
+    )?;
+    let starting_token = input.get("NextToken").and_then(Value::as_str);
+    let mut entries: Vec<(String, Value)> = state
         .operations
         .iter()
         .filter(|e| operation_matches_filters(e.value(), &filters))
         .map(|e| {
             let o = e.value();
-            json!({ "Id": o.id, "Status": o.status })
+            (o.id.clone(), json!({ "Id": o.id, "Status": o.status }))
         })
         .collect();
-    Ok(json!({ "Operations": items }))
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let page = awsim_core::paginate(entries, max_results, starting_token, |(k, _)| k.clone())?;
+    let items: Vec<Value> = page.items.into_iter().map(|(_, v)| v).collect();
+    let mut body = json!({ "Operations": items });
+    if let Some(token) = page.next_token {
+        body["NextToken"] = json!(token);
+    }
+    Ok(body)
 }
 
 #[derive(Debug)]
@@ -1923,6 +1936,46 @@ mod revision_tests {
         .unwrap();
         let arr = resp["Operations"].as_array().unwrap();
         assert_eq!(arr.len(), 1, "expected exactly one match, got {arr:?}");
+    }
+
+    #[test]
+    fn list_operations_paginates() {
+        let (state, svc_id, _) = fresh_service();
+        for i in ["i1", "i2", "i3"] {
+            register_instance(
+                &state,
+                &json!({ "ServiceId": svc_id, "InstanceId": i, "Attributes": {} }),
+                &ctx(),
+            )
+            .unwrap();
+        }
+        let full = list_operations(&state, &json!({ "MaxResults": 100 }), &ctx()).unwrap();
+        let total = full["Operations"].as_array().unwrap().len();
+        assert!(total >= 3, "expected at least 3 operations, got {total}");
+
+        let mut seen: Vec<String> = Vec::new();
+        let mut token: Option<String> = None;
+        loop {
+            let mut input = json!({ "MaxResults": 2 });
+            if let Some(t) = &token {
+                input["NextToken"] = json!(t);
+            }
+            let page = list_operations(&state, &input, &ctx()).unwrap();
+            for o in page["Operations"].as_array().unwrap() {
+                seen.push(o["Id"].as_str().unwrap().to_string());
+            }
+            match page["NextToken"].as_str() {
+                Some(t) => token = Some(t.to_string()),
+                None => break,
+            }
+        }
+        seen.sort();
+        seen.dedup();
+        assert_eq!(
+            seen.len(),
+            total,
+            "every operation returned exactly once across pages"
+        );
     }
 
     #[test]
