@@ -1,3 +1,4 @@
+use awsim_core::pagination::{cap_max_results, paginate};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -492,15 +493,21 @@ pub fn describe_db_clusters(
         }));
     }
 
-    let items: Vec<Value> = state
+    let max_records = cap_max_results(input["MaxRecords"].as_i64(), 100, 100);
+    let mut items: Vec<(String, Value)> = state
         .clusters
         .iter()
-        .map(|e| cluster_to_value(e.value()))
+        .map(|e| (e.key().clone(), cluster_to_value(e.value())))
         .collect();
+    items.sort_by(|a, b| a.0.cmp(&b.0));
+    let page = paginate(items, max_records, opt_str(input, "Marker"), |(k, _)| {
+        k.clone()
+    })?;
+    let db_clusters: Vec<Value> = page.items.into_iter().map(|(_, v)| v).collect();
 
     Ok(json!({
-        "DBClusters": { "DBCluster": items },
-        "Marker": null,
+        "DBClusters": { "DBCluster": db_clusters },
+        "Marker": page.next_token,
     }))
 }
 

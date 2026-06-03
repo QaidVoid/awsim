@@ -1,5 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use awsim_core::pagination::{cap_max_results, paginate};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -416,15 +417,21 @@ pub fn describe_db_instances(
         }));
     }
 
-    let items: Vec<Value> = state
+    let max_records = cap_max_results(input["MaxRecords"].as_i64(), 100, 100);
+    let mut items: Vec<(String, Value)> = state
         .instances
         .iter()
-        .map(|e| instance_to_value(e.value()))
+        .map(|e| (e.key().clone(), instance_to_value(e.value())))
         .collect();
+    items.sort_by(|a, b| a.0.cmp(&b.0));
+    let page = paginate(items, max_records, opt_str(input, "Marker"), |(k, _)| {
+        k.clone()
+    })?;
+    let db_instances: Vec<Value> = page.items.into_iter().map(|(_, v)| v).collect();
 
     Ok(json!({
-        "DBInstances": { "DBInstance": items },
-        "Marker": null,
+        "DBInstances": { "DBInstance": db_instances },
+        "Marker": page.next_token,
     }))
 }
 
@@ -894,6 +901,40 @@ mod create_db_instance_tests {
         let resp = create_db_instance(&state, &input, &ctx()).unwrap();
         assert_eq!(resp["DBInstance"]["Iops"], 3000);
         assert_eq!(resp["DBInstance"]["StorageThroughput"], 125);
+    }
+
+    #[test]
+    fn describe_db_instances_paginates() {
+        let state = RdsState::default();
+        for id in ["a-db", "b-db", "c-db"] {
+            let mut input = base_input();
+            input["DBInstanceIdentifier"] = json!(id);
+            create_db_instance(&state, &input, &ctx()).unwrap();
+        }
+
+        let mut seen: Vec<String> = Vec::new();
+        let mut marker: Option<String> = None;
+        loop {
+            let mut input = json!({ "MaxRecords": 2 });
+            if let Some(m) = &marker {
+                input["Marker"] = json!(m);
+            }
+            let resp = describe_db_instances(&state, &input, &ctx()).unwrap();
+            for inst in resp["DBInstances"]["DBInstance"].as_array().unwrap() {
+                seen.push(inst["DBInstanceIdentifier"].as_str().unwrap().to_string());
+            }
+            match resp["Marker"].as_str() {
+                Some(m) => marker = Some(m.to_string()),
+                None => break,
+            }
+        }
+        seen.sort();
+        seen.dedup();
+        assert_eq!(
+            seen.len(),
+            3,
+            "every instance returned exactly once across pages"
+        );
     }
 
     #[test]

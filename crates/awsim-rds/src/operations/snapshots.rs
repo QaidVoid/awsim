@@ -1,3 +1,4 @@
+use awsim_core::pagination::{cap_max_results, paginate};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -142,7 +143,8 @@ pub fn describe_db_snapshots(
         }));
     }
 
-    let items: Vec<Value> = state
+    let max_records = cap_max_results(input["MaxRecords"].as_i64(), 100, 100);
+    let mut items: Vec<(String, Value)> = state
         .snapshots
         .iter()
         .filter(|e| {
@@ -152,12 +154,17 @@ pub fn describe_db_snapshots(
                 true
             }
         })
-        .map(|e| snapshot_to_value(e.value()))
+        .map(|e| (e.key().clone(), snapshot_to_value(e.value())))
         .collect();
+    items.sort_by(|a, b| a.0.cmp(&b.0));
+    let page = paginate(items, max_records, opt_str(input, "Marker"), |(k, _)| {
+        k.clone()
+    })?;
+    let db_snapshots: Vec<Value> = page.items.into_iter().map(|(_, v)| v).collect();
 
     Ok(json!({
-        "DBSnapshots": { "DBSnapshot": items },
-        "Marker": null,
+        "DBSnapshots": { "DBSnapshot": db_snapshots },
+        "Marker": page.next_token,
     }))
 }
 
