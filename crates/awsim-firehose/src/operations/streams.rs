@@ -57,8 +57,8 @@ pub fn create_delivery_stream(
     let source_config = validate_source_configuration(&stream_type, input)?;
 
     let arn = format!(
-        "arn:aws:firehose:{}:{}:deliverystream/{}",
-        ctx.region, ctx.account_id, name
+        "arn:{}:firehose:{}:{}:deliverystream/{}",
+        ctx.partition, ctx.region, ctx.account_id, name
     );
     let destinations = collect_destinations(input);
     let stream = DeliveryStream {
