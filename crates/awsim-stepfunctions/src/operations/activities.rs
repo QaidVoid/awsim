@@ -37,8 +37,8 @@ pub fn create_activity(
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "name is required"))?;
 
     let arn = format!(
-        "arn:aws:states:{}:{}:activity:{}",
-        ctx.region, ctx.account_id, name
+        "arn:{}:states:{}:{}:activity:{}",
+        ctx.partition, ctx.region, ctx.account_id, name
     );
 
     if state.activities.contains_key(&arn) {

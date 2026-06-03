@@ -30,8 +30,8 @@ pub(crate) fn epoch_secs() -> u64 {
 
 fn build_exec_arn(ctx: &RequestContext, sm_name: &str, exec_name: &str) -> String {
     format!(
-        "arn:aws:states:{}:{}:execution:{}:{}",
-        ctx.region, ctx.account_id, sm_name, exec_name
+        "arn:{}:states:{}:{}:execution:{}:{}",
+        ctx.partition, ctx.region, ctx.account_id, sm_name, exec_name
     )
 }
 

@@ -22,8 +22,8 @@ pub fn now_iso8601() -> String {
 
 fn build_sm_arn(ctx: &RequestContext, name: &str) -> String {
     format!(
-        "arn:aws:states:{}:{}:stateMachine:{}",
-        ctx.region, ctx.account_id, name
+        "arn:{}:states:{}:{}:stateMachine:{}",
+        ctx.partition, ctx.region, ctx.account_id, name
     )
 }
 
