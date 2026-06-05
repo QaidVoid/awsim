@@ -283,11 +283,16 @@ impl AuthzEngine {
 
         let principal = match self.principal_lookup.resolve_access_key(access_key) {
             Some(p) => p,
+            // An access key that resolves to no principal is an unknown
+            // credential, not an under-privileged one. AWS answers with
+            // an invalid-token error rather than AccessDenied, and never
+            // echoes the key back in the message — mirror that, and match
+            // the gateway's signed-request gate so the response is
+            // identical whichever check rejects the unknown key first.
             None => {
-                return Err(AwsError::access_denied_for(
-                    action,
-                    &format!("AccessKey:{access_key}"),
-                    resource,
+                return Err(AwsError::bad_request(
+                    "InvalidClientTokenId",
+                    "The security token included in the request is invalid.",
                 ));
             }
         };
@@ -435,4 +440,31 @@ fn build_request_context(
         );
     }
     context
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unknown_access_key_returns_invalid_token_without_leaking_the_key() {
+        // Enforcement on, no admin key configured, default no-op lookup
+        // that resolves every key to no principal -> "awsim-admin-test"
+        // is an unknown credential.
+        let engine = AuthzEngine::new(true);
+        let mut ctx = RequestContext::new("cognito-idp", "us-east-1");
+        ctx.access_key = Some("awsim-admin-test".to_string());
+
+        let err = engine
+            .check(&ctx, "cognito-idp:ListUsers", "*")
+            .expect_err("unknown key must be rejected");
+
+        assert_eq!(err.code, "InvalidClientTokenId");
+        assert_eq!(err.status, axum::http::StatusCode::BAD_REQUEST);
+        assert!(
+            !err.message.contains("awsim-admin-test"),
+            "error message must not echo the access key: {}",
+            err.message
+        );
+    }
 }
