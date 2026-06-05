@@ -123,6 +123,6 @@ fn connection_to_value(c: &Connection) -> Value {
         "ConnectionType": c.connection_type,
         "ConnectionProperties": props,
         "Description": c.description,
-        "CreationTime": c.created_at,
+        "CreationTime": super::ts(&c.created_at),
     })
 }

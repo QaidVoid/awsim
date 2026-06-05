@@ -2,7 +2,7 @@ use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 use tracing::info;
 
-use crate::operations::clusters::{now_epoch_str, resolve_cluster_name};
+use crate::operations::clusters::{epoch_number, now_epoch_str, resolve_cluster_name};
 use crate::state::{EcsState, Service};
 
 fn service_to_json(svc: &Service) -> Value {
@@ -21,7 +21,7 @@ fn service_to_json(svc: &Service) -> Value {
         "pendingCount": 0,
         "status": svc.status,
         "launchType": svc.launch_type,
-        "createdAt": svc.created_at,
+        "createdAt": epoch_number(&svc.created_at),
         "deployments": [],
         "events": [],
         "loadBalancers": svc.load_balancers,

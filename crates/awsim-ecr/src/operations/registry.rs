@@ -3,6 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
+use crate::operations::repositories::epoch_number;
 use crate::state::{
     EcrState, PullThroughCacheRule, RegistryScanningConfiguration, ReplicationConfiguration,
     ReplicationTask,
@@ -209,7 +210,7 @@ pub fn get_lifecycle_policy_preview(
             json!({
                 "imageTags": tags,
                 "imageDigest": digest,
-                "imagePushedAt": img.map(|i| i.pushed_at.as_str()).unwrap_or(""),
+                "imagePushedAt": epoch_number(img.map(|i| i.pushed_at.as_str()).unwrap_or("")),
                 "action": { "type": "expire" },
                 "appliedRulePriority": priority,
                 "ruleDescription": desc,
@@ -576,7 +577,7 @@ pub fn create_pull_through_cache_rule(
     Ok(json!({
         "ecrRepositoryPrefix": prefix,
         "upstreamRegistryUrl": upstream,
-        "createdAt": created_at,
+        "createdAt": epoch_number(&created_at),
         "registryId": ctx.account_id,
         "upstreamRegistry": upstream_registry,
         "credentialArn": credential_arn,
@@ -602,7 +603,7 @@ pub fn delete_pull_through_cache_rule(
     Ok(json!({
         "ecrRepositoryPrefix": rule.ecr_repository_prefix,
         "upstreamRegistryUrl": rule.upstream_registry_url,
-        "createdAt": rule.created_at,
+        "createdAt": epoch_number(&rule.created_at),
         "registryId": ctx.account_id,
         "credentialArn": rule.credential_arn,
     }))
@@ -631,7 +632,7 @@ pub fn describe_pull_through_cache_rules(
             json!({
                 "ecrRepositoryPrefix": r.ecr_repository_prefix,
                 "upstreamRegistryUrl": r.upstream_registry_url,
-                "createdAt": r.created_at,
+                "createdAt": epoch_number(&r.created_at),
                 "registryId": ctx.account_id,
                 "upstreamRegistry": r.upstream_registry,
                 "credentialArn": r.credential_arn,

@@ -20,6 +20,13 @@ pub fn now_iso8601() -> String {
         .to_string()
 }
 
+/// Convert a stored timestamp string into the JSON number (epoch seconds)
+/// that the awsJson protocol requires for `smithy.api#timestamp` members.
+/// Stored values are epoch seconds; unparseable input falls back to 0.
+pub(crate) fn ts_num(s: &str) -> Value {
+    json!(s.parse::<i64>().unwrap_or(0))
+}
+
 fn build_sm_arn(ctx: &RequestContext, name: &str) -> String {
     format!(
         "arn:{}:states:{}:{}:stateMachine:{}",
@@ -60,7 +67,7 @@ fn sm_to_value(sm: &StateMachine) -> Value {
         "definition": sm.definition,
         "roleArn": sm.role_arn,
         "type": sm.machine_type,
-        "creationDate": sm.creation_date,
+        "creationDate": ts_num(&sm.creation_date),
     });
     if let Some(tc) = &sm.tracing_configuration {
         obj["tracingConfiguration"] = tc.clone();
@@ -265,7 +272,7 @@ pub fn create_state_machine(
 
     Ok(json!({
         "stateMachineArn": arn,
-        "creationDate": creation_date,
+        "creationDate": ts_num(&creation_date),
     }))
 }
 
@@ -337,7 +344,7 @@ pub fn list_state_machines(
                     "stateMachineArn": sm.arn,
                     "name": sm.name,
                     "type": sm.machine_type,
-                    "creationDate": sm.creation_date,
+                    "creationDate": ts_num(&sm.creation_date),
                 }),
             )
         })
@@ -404,7 +411,7 @@ pub fn update_state_machine(
     let update_date = now_iso8601();
     info!(arn, "Updated state machine");
 
-    Ok(json!({ "updateDate": update_date }))
+    Ok(json!({ "updateDate": ts_num(&update_date) }))
 }
 
 #[cfg(test)]

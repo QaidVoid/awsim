@@ -5,6 +5,7 @@ use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 use tracing::info;
 
+use crate::operations::state_machines::ts_num;
 use crate::state::{Activity, StepFunctionsState};
 
 fn now_iso8601() -> String {
@@ -19,7 +20,7 @@ fn activity_to_value(a: &Activity) -> Value {
     json!({
         "activityArn": a.arn,
         "name": a.name,
-        "creationDate": a.creation_date,
+        "creationDate": ts_num(&a.creation_date),
     })
 }
 
@@ -46,7 +47,7 @@ pub fn create_activity(
         let existing = state.activities.get(&arn).unwrap();
         return Ok(json!({
             "activityArn": existing.arn,
-            "creationDate": existing.creation_date,
+            "creationDate": ts_num(&existing.creation_date),
         }));
     }
 
@@ -76,7 +77,7 @@ pub fn create_activity(
 
     Ok(json!({
         "activityArn": arn,
-        "creationDate": creation_date,
+        "creationDate": ts_num(&creation_date),
     }))
 }
 

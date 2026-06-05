@@ -284,7 +284,7 @@ fn crawler_to_value(c: &Crawler) -> Value {
         "DatabaseName": c.database_name,
         "Targets": c.targets,
         "State": c.state,
-        "CreationTime": c.created_at,
+        "CreationTime": super::ts(&c.created_at),
         "Schedule": c.schedule,
         "Description": c.description,
     })

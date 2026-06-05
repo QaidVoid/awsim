@@ -3,6 +3,7 @@ use serde_json::{Value, json};
 
 use crate::asl;
 use crate::operations::executions::epoch_secs;
+use crate::operations::state_machines::ts_num;
 use crate::state::{PendingTask, StepFunctionsState};
 
 fn token_not_found(token: &str) -> AwsError {
@@ -175,7 +176,7 @@ pub fn describe_state_machine_for_execution(
         "definition": sm.definition,
         "roleArn": sm.role_arn,
         "type": sm.machine_type,
-        "creationDate": sm.creation_date,
+        "creationDate": ts_num(&sm.creation_date),
     }))
 }
 

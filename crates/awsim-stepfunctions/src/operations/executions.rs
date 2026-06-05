@@ -7,6 +7,7 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::asl;
+use crate::operations::state_machines::ts_num;
 use crate::state::{Execution, PendingTask, StepFunctionsState};
 
 // ---------------------------------------------------------------------------
@@ -41,7 +42,7 @@ fn execution_to_value(exec: &Execution) -> Value {
         "stateMachineArn": exec.state_machine_arn,
         "name": exec.name,
         "status": exec.status,
-        "startDate": exec.start_date,
+        "startDate": ts_num(&exec.start_date),
         "input": exec.input,
     });
 
@@ -49,7 +50,7 @@ fn execution_to_value(exec: &Execution) -> Value {
         v["output"] = json!(output);
     }
     if let Some(stop_date) = &exec.stop_date {
-        v["stopDate"] = json!(stop_date);
+        v["stopDate"] = ts_num(stop_date);
     }
     if let Some(error) = &exec.error {
         v["error"] = json!(error);
@@ -175,7 +176,7 @@ pub fn start_execution(
             let events: Vec<Value> = exec
                 .history
                 .iter()
-                .map(|e| json!({ "type": e.event_type, "id": e.id, "timestamp": e.timestamp }))
+                .map(|e| json!({ "type": e.event_type, "id": e.id, "timestamp": ts_num(&e.timestamp) }))
                 .collect();
             bus.publish(awsim_core::events::InternalEvent {
                 source: "states".to_string(),
@@ -207,7 +208,7 @@ pub fn start_execution(
 
     Ok(json!({
         "executionArn": exec_arn,
-        "startDate": start_date,
+        "startDate": ts_num(&start_date),
         "__headers": {
             "X-Awsim-State-Transitions": state_transitions.to_string(),
         },
@@ -249,7 +250,7 @@ pub fn stop_execution(
     let stop_date = exec.stop_date.clone().unwrap_or_default();
     info!(arn = %exec_arn, "Stopped execution");
 
-    Ok(json!({ "stopDate": stop_date }))
+    Ok(json!({ "stopDate": ts_num(&stop_date) }))
 }
 
 // ---------------------------------------------------------------------------
@@ -314,7 +315,7 @@ pub fn list_executions(
                     "stateMachineArn": exec.state_machine_arn,
                     "name": exec.name,
                     "status": exec.status,
-                    "startDate": exec.start_date,
+                    "startDate": ts_num(&exec.start_date),
                 }),
             )
         })
@@ -360,7 +361,7 @@ pub fn get_execution_history(
             json!({
                 "id": e.id,
                 "type": e.event_type,
-                "timestamp": e.timestamp,
+                "timestamp": ts_num(&e.timestamp),
                 "details": e.details,
             })
         })

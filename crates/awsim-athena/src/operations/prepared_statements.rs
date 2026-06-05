@@ -2,7 +2,7 @@ use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 use tracing::info;
 
-use crate::state::{AthenaState, PreparedStatement};
+use crate::state::{AthenaState, PreparedStatement, ts_num};
 
 fn now_str() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -23,7 +23,7 @@ fn stmt_to_value(s: &PreparedStatement) -> Value {
         "WorkGroupName": s.workgroup,
         "QueryStatement": s.query_statement,
         "Description": s.description,
-        "LastModifiedTime": s.last_modified_time,
+        "LastModifiedTime": ts_num(&s.last_modified_time),
     })
 }
 
@@ -116,7 +116,7 @@ pub fn list_prepared_statements(
         .map(|e| {
             json!({
                 "StatementName": e.value().statement_name,
-                "LastModifiedTime": e.value().last_modified_time,
+                "LastModifiedTime": ts_num(&e.value().last_modified_time),
             })
         })
         .collect();

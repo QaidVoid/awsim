@@ -233,7 +233,6 @@ mod start_replay_tests {
                 event_pattern: Some(r#"{"source":["my.app"]}"#.to_string()),
                 retention_days: 0,
                 state: "ENABLED".to_string(),
-                creation_time: String::new(),
                 created_epoch: 0,
             },
         );

@@ -2,7 +2,7 @@ use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 
 use crate::state::{Archive, EventBridgeState};
-use crate::util::{now_epoch, now_iso8601};
+use crate::util::now_epoch;
 
 fn archive_to_value(a: &Archive) -> Value {
     json!({
@@ -13,7 +13,7 @@ fn archive_to_value(a: &Archive) -> Value {
         "EventPattern": a.event_pattern,
         "RetentionDays": a.retention_days,
         "State": a.state,
-        "CreationTime": a.creation_time,
+        "CreationTime": a.created_epoch,
     })
 }
 
@@ -51,7 +51,6 @@ pub fn create_archive(
         event_pattern: input["EventPattern"].as_str().map(|s| s.to_string()),
         retention_days: input["RetentionDays"].as_u64().unwrap_or(0) as u32,
         state: "ENABLED".to_string(),
-        creation_time: now_iso8601(),
         created_epoch: now_epoch(),
     };
 
@@ -60,7 +59,7 @@ pub fn create_archive(
     Ok(json!({
         "ArchiveArn": arn,
         "State": "ENABLED",
-        "CreationTime": state.archives.get(name).map(|a| a.creation_time.clone()).unwrap_or_default(),
+        "CreationTime": state.archives.get(name).map(|a| a.created_epoch).unwrap_or_default(),
     }))
 }
 

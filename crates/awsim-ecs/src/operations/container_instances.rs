@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 
 use crate::state::EcsState;
 
-use super::clusters::resolve_cluster_name;
+use super::clusters::{epoch_number, resolve_cluster_name};
 
 fn instance_to_json(arn: &str, cluster_arn: &str) -> Value {
     json!({
@@ -23,7 +23,7 @@ fn instance_to_json(arn: &str, cluster_arn: &str) -> Value {
         "runningTasksCount": 0,
         "pendingTasksCount": 0,
         "attributes": [],
-        "registeredAt": "2024-01-01T00:00:00Z",
+        "registeredAt": epoch_number("2024-01-01T00:00:00Z"),
         "attachments": [],
         "tags": [],
         "clusterArn": cluster_arn,

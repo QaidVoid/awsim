@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::operations::clusters::{now_epoch_str, resolve_cluster_name};
+use crate::operations::clusters::{epoch_number, now_epoch_str, resolve_cluster_name};
 use crate::state::{EcsState, Task};
 
 fn task_to_json(task: &Task) -> Value {
@@ -19,7 +19,7 @@ fn task_to_json(task: &Task) -> Value {
         "lastStatus": task.status,
         "desiredStatus": task.status,
         "group": task.group,
-        "startedAt": task.started_at,
+        "startedAt": epoch_number(&task.started_at),
         "containers": [],
         "attachments": task.attachments,
         "attributes": [],

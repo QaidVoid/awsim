@@ -15,12 +15,11 @@ const ECR_LAYER_GROUP: &str = "ecr";
 /// blobs, keyed by uploadId, before CompleteLayerUpload finalizes them.
 const UPLOADS_BUCKET: &str = "_uploads";
 
-fn now_epoch_str() -> String {
+fn now_epoch() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
-        .to_string()
 }
 
 fn new_uuid() -> String {
@@ -373,7 +372,7 @@ pub fn get_lifecycle_policy(
         "registryId": ctx.account_id,
         "repositoryName": repo_name,
         "lifecyclePolicyText": policy,
-        "lastEvaluatedAt": now_epoch_str(),
+        "lastEvaluatedAt": now_epoch(),
     }))
 }
 
@@ -613,8 +612,8 @@ pub fn describe_image_scan_findings(
             "findings": findings,
             "enhancedFindings": enhanced_findings,
             "findingSeverityCounts": severity_counts,
-            "imageScanCompletedAt": now_epoch_str(),
-            "vulnerabilitySourceUpdatedAt": now_epoch_str(),
+            "imageScanCompletedAt": now_epoch(),
+            "vulnerabilitySourceUpdatedAt": now_epoch(),
         },
         "nextToken": null,
     }))

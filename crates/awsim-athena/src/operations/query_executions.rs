@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::state::{AthenaState, QueryExecution};
+use crate::state::{AthenaState, QueryExecution, ts_num};
 
 /// Substitute Athena `?` placeholders with the supplied
 /// `ExecutionParameters`. Placeholders inside single- or double-quoted
@@ -299,8 +299,8 @@ fn query_execution_to_value(qe: &QueryExecution) -> Value {
         },
         "Status": {
             "State": qe.status,
-            "SubmissionDateTime": qe.submitted_at,
-            "CompletionDateTime": qe.completed_at,
+            "SubmissionDateTime": ts_num(&qe.submitted_at),
+            "CompletionDateTime": ts_num(&qe.completed_at),
         },
     })
 }

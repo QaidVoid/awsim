@@ -2,7 +2,7 @@ use awsim_core::tags::{TagOpts, validate_aws_tag_keys, validate_aws_tags};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
-use crate::state::AthenaState;
+use crate::state::{AthenaState, ts_num};
 
 pub fn tag_resource(
     state: &AthenaState,
@@ -209,7 +209,7 @@ pub fn batch_get_prepared_statement(
                 "WorkGroupName": s.workgroup,
                 "QueryStatement": s.query_statement,
                 "Description": s.description,
-                "LastModifiedTime": s.last_modified_time,
+                "LastModifiedTime": ts_num(&s.last_modified_time),
             }));
         } else {
             errors.push(json!({

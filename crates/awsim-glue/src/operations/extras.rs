@@ -129,7 +129,7 @@ pub fn get_partition(
             "DatabaseName": db_name,
             "TableName": table_name,
             "StorageDescriptor": partition.storage_descriptor,
-            "CreationTime": partition.created_at,
+            "CreationTime": super::ts(&partition.created_at),
         }
     }))
 }
@@ -177,7 +177,7 @@ pub fn batch_get_partition(
                     "DatabaseName": db_name,
                     "TableName": table_name,
                     "StorageDescriptor": p.storage_descriptor,
-                    "CreationTime": p.created_at,
+                    "CreationTime": super::ts(&p.created_at),
                 })),
                 None => missing.push(json!({ "Values": vals })),
             }
@@ -282,7 +282,7 @@ pub fn get_connection(
             "ConnectionType": conn.connection_type,
             "ConnectionProperties": props,
             "Description": conn.description,
-            "CreationTime": conn.created_at,
+            "CreationTime": super::ts(&conn.created_at),
         }
     }))
 }
@@ -460,7 +460,7 @@ fn trigger_to_value(t: &Trigger) -> Value {
         "Schedule": t.schedule,
         "Actions": t.actions,
         "WorkflowName": t.workflow_name,
-        "CreatedOn": t.created_at,
+        "CreatedOn": super::ts(&t.created_at),
     })
 }
 
@@ -469,7 +469,7 @@ fn workflow_to_value(w: &Workflow) -> Value {
         "Name": w.name,
         "Description": w.description,
         "DefaultRunProperties": w.default_run_properties,
-        "CreatedOn": w.created_at,
+        "CreatedOn": super::ts(&w.created_at),
     })
 }
 
@@ -621,7 +621,7 @@ pub fn get_catalog_import_status(
     Ok(json!({
         "ImportStatus": {
             "ImportCompleted": true,
-            "ImportTime": "2024-01-01T00:00:00Z",
+            "ImportTime": super::ts("2024-01-01T00:00:00Z"),
             "ImportedBy": "awsim",
         }
     }))

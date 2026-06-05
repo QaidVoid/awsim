@@ -507,8 +507,8 @@ pub fn table_to_value(t: &GlueTable) -> Value {
         "Name": t.name,
         "StorageDescriptor": t.storage_descriptor,
         "Description": t.description,
-        "CreateTime": t.created_at,
-        "UpdateTime": t.updated_at,
+        "CreateTime": super::ts(&t.created_at),
+        "UpdateTime": super::ts(&t.updated_at),
     })
 }
 
@@ -516,6 +516,6 @@ fn partition_to_value(p: &GluePartition) -> Value {
     json!({
         "Values": p.values,
         "StorageDescriptor": p.storage_descriptor,
-        "CreationTime": p.created_at,
+        "CreationTime": super::ts(&p.created_at),
     })
 }

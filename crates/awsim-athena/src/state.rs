@@ -4,6 +4,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
+/// Convert a stored timestamp string into the JSON number (epoch seconds)
+/// that the awsJson protocol requires for `smithy.api#timestamp` members.
+/// Stored values are epoch seconds; unparseable input falls back to 0.
+pub(crate) fn ts_num(s: &str) -> Value {
+    serde_json::json!(s.parse::<i64>().unwrap_or(0))
+}
+
 /// A Glue/Athena workgroup.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkGroup {

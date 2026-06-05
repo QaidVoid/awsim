@@ -73,7 +73,7 @@ pub fn get_database(
         "Database": {
             "Name": db.name,
             "Description": db.description,
-            "CreateTime": db.created_at,
+            "CreateTime": super::ts(&db.created_at),
         }
     }))
 }
@@ -94,7 +94,7 @@ pub fn get_databases(
             json!({
                 "Name": e.value().name,
                 "Description": e.value().description,
-                "CreateTime": e.value().created_at,
+                "CreateTime": super::ts(&e.value().created_at),
             })
         })
         .collect();

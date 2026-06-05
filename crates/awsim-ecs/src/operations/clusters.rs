@@ -8,11 +8,53 @@ use tracing::info;
 use crate::state::{Cluster, EcsState};
 
 pub fn now_epoch_str() -> String {
+    now_epoch().to_string()
+}
+
+/// Current time as epoch seconds, for emitting awsJson1.1 timestamp members
+/// (which must be JSON numbers, not strings).
+pub fn now_epoch() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
-        .to_string()
+}
+
+/// Convert a stored timestamp string to a JSON number of epoch seconds for
+/// awsJson1.1 responses. Accepts an epoch-seconds string or an ISO-8601 value
+/// (e.g. `2024-01-01T00:00:00Z`); falls back to `0` if unparseable.
+pub fn epoch_number(stored: &str) -> Value {
+    if let Ok(secs) = stored.parse::<u64>() {
+        return json!(secs);
+    }
+    if let Some(secs) = parse_iso8601_epoch(stored) {
+        return json!(secs);
+    }
+    json!(0)
+}
+
+/// Parse a minimal ISO-8601 UTC timestamp `YYYY-MM-DDTHH:MM:SSZ` to epoch seconds.
+fn parse_iso8601_epoch(s: &str) -> Option<u64> {
+    let s = s.strip_suffix('Z').unwrap_or(s);
+    let (date, time) = s.split_once('T')?;
+    let mut d = date.split('-');
+    let year: i64 = d.next()?.parse().ok()?;
+    let month: i64 = d.next()?.parse().ok()?;
+    let day: i64 = d.next()?.parse().ok()?;
+    let mut t = time.split(':');
+    let hour: i64 = t.next()?.parse().ok()?;
+    let min: i64 = t.next()?.parse().ok()?;
+    let sec: i64 = t.next().unwrap_or("0").split('.').next()?.parse().ok()?;
+
+    // Days since 1970-01-01 via the civil-from-days algorithm.
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+    let secs = days * 86400 + hour * 3600 + min * 60 + sec;
+    u64::try_from(secs).ok()
 }
 
 fn cluster_to_json(cluster: &Cluster) -> Value {

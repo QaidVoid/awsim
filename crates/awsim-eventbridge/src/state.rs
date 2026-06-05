@@ -115,10 +115,9 @@ pub struct Archive {
     pub event_pattern: Option<String>,
     pub retention_days: u32,
     pub state: String,
-    pub creation_time: String,
-    /// Creation time as whole seconds since the UNIX epoch. Drives
-    /// retention expiry in `sweep_expired_archives`; the `creation_time`
-    /// ISO string is display-only and is never parsed back.
+    /// Creation time as whole seconds since the UNIX epoch. Serialized as the
+    /// `CreationTime` response member (an epoch-seconds number per awsJson1.1)
+    /// and drives retention expiry in `sweep_expired_archives`.
     pub created_epoch: u64,
 }
 
@@ -327,7 +326,6 @@ mod cleanup_tests {
             event_pattern: None,
             retention_days,
             state: "ENABLED".into(),
-            creation_time: String::new(),
             created_epoch,
         }
     }

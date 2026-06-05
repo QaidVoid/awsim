@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crate::{
     error::resource_not_found,
     state::{EventSourceMapping, LambdaState},
-    util::{new_uuid, now_iso8601, opt_bool, opt_str, opt_u64, require_str},
+    util::{iso8601_to_epoch, new_uuid, now_iso8601, opt_bool, opt_str, opt_u64, require_str},
 };
 
 fn opt_value<'a>(input: &'a Value, key: &str) -> Option<&'a Value> {
@@ -44,7 +44,7 @@ fn mapping_to_value(m: &EventSourceMapping) -> Value {
         "BatchSize": m.batch_size,
         "State": m.state,
         "StateTransitionReason": "USER_INITIATED",
-        "LastModified": m.last_modified,
+        "LastModified": iso8601_to_epoch(&m.last_modified),
         "MaximumBatchingWindowInSeconds": m.maximum_batching_window_in_seconds,
         "BisectBatchOnFunctionError": m.bisect_batch_on_function_error,
         "FunctionResponseTypes": m.function_response_types,

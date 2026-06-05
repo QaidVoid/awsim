@@ -308,7 +308,7 @@ fn job_to_value(j: &Job) -> Value {
         "Role": j.role,
         "Command": j.command,
         "DefaultArguments": j.default_arguments,
-        "CreatedOn": j.created_at,
+        "CreatedOn": super::ts(&j.created_at),
     })
 }
 
@@ -317,8 +317,8 @@ fn job_run_to_value(r: &JobRun) -> Value {
         "Id": r.id,
         "JobName": r.job_name,
         "JobRunState": r.status,
-        "StartedOn": r.started_on,
-        "CompletedOn": r.completed_on,
+        "StartedOn": super::ts(&r.started_on),
+        "CompletedOn": super::ts_opt(&r.completed_on),
         "Arguments": r.arguments,
     })
 }

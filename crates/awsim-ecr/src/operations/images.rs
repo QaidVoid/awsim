@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tracing::{info, warn};
 
-use crate::operations::repositories::now_epoch_str;
+use crate::operations::repositories::{epoch_number, now_epoch_str};
 use crate::state::{ContainerImage, EcrState};
 
 const ECR_LAYER_GROUP: &str = "ecr";
@@ -102,7 +102,7 @@ fn image_detail_to_json(img: &ContainerImage, repo_name: &str, registry_id: &str
         "repositoryName": repo_name,
         "imageDigest": img.image_digest,
         "imageSizeInBytes": img.image_size_in_bytes,
-        "imagePushedAt": img.pushed_at,
+        "imagePushedAt": epoch_number(&img.pushed_at),
         "imageScanStatus": { "status": "COMPLETE" },
         "imageTags": [],
     });

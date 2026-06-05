@@ -2,7 +2,7 @@ use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 use tracing::info;
 
-use crate::operations::clusters::now_epoch_str;
+use crate::operations::clusters::now_epoch;
 use crate::state::{EcsState, TaskDefinition};
 
 fn task_def_to_json(td: &TaskDefinition) -> Value {
@@ -14,7 +14,7 @@ fn task_def_to_json(td: &TaskDefinition) -> Value {
         "containerDefinitions": td.container_definitions,
         "networkMode": td.network_mode,
         "requiresCompatibilities": td.requires_compatibilities,
-        "registeredAt": now_epoch_str(),
+        "registeredAt": now_epoch(),
         "placementConstraints": td.placement_constraints,
         "placementStrategy": td.placement_strategy,
         "volumes": td.volumes,

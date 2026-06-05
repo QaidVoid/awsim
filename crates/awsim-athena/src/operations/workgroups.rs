@@ -3,7 +3,7 @@ use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 use tracing::info;
 
-use crate::state::{AthenaState, WorkGroup, resolve_engine_version};
+use crate::state::{AthenaState, WorkGroup, resolve_engine_version, ts_num};
 
 fn now_str() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -126,7 +126,7 @@ pub fn list_workgroups(
                 "Name": e.value().name,
                 "State": e.value().state,
                 "Description": e.value().description,
-                "CreationTime": e.value().created_at,
+                "CreationTime": ts_num(&e.value().created_at),
             })
         })
         .collect();
@@ -189,7 +189,7 @@ fn workgroup_to_value(wg: &WorkGroup) -> Value {
         "Name": wg.name,
         "State": wg.state,
         "Description": wg.description,
-        "CreationTime": wg.created_at,
+        "CreationTime": ts_num(&wg.created_at),
         "Configuration": {
             "ResultConfiguration": {
                 "OutputLocation": wg.output_location

@@ -41,6 +41,46 @@ pub fn now_iso8601() -> String {
     format!("{y:04}-{mo:02}-{d:02}T{h:02}:{min:02}:{s:02}.000+0000")
 }
 
+/// Parse an ISO 8601 timestamp produced by [`now_iso8601`]
+/// (`YYYY-MM-DDTHH:MM:SS.fff+0000`) into UNIX epoch seconds. The restJson1
+/// protocol serializes timestamp members as epoch-seconds numbers, so stored
+/// ISO strings are converted at the response boundary. Returns 0 if the input
+/// is not in the expected shape.
+pub fn iso8601_to_epoch(s: &str) -> u64 {
+    let bytes = s.as_bytes();
+    if bytes.len() < 19 {
+        return 0;
+    }
+    let num = |a: usize, b: usize| -> Option<u64> { s.get(a..b)?.parse().ok() };
+    let (Some(y), Some(mo), Some(d), Some(h), Some(mi), Some(sec)) = (
+        num(0, 4),
+        num(5, 7),
+        num(8, 10),
+        num(11, 13),
+        num(14, 16),
+        num(17, 19),
+    ) else {
+        return 0;
+    };
+    if !(1..=12).contains(&mo) {
+        return 0;
+    }
+    let mut days = 0u64;
+    for yr in 1970..y {
+        days += if is_leap(yr) { 366 } else { 365 };
+    }
+    let months: [u64; 12] = if is_leap(y) {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
+    for m in &months[..(mo as usize - 1)] {
+        days += m;
+    }
+    days += d.saturating_sub(1);
+    days * 86_400 + h * 3_600 + mi * 60 + sec
+}
+
 fn unix_to_ymd_hms(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
     let s = secs % 60;
     let mins = secs / 60;
@@ -219,6 +259,33 @@ pub fn validate_qualifier(qualifier: &str) -> Result<(), awsim_core::AwsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn iso8601_to_epoch_unix_zero() {
+        assert_eq!(iso8601_to_epoch("1970-01-01T00:00:00.000+0000"), 0);
+    }
+
+    #[test]
+    fn iso8601_to_epoch_known() {
+        // 2024-01-01T00:00:00 UTC = 1704067200
+        assert_eq!(
+            iso8601_to_epoch("2024-01-01T00:00:00.000+0000"),
+            1_704_067_200
+        );
+    }
+
+    #[test]
+    fn iso8601_to_epoch_round_trips_now() {
+        let s = now_iso8601();
+        let epoch = iso8601_to_epoch(&s);
+        assert!(epoch > 1_700_000_000);
+    }
+
+    #[test]
+    fn iso8601_to_epoch_rejects_garbage() {
+        assert_eq!(iso8601_to_epoch(""), 0);
+        assert_eq!(iso8601_to_epoch("not-a-date"), 0);
+    }
 
     #[test]
     fn validate_qualifier_accepts_dollar_latest() {
