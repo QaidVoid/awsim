@@ -301,6 +301,18 @@ pub fn query(
         range_key_name.as_deref(),
     )?;
 
+    // A Query FilterExpression may not reference key attributes (they go in
+    // the KeyConditionExpression). When querying an index, the index's own
+    // keys are the ones that are off-limits.
+    if let Some(filter) = &filter_condition {
+        validate_filter_not_on_keys(
+            filter,
+            &expr_attr_names,
+            &hash_key_name,
+            range_key_name.as_deref(),
+        )?;
+    }
+
     // Pull the partition key value out of the KeyConditionExpression so we
     // can push the partition lookup down to SQLite. DynamoDB requires the
     // hash key in every Query, but our parser is conservative — if it
@@ -960,6 +972,96 @@ fn resolve_attribute_name(path: &str, names: &HashMap<String, String>) -> String
     } else {
         path.to_string()
     }
+}
+
+/// Resolve a document path down to its top-level attribute name. Keys are
+/// always top-level scalars, so we only care about the segment before the
+/// first `.`/`[`; the placeholder on that segment is then resolved.
+fn top_level_attr_name(path: &str, names: &HashMap<String, String>) -> String {
+    let first = path.split(['.', '[']).next().unwrap_or(path);
+    resolve_attribute_name(first, names)
+}
+
+/// Collect the resolved top-level attribute names a filter condition
+/// references. Value placeholders (`:v`) are ignored; only attribute
+/// paths matter for the key check below.
+fn collect_filter_paths(
+    expr: &ConditionExpr,
+    names: &HashMap<String, String>,
+    out: &mut Vec<String>,
+) {
+    let push_op = |op: &Operand, out: &mut Vec<String>| {
+        if let Operand::Path(p) = op {
+            out.push(top_level_attr_name(p, names));
+        }
+    };
+    match expr {
+        ConditionExpr::Comparison { left, right, .. } => {
+            push_op(left, out);
+            push_op(right, out);
+        }
+        ConditionExpr::Between { operand, low, high } => {
+            push_op(operand, out);
+            push_op(low, out);
+            push_op(high, out);
+        }
+        ConditionExpr::In { operand, values } => {
+            push_op(operand, out);
+            for v in values {
+                push_op(v, out);
+            }
+        }
+        ConditionExpr::Logical { children, .. } => {
+            for c in children {
+                collect_filter_paths(c, names, out);
+            }
+        }
+        ConditionExpr::Not(inner) => collect_filter_paths(inner, names, out),
+        ConditionExpr::AttributeExists(p) | ConditionExpr::AttributeNotExists(p) => {
+            out.push(top_level_attr_name(p, names));
+        }
+        ConditionExpr::AttributeType(p, v) => {
+            out.push(top_level_attr_name(p, names));
+            push_op(v, out);
+        }
+        ConditionExpr::BeginsWith(p, v) | ConditionExpr::Contains(p, v) => {
+            push_op(p, out);
+            push_op(v, out);
+        }
+        ConditionExpr::SizeComparison { path, right, .. } => {
+            out.push(top_level_attr_name(path, names));
+            push_op(right, out);
+        }
+    }
+}
+
+/// Reject a Query FilterExpression that references the partition or sort
+/// key. Real DynamoDB raises ValidationException here because key
+/// attributes belong in the KeyConditionExpression, not the filter; awsim
+/// was silently accepting them, which let callers ship queries that only
+/// fail against AWS. Scan has no such restriction, so this is Query-only.
+fn validate_filter_not_on_keys(
+    filter: &ConditionExpr,
+    names: &HashMap<String, String>,
+    hash_key: &str,
+    range_key: Option<&str>,
+) -> Result<(), AwsError> {
+    let mut paths = Vec::new();
+    collect_filter_paths(filter, names, &mut paths);
+    // Name the partition key first, matching how AWS surfaces the error.
+    if !hash_key.is_empty() && paths.iter().any(|p| p == hash_key) {
+        return validation_err(&format!(
+            "Filter Expression can only contain non-primary key attributes: Primary key attribute: {hash_key}"
+        ));
+    }
+    if let Some(rk) = range_key
+        && paths.iter().any(|p| p == rk)
+    {
+        return validation_err(&format!(
+            "Filter Expression can only contain non-primary key attributes: Primary key attribute: {rk}"
+        ));
+    }
+    Ok(())
 }
 
 fn validate_sort_key_term(
@@ -2044,5 +2146,146 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn query_rejects_filter_on_sort_key() {
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let err = query(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "KeyConditionExpression": "pk = :pk",
+                "FilterExpression": "begins_with(sk, :prefix)",
+                "ExpressionAttributeValues": {
+                    ":pk": {"S": "p"},
+                    ":prefix": {"S": "x"},
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert_eq!(
+            err.message,
+            "Filter Expression can only contain non-primary key attributes: Primary key attribute: sk"
+        );
+    }
+
+    #[test]
+    fn query_rejects_filter_on_partition_key() {
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let err = query(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "KeyConditionExpression": "pk = :pk",
+                "FilterExpression": "pk <> :other",
+                "ExpressionAttributeValues": {
+                    ":pk": {"S": "p"},
+                    ":other": {"S": "q"},
+                },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert_eq!(
+            err.message,
+            "Filter Expression can only contain non-primary key attributes: Primary key attribute: pk"
+        );
+    }
+
+    #[test]
+    fn query_rejects_filter_on_key_behind_name_placeholder() {
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let err = query(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "KeyConditionExpression": "pk = :pk",
+                "FilterExpression": "attribute_not_exists(#s)",
+                "ExpressionAttributeNames": { "#s": "sk" },
+                "ExpressionAttributeValues": { ":pk": {"S": "p"} },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert_eq!(
+            err.message,
+            "Filter Expression can only contain non-primary key attributes: Primary key attribute: sk"
+        );
+    }
+
+    #[test]
+    fn query_allows_filter_on_non_key_attribute() {
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        put_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Item": { "pk": {"S": "p"}, "sk": {"S": "s"}, "status": {"S": "active"} },
+            }),
+            &c,
+        )
+        .unwrap();
+        let resp = query(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "KeyConditionExpression": "pk = :pk",
+                "FilterExpression": "#st = :status",
+                "ExpressionAttributeNames": { "#st": "status" },
+                "ExpressionAttributeValues": {
+                    ":pk": {"S": "p"},
+                    ":status": {"S": "active"},
+                },
+            }),
+            &c,
+        )
+        .unwrap();
+        assert_eq!(resp["Items"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn scan_allows_filter_on_key_attribute() {
+        // Parity guard: unlike Query, real DynamoDB Scan permits key
+        // attributes in a FilterExpression.
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        put_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Item": { "pk": {"S": "p"}, "sk": {"S": "keep"} },
+            }),
+            &c,
+        )
+        .unwrap();
+        let resp = scan(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "FilterExpression": "begins_with(sk, :prefix)",
+                "ExpressionAttributeValues": { ":prefix": {"S": "ke"} },
+            }),
+            &c,
+        )
+        .unwrap();
+        assert_eq!(resp["Items"].as_array().unwrap().len(), 1);
     }
 }
