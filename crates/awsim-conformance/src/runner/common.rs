@@ -94,8 +94,15 @@ pub fn categorise(op: &str, result: Result<(), String>, verbose: bool) -> OpResu
 }
 
 pub fn is_deserialization_error(err: &str) -> bool {
+    // An `Unhandled` error that still carries a parsed `code: Some(..)` is a
+    // valid service error whose code just isn't in the model (e.g.
+    // AccessDenied, MissingParameter) — not a deserialization failure. Only
+    // flag `Unhandled` when no code was extracted, i.e. the response couldn't
+    // be parsed into a recognizable AWS error at all.
+    let unhandled_without_code =
+        err.contains("Unhandled(Unhandled") && !err.contains("code: Some(");
     err.contains("ResponseDeserializationError")
-        || err.contains("Unhandled(Unhandled { source: Error")
+        || unhandled_without_code
         || (err.contains("failed to deserialize") && !err.contains("ServiceError"))
         || err.contains("InvalidXml")
         || err.contains("DecodeError")
