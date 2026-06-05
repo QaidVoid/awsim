@@ -2,48 +2,75 @@ use std::sync::Arc;
 
 use awsim_core::AppState;
 
+/// Admin access key for the IAM-enforced profile. Bypasses authz (account
+/// root equivalent), used to bootstrap the low-privilege test principal.
+pub const ADMIN_ACCESS_KEY: &str = "conformance-admin";
+
 /// Start an in-process AWSim server on a random available port.
 /// Returns the base endpoint URL (e.g. "http://127.0.0.1:14566").
 pub async fn start() -> String {
     let region = "us-east-1".to_string();
     let account_id = "000000000000".to_string();
-
     let mut state = AppState::new(region.clone(), account_id.clone());
+    let (_apigw_service, cognito_state, _iam_lookup) =
+        register_services(&mut state, &account_id, &region);
+    serve(build_app(state, cognito_state, &account_id, &region)).await
+}
 
-    let (_apigw_service, cognito_state) = register_services(&mut state, &account_id, &region);
+/// Like [`start`] but with IAM enforcement ON and [`ADMIN_ACCESS_KEY`] as the
+/// root-equivalent bypass key. Auth-gating tests use this: the admin key
+/// bypasses authz, an IAM user created through it has no policies (so
+/// management calls are denied), and an unknown key is an invalid token.
+pub async fn start_iam_enforced() -> String {
+    let region = "us-east-1".to_string();
+    let account_id = "000000000000".to_string();
+    let mut state = AppState::new(region.clone(), account_id.clone());
+    let (_apigw_service, cognito_state, iam_lookup) =
+        register_services(&mut state, &account_id, &region);
 
-    // Build Cognito OAuth router (needed to avoid panics in the main router).
+    let authz = Arc::get_mut(&mut state.authz).expect("authz engine not yet shared");
+    authz.admin_access_key = Some(ADMIN_ACCESS_KEY.to_string());
+    authz.principal_lookup = iam_lookup;
+    authz.set_enabled(true);
+
+    serve(build_app(state, cognito_state, &account_id, &region)).await
+}
+
+/// Assemble the gateway app. The Cognito OAuth router is merged in because the
+/// main router would otherwise panic when an OAuth path is hit.
+fn build_app(
+    state: AppState,
+    cognito_state: Arc<awsim_cognito::CognitoState>,
+    account_id: &str,
+    region: &str,
+) -> axum::Router {
     let cognito_oauth_state = Arc::new(awsim_cognito::CognitoOAuthState {
         cognito: cognito_state,
-        default_account_id: account_id.clone(),
-        default_region: region.clone(),
+        default_account_id: account_id.to_string(),
+        default_region: region.to_string(),
         auth_codes: Arc::new(dashmap::DashMap::new()),
         revoked_refresh_tokens: Arc::new(dashmap::DashMap::new()),
         federation: awsim_cognito::federation::FederationState::new(),
         port: 0,
     });
-    let cognito_oauth_router = awsim_cognito::oauth::router(cognito_oauth_state);
-
-    // Main router: the gateway fallback handles all AWS API calls.
     let main_router: axum::Router<()> = axum::Router::new()
         .fallback(awsim_core::gateway::handle_request)
         .with_state(state);
-
-    let app = cognito_oauth_router
+    awsim_cognito::oauth::router(cognito_oauth_state)
         .merge(main_router)
         .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024))
-        .layer(tower_http::cors::CorsLayer::permissive());
+        .layer(tower_http::cors::CorsLayer::permissive())
+}
 
-    // Bind on a random port.
+/// Bind a random port, spawn the server, and return its base URL.
+async fn serve(app: axum::Router) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("Failed to bind TCP listener");
     let addr = listener.local_addr().expect("Failed to get local addr");
-
     tokio::spawn(async move {
         axum::serve(listener, app).await.expect("Server error");
     });
-
     format!("http://127.0.0.1:{}", addr.port())
 }
 
@@ -55,16 +82,7 @@ pub async fn start_opensearch() -> String {
     let state = std::sync::Arc::new(
         awsim_opensearch::state::OpenSearchState::ephemeral().expect("opensearch state"),
     );
-    let app = awsim_opensearch::router(state);
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("Failed to bind TCP listener");
-    let addr = listener.local_addr().expect("Failed to get local addr");
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.expect("Server error");
-    });
-    format!("http://127.0.0.1:{}", addr.port())
+    serve(awsim_opensearch::router(state)).await
 }
 
 /// Register all services — mirrors the logic in the awsim binary.
@@ -75,8 +93,11 @@ fn register_services(
 ) -> (
     Arc<awsim_apigateway::ApiGatewayService>,
     Arc<awsim_cognito::CognitoState>,
+    Arc<dyn awsim_core::PrincipalLookup>,
 ) {
     let iam = Arc::new(awsim_iam::IamService::new());
+    let iam_lookup: Arc<dyn awsim_core::PrincipalLookup> =
+        Arc::new(awsim_iam::authz::IamPrincipalLookup::new(iam.store()));
     state.register(iam, vec![]);
 
     let sts = Arc::new(awsim_sts::StsService::new());
@@ -265,5 +286,5 @@ fn register_services(
     let apigw_clone = Arc::clone(&apigateway);
     state.register(apigateway, apigw_routes);
 
-    (apigw_clone, cognito_arc_state)
+    (apigw_clone, cognito_arc_state, iam_lookup)
 }

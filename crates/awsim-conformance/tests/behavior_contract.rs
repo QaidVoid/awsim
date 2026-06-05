@@ -74,6 +74,70 @@ async fn dynamodb_query_filter_on_key_is_rejected_and_items_round_trip() {
 }
 
 #[tokio::test]
+async fn cognito_management_op_enforces_authorization() {
+    use awsim_conformance::{runner::common::make_config_with_key, server};
+
+    let endpoint = server::start_iam_enforced().await;
+
+    // Admin key bypasses authz; use it to mint a low-privilege IAM user.
+    let admin = make_config_with_key(&endpoint, server::ADMIN_ACCESS_KEY, "x").await;
+    let iam = aws_sdk_iam::Client::new(&admin);
+    iam.create_user()
+        .user_name("lowpriv")
+        .send()
+        .await
+        .expect("create user");
+    let key = iam
+        .create_access_key()
+        .user_name("lowpriv")
+        .send()
+        .await
+        .expect("create access key");
+    let ak = key.access_key().expect("access key in response");
+    let low_id = ak.access_key_id().to_string();
+    let low_secret = ak.secret_access_key().to_string();
+
+    // Admin bypass: a management op succeeds.
+    let cog_admin = aws_sdk_cognitoidentityprovider::Client::new(&admin);
+    cog_admin
+        .list_user_pools()
+        .max_results(10)
+        .send()
+        .await
+        .expect("admin ListUserPools");
+
+    // Low-privilege principal with no policy: denied.
+    let low = make_config_with_key(&endpoint, &low_id, &low_secret).await;
+    let denied = aws_sdk_cognitoidentityprovider::Client::new(&low)
+        .list_user_pools()
+        .max_results(10)
+        .send()
+        .await
+        .expect_err("non-admin must be denied a management op");
+    assert_eq!(denied.code(), Some("AccessDenied"), "got: {denied:?}");
+
+    // Unknown key: invalid token, and the key must not leak into the message.
+    let bogus = "AKIACONFORMANCEUNKNOWNKEY";
+    let bad = make_config_with_key(&endpoint, bogus, "x").await;
+    let invalid = aws_sdk_cognitoidentityprovider::Client::new(&bad)
+        .list_user_pools()
+        .max_results(10)
+        .send()
+        .await
+        .expect_err("unknown key must be rejected");
+    assert_eq!(
+        invalid.code(),
+        Some("InvalidClientTokenId"),
+        "got: {invalid:?}"
+    );
+    assert!(
+        !invalid.message().unwrap_or_default().contains(bogus),
+        "error message must not leak the access key: {:?}",
+        invalid.message()
+    );
+}
+
+#[tokio::test]
 async fn opensearch_reindex_honors_source_query() {
     let endpoint = awsim_conformance::server::start_opensearch().await;
     let http = reqwest::Client::new();

@@ -44,7 +44,18 @@ pub struct ServiceResult {
 }
 
 pub async fn make_config(endpoint: &str) -> aws_config::SdkConfig {
-    let creds = Credentials::new("test", "test", None, None, "conformance");
+    make_config_with_key(endpoint, "test", "test").await
+}
+
+/// Like [`make_config`] but with an explicit access key, for auth-gating tests
+/// that need to act as a specific principal (admin bypass vs. a low-privilege
+/// IAM user vs. an unknown key).
+pub async fn make_config_with_key(
+    endpoint: &str,
+    access_key: &str,
+    secret_key: &str,
+) -> aws_config::SdkConfig {
+    let creds = Credentials::new(access_key, secret_key, None, None, "conformance");
     aws_config::defaults(BehaviorVersion::latest())
         .region(Region::new("us-east-1"))
         .credentials_provider(creds)
