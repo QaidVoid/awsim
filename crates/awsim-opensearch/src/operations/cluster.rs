@@ -79,7 +79,8 @@ pub fn get_task(task_id: &str) -> (u16, Value) {
 
 /// POST /_reindex
 ///
-/// Copies all documents from source index to destination index.
+/// Copies documents matching `source.query` from the source index to the
+/// destination index, defaulting to match-all when no query is given.
 /// Creates the destination index if it does not exist.
 pub fn reindex(state: &OpenSearchState, body: &Value, wait_for_completion: bool) -> (u16, Value) {
     let source_index = body
@@ -101,12 +102,23 @@ pub fn reindex(state: &OpenSearchState, body: &Value, wait_for_completion: bool)
         );
     }
 
+    // Honor source.query so reindex copies only matching documents, the
+    // way real OpenSearch does. Copying everything regardless of the
+    // filter silently "works" against awsim while the same call moves
+    // nothing against AWS. Absent query => match everything.
+    let query = body
+        .pointer("/source/query")
+        .cloned()
+        .unwrap_or_else(|| json!({ "match_all": {} }));
+
     // Snapshot the source so the read transaction is dropped before
     // we open the write transaction for the destination puts.
     let mut docs: Vec<(String, Value)> = Vec::new();
     if state.index_exists(source_index) {
         let _ = state.for_each_doc(source_index, |id, doc| {
-            docs.push((id.to_string(), doc.clone()));
+            if super::search::match_score(&query, doc) > 0.0 {
+                docs.push((id.to_string(), doc.clone()));
+            }
             true
         });
     }
@@ -249,4 +261,80 @@ pub fn msearch(state: &OpenSearchState, default_index: Option<&str>, body: &str)
     }
 
     (200, json!({ "responses": responses }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::IndexMeta;
+
+    fn meta() -> IndexMeta {
+        IndexMeta {
+            mappings: json!({}),
+            settings: json!({}),
+            created_at: "2026-01-01".to_string(),
+            uuid: "test-uuid".to_string(),
+        }
+    }
+
+    fn legacy_state() -> OpenSearchState {
+        let state = OpenSearchState::ephemeral().expect("ephemeral state");
+        state.create_index_meta("legacy", meta()).unwrap();
+        // Two datasets share the index; one doc lacks datasetId entirely.
+        state
+            .put_doc(
+                "legacy",
+                "a",
+                &json!({ "tenantId": "t1", "datasetId": "d1" }),
+            )
+            .unwrap();
+        state
+            .put_doc(
+                "legacy",
+                "b",
+                &json!({ "tenantId": "t1", "datasetId": "d2" }),
+            )
+            .unwrap();
+        state
+            .put_doc("legacy", "c", &json!({ "tenantId": "t1" }))
+            .unwrap();
+        state
+    }
+
+    #[test]
+    fn reindex_applies_source_query_filter() {
+        let state = legacy_state();
+        let body = json!({
+            "source": {
+                "index": "legacy",
+                "query": { "bool": { "must": [
+                    { "term": { "tenantId": "t1" } },
+                    { "term": { "datasetId": "d1" } },
+                ] } },
+            },
+            "dest": { "index": "dest" },
+        });
+        let (status, result) = reindex(&state, &body, true);
+        assert_eq!(status, 200);
+        // Only doc "a" matches {datasetId: d1}; the others must not copy.
+        assert_eq!(result["created"], 1);
+        assert_eq!(result["total"], 1);
+        assert_eq!(state.count_docs("dest").unwrap(), 1);
+        assert!(state.get_doc("dest", "a").unwrap().is_some());
+        assert!(state.get_doc("dest", "b").unwrap().is_none());
+        assert!(state.get_doc("dest", "c").unwrap().is_none());
+    }
+
+    #[test]
+    fn reindex_without_query_copies_everything() {
+        let state = legacy_state();
+        let body = json!({
+            "source": { "index": "legacy" },
+            "dest": { "index": "dest" },
+        });
+        let (status, result) = reindex(&state, &body, true);
+        assert_eq!(status, 200);
+        assert_eq!(result["created"], 3);
+        assert_eq!(state.count_docs("dest").unwrap(), 3);
+    }
 }
