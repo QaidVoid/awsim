@@ -78,17 +78,15 @@ pub fn list_tags_for_resource(
         .as_str()
         .ok_or_else(|| AwsError::bad_request("ValidationException", "ResourceArn is required"))?;
 
-    let tags = state
+    let tags: Vec<Value> = state
         .tags
         .get(resource_arn)
         .map(|t| {
-            let mut map = serde_json::Map::new();
-            for (k, v) in t.iter() {
-                map.insert(k.clone(), json!(v));
-            }
-            Value::Object(map)
+            t.iter()
+                .map(|(k, v)| json!({ "Key": k, "Value": v }))
+                .collect()
         })
-        .unwrap_or_else(|| json!({}));
+        .unwrap_or_default();
 
     Ok(json!({ "Tags": tags }))
 }

@@ -254,7 +254,13 @@ mod tests {
             &ctx,
         ))
         .unwrap();
-        assert_eq!(tags["Tags"].as_object().unwrap().len(), 2);
+        let tag_list = tags["Tags"].as_array().unwrap();
+        assert_eq!(tag_list.len(), 2);
+        assert!(
+            tag_list
+                .iter()
+                .all(|t| t.get("Key").is_some() && t.get("Value").is_some())
+        );
 
         // Untag one
         block_on(svc.handle(
@@ -270,7 +276,10 @@ mod tests {
             &ctx,
         ))
         .unwrap();
-        assert_eq!(tags2["Tags"].as_object().unwrap().len(), 1);
+        let tag_list2 = tags2["Tags"].as_array().unwrap();
+        assert_eq!(tag_list2.len(), 1);
+        assert_eq!(tag_list2[0]["Key"].as_str(), Some("team"));
+        assert_eq!(tag_list2[0]["Value"].as_str(), Some("infra"));
     }
 
     #[test]
