@@ -610,10 +610,16 @@ pub fn update_access_key(state: &IamState, input: &Value) -> Result<Value, AwsEr
     Ok(json!({}))
 }
 
-pub fn change_password(state: &IamState, input: &Value) -> Result<Value, AwsError> {
+pub fn change_password(
+    state: &IamState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
     let old_password = require_str(input, "OldPassword")?;
     let new_password = require_str(input, "NewPassword")?;
-    let user_name = require_str(input, "UserName")?;
+    // ChangePassword acts on the calling user; it has no UserName parameter.
+    let user_name = resolve_target_user_name(state, input, ctx)?;
+    let user_name = user_name.as_str();
 
     verify_password(state, user_name, old_password)?;
     enforce_password_policy(state, new_password)?;
@@ -757,12 +763,31 @@ mod tests {
                 "OldPassword": "first-secret",
                 "NewPassword": "second-secret"
             }),
+            &RequestContext::new("iam", "us-east-1"),
         )
         .unwrap();
         verify_password(&state, "alice", "second-secret").unwrap();
         assert!(verify_password(&state, "alice", "first-secret").is_err());
         let p = state.login_profiles.get("alice").unwrap();
         assert!(!p.password_reset_required);
+    }
+
+    #[test]
+    fn change_password_does_not_require_username() {
+        let state = state_with_user("alice");
+        create_login_profile(
+            &state,
+            &json!({ "UserName": "alice", "Password": "first-secret" }),
+        )
+        .unwrap();
+        // No UserName: ChangePassword resolves the calling user, matching AWS.
+        change_password(
+            &state,
+            &json!({ "OldPassword": "first-secret", "NewPassword": "second-secret" }),
+            &RequestContext::new("iam", "us-east-1"),
+        )
+        .unwrap();
+        verify_password(&state, "alice", "second-secret").unwrap();
     }
 
     #[test]
@@ -780,6 +805,7 @@ mod tests {
                 "OldPassword": "WRONG",
                 "NewPassword": "second-secret"
             }),
+            &RequestContext::new("iam", "us-east-1"),
         )
         .unwrap_err();
         assert_eq!(err.code, "AccessDeniedException");

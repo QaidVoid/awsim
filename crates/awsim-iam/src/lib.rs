@@ -501,7 +501,7 @@ impl ServiceHandler for IamService {
             // ── Access Keys (extended) ────────────────────────────────────────
             "GetAccessKeyLastUsed" => operations::users::get_access_key_last_used(&state, &input),
             "UpdateAccessKey" => operations::users::update_access_key(&state, &input),
-            "ChangePassword" => operations::users::change_password(&state, &input),
+            "ChangePassword" => operations::users::change_password(&state, &input, ctx),
 
             // ── Group / Server Certificate updates ────────────────────────────
             "UpdateGroup" => operations::groups::update_group(&state, &input),
