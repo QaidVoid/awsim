@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler};
+use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler, arn};
 use serde_json::Value;
 use state::UserPool;
 use tracing::debug;
@@ -386,6 +386,153 @@ impl ServiceHandler for CognitoService {
         }
     }
 
+    /// Declare IAM actions only for Cognito's management plane. The
+    /// public user-plane operations (`SignUp`, `InitiateAuth`,
+    /// `GetUser`, password/MFA/device/WebAuthn self-service, refresh and
+    /// revoke) are authorized by the app client and the caller's access
+    /// token rather than SigV4 credentials, exactly as in real Cognito.
+    /// Returning `None` for those leaves them ungated so end-user auth
+    /// flows keep working when `AWSIM_IAM_ENFORCE` is on; the gateway
+    /// only runs `authz.check` when both this and `iam_resource` are
+    /// `Some`.
+    fn iam_action(&self, operation: &str) -> Option<String> {
+        match operation {
+            // User pools, clients, and pool-level configuration.
+            "CreateUserPool"
+            | "DeleteUserPool"
+            | "DescribeUserPool"
+            | "ListUserPools"
+            | "UpdateUserPool"
+            | "AddCustomAttributes"
+            | "CreateUserPoolClient"
+            | "DescribeUserPoolClient"
+            | "DeleteUserPoolClient"
+            | "ListUserPoolClients"
+            | "UpdateUserPoolClient"
+            | "AddUserPoolClientSecret"
+            | "DeleteUserPoolClientSecret"
+            | "ListUserPoolClientSecrets"
+            | "GetSigningCertificate"
+            | "GetLogDeliveryConfiguration"
+            | "SetLogDeliveryConfiguration"
+            // MFA configuration (pool-level).
+            | "SetUserPoolMfaConfig"
+            | "GetUserPoolMfaConfig"
+            // Admin user management.
+            | "AdminConfirmSignUp"
+            | "AdminCreateUser"
+            | "AdminDeleteUser"
+            | "AdminGetUser"
+            | "AdminSetUserPassword"
+            | "AdminInitiateAuth"
+            | "AdminRespondToAuthChallenge"
+            | "AdminSetUserMFAPreference"
+            | "AdminEnableUser"
+            | "AdminDisableUser"
+            | "AdminResetUserPassword"
+            | "AdminUpdateUserAttributes"
+            | "AdminDeleteUserAttributes"
+            | "AdminUserGlobalSignOut"
+            | "AdminListUserAuthEvents"
+            | "AdminUpdateAuthEventFeedback"
+            | "AdminSetUserSettings"
+            | "ListUsers"
+            // Groups.
+            | "CreateGroup"
+            | "GetGroup"
+            | "UpdateGroup"
+            | "DeleteGroup"
+            | "ListGroups"
+            | "ListUsersInGroup"
+            | "AdminAddUserToGroup"
+            | "AdminRemoveUserFromGroup"
+            | "AdminListGroupsForUser"
+            // Resource servers.
+            | "CreateResourceServer"
+            | "DescribeResourceServer"
+            | "UpdateResourceServer"
+            | "DeleteResourceServer"
+            | "ListResourceServers"
+            // Identity providers and provider linking.
+            | "CreateIdentityProvider"
+            | "DescribeIdentityProvider"
+            | "UpdateIdentityProvider"
+            | "DeleteIdentityProvider"
+            | "ListIdentityProviders"
+            | "GetIdentityProviderByIdentifier"
+            | "AdminLinkProviderForUser"
+            | "AdminDisableProviderForUser"
+            // Domains.
+            | "CreateUserPoolDomain"
+            | "DescribeUserPoolDomain"
+            | "DeleteUserPoolDomain"
+            | "UpdateUserPoolDomain"
+            // Tags.
+            | "TagResource"
+            | "UntagResource"
+            | "ListTagsForResource"
+            // Admin device tracking.
+            | "AdminGetDevice"
+            | "AdminListDevices"
+            | "AdminUpdateDeviceStatus"
+            | "AdminForgetDevice"
+            // UI customization and branding.
+            | "SetUICustomization"
+            | "GetUICustomization"
+            | "CreateManagedLoginBranding"
+            | "DescribeManagedLoginBranding"
+            | "DescribeManagedLoginBrandingByClient"
+            | "UpdateManagedLoginBranding"
+            | "DeleteManagedLoginBranding"
+            // Risk configuration.
+            | "SetRiskConfiguration"
+            | "DescribeRiskConfiguration"
+            // User import jobs.
+            | "CreateUserImportJob"
+            | "DescribeUserImportJob"
+            | "StartUserImportJob"
+            | "StopUserImportJob"
+            | "ListUserImportJobs"
+            | "GetCSVHeader"
+            // Terms.
+            | "CreateTerms"
+            | "UpdateTerms"
+            | "DeleteTerms"
+            | "DescribeTerms"
+            | "ListTerms" => Some(format!("cognito-idp:{operation}")),
+            _ => None,
+        }
+    }
+
+    /// Resource ARN for the management-plane operations declared in
+    /// [`Self::iam_action`]. Kept in lockstep with `iam_action` via the
+    /// early `?`: user-plane operations return `None` here too, so the
+    /// gateway's `(Some, Some)` guard never fires for them.
+    fn iam_resource(&self, operation: &str, input: &Value, ctx: &RequestContext) -> Option<String> {
+        self.iam_action(operation)?;
+
+        // Tag operations carry the target ARN directly.
+        if let Some(resource_arn) = input.get("ResourceArn").and_then(|v| v.as_str()) {
+            return Some(resource_arn.to_string());
+        }
+
+        // Account-level operations with no specific pool.
+        if matches!(operation, "CreateUserPool" | "ListUserPools") {
+            return Some("*".to_string());
+        }
+
+        // Everything else scopes to a single user pool; fall back to the
+        // account wildcard if the request omits the pool id.
+        match input.get("UserPoolId").and_then(|v| v.as_str()) {
+            Some(pool_id) => Some(arn::build(
+                ctx,
+                "cognito-idp",
+                format!("userpool/{pool_id}"),
+            )),
+            None => Some("*".to_string()),
+        }
+    }
+
     fn snapshot(&self) -> Option<Vec<u8>> {
         let entries = self.store.iter_all();
         let snap: Vec<(String, String, CognitoSnapshot)> = entries
@@ -459,4 +606,86 @@ struct CognitoSnapshot {
     pools: HashMap<String, UserPool>,
     domains: HashMap<String, String>,
     resource_tags: HashMap<String, HashMap<String, String>>,
+}
+
+#[cfg(test)]
+mod authz_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("cognito-idp", "us-east-1")
+    }
+
+    #[test]
+    fn management_ops_declare_action_and_pool_resource() {
+        let svc = CognitoService::new();
+        let input = json!({ "UserPoolId": "us-east-1_pool" });
+        for op in [
+            "CreateUserPoolClient",
+            "AdminCreateUser",
+            "ListUsers",
+            "SetUserPoolMfaConfig",
+            "AdminInitiateAuth",
+        ] {
+            assert_eq!(
+                svc.iam_action(op),
+                Some(format!("cognito-idp:{op}")),
+                "{op} should be IAM-gated"
+            );
+            assert_eq!(
+                svc.iam_resource(op, &input, &ctx()),
+                Some(
+                    "arn:aws:cognito-idp:us-east-1:000000000000:userpool/us-east-1_pool"
+                        .to_string()
+                ),
+                "{op} should scope to the user pool ARN"
+            );
+        }
+    }
+
+    #[test]
+    fn public_user_plane_ops_are_ungated() {
+        let svc = CognitoService::new();
+        let input = json!({ "UserPoolId": "us-east-1_pool" });
+        // These are authorized by the app client / access token, never
+        // SigV4, so the gateway must skip its IAM check for them.
+        for op in [
+            "SignUp",
+            "ConfirmSignUp",
+            "InitiateAuth",
+            "RespondToAuthChallenge",
+            "GetUser",
+            "ChangePassword",
+            "ForgotPassword",
+            "ConfirmForgotPassword",
+            "GlobalSignOut",
+            "RevokeToken",
+            "AssociateSoftwareToken",
+            "ConfirmDevice",
+            "StartWebAuthnRegistration",
+            "GetTokensFromRefreshToken",
+        ] {
+            assert_eq!(svc.iam_action(op), None, "{op} must stay ungated");
+            assert_eq!(svc.iam_resource(op, &input, &ctx()), None);
+        }
+    }
+
+    #[test]
+    fn account_level_and_tag_ops_resolve_special_resources() {
+        let svc = CognitoService::new();
+        // No specific pool -> account wildcard.
+        for op in ["CreateUserPool", "ListUserPools"] {
+            assert_eq!(
+                svc.iam_resource(op, &json!({}), &ctx()),
+                Some("*".to_string())
+            );
+        }
+        // Tag ops carry the target ARN directly.
+        let tag_arn = "arn:aws:cognito-idp:us-east-1:000000000000:userpool/us-east-1_tagged";
+        assert_eq!(
+            svc.iam_resource("TagResource", &json!({ "ResourceArn": tag_arn }), &ctx()),
+            Some(tag_arn.to_string())
+        );
+    }
 }
