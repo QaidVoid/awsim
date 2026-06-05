@@ -76,6 +76,41 @@ pub async fn test_dynamodb(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         verbose
     ));
 
+    // PutItem -> GetItem must round-trip the value.
+    let got = client
+        .get_item()
+        .table_name("conformance-test")
+        .key("id", AttributeValue::S("test-1".into()))
+        .send()
+        .await;
+    results.push(expect_ok(
+        "GetItem/round-trip",
+        got,
+        |o| match o.item().and_then(|m| m.get("name")) {
+            Some(AttributeValue::S(s)) if s == "Test Item" => Ok(()),
+            other => Err(format!("expected name=\"Test Item\", got {other:?}")),
+        },
+        verbose,
+    ));
+
+    // A Query FilterExpression referencing a key attribute must be rejected.
+    let bad_filter = client
+        .query()
+        .table_name("conformance-test")
+        .key_condition_expression("#id = :id")
+        .filter_expression("begins_with(#id, :p)")
+        .expression_attribute_names("#id", "id")
+        .expression_attribute_values(":id", AttributeValue::S("test-1".into()))
+        .expression_attribute_values(":p", AttributeValue::S("test".into()))
+        .send()
+        .await;
+    results.push(expect_err_code(
+        "Query/filter-on-key",
+        bad_filter,
+        "ValidationException",
+        verbose,
+    ));
+
     // UpdateItem
     results.push(chk!(
         "UpdateItem",

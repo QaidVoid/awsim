@@ -71,6 +71,7 @@ zip = "2"
 # AWS SDK crates for conformance testing
 aws-config = "1"
 aws-credential-types = "1"
+aws-smithy-types = "1"
 aws-sdk-acm = "1"
 aws-sdk-appsync = "1"
 aws-sdk-athena = "1"
@@ -111,3 +112,7 @@ aws-sdk-ssoadmin = "1"
 aws-sdk-sts = "1"
 aws-sdk-wafv2 = "1"
 aws-types = "1"
+
+[dev-dependencies]
+# Raw HTTP client for the OpenSearch REST data plane (no AWS SDK exists for it).
+reqwest = { version = "0.12", default-features = false, features = ["json"] }

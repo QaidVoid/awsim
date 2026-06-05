@@ -47,6 +47,26 @@ pub async fn start() -> String {
     format!("http://127.0.0.1:{}", addr.port())
 }
 
+/// Start a standalone OpenSearch server on a random port, returning its base
+/// URL. The OpenSearch REST data plane runs on its own dedicated endpoint in
+/// production, so it gets its own listener here rather than being merged into
+/// the gateway (where `PUT /{index}` would collide with S3 path-style buckets).
+pub async fn start_opensearch() -> String {
+    let state = std::sync::Arc::new(
+        awsim_opensearch::state::OpenSearchState::ephemeral().expect("opensearch state"),
+    );
+    let app = awsim_opensearch::router(state);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("Failed to bind TCP listener");
+    let addr = listener.local_addr().expect("Failed to get local addr");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("Server error");
+    });
+    format!("http://127.0.0.1:{}", addr.port())
+}
+
 /// Register all services — mirrors the logic in the awsim binary.
 fn register_services(
     state: &mut AppState,

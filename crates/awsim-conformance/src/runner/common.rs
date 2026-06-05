@@ -98,6 +98,61 @@ pub fn sdk_err_to_string<E: std::fmt::Debug>(e: E) -> String {
     format!("{e:?}")
 }
 
+/// Assert the call fails with a specific AWS error code.
+///
+/// `categorise` passes on any service error, so it cannot catch "awsim
+/// accepted a request real AWS rejects". This asserts the rejection and its
+/// code, turning an AWS-verified rule into a regression guard. `SdkError`
+/// forwards `ProvideErrorMetadata`, so the operation `Result` passes straight in.
+pub fn expect_err_code<T, E>(op: &str, r: Result<T, E>, want_code: &str, verbose: bool) -> OpResult
+where
+    E: aws_smithy_types::error::metadata::ProvideErrorMetadata,
+{
+    match r {
+        Ok(_) => OpResult::Fail(
+            op.to_string(),
+            format!("expected error {want_code}, got success"),
+        ),
+        Err(e) => match e.code() {
+            Some(code) if code == want_code => {
+                if verbose {
+                    println!("  PASS {op} (rejected with {code})");
+                }
+                OpResult::Pass(op.to_string())
+            }
+            other => OpResult::Fail(
+                op.to_string(),
+                format!("expected error {want_code}, got {other:?}"),
+            ),
+        },
+    }
+}
+
+/// Assert the call succeeds and its decoded output satisfies `check`. Use for
+/// round-trips and value checks the envelope-only smoke test can't see.
+pub fn expect_ok<T, E>(
+    op: &str,
+    r: Result<T, E>,
+    check: impl FnOnce(&T) -> Result<(), String>,
+    verbose: bool,
+) -> OpResult
+where
+    E: std::fmt::Debug,
+{
+    match r {
+        Err(e) => OpResult::Fail(op.to_string(), sdk_err_to_string(e)),
+        Ok(v) => match check(&v) {
+            Ok(()) => {
+                if verbose {
+                    println!("  PASS {op}");
+                }
+                OpResult::Pass(op.to_string())
+            }
+            Err(msg) => OpResult::Fail(op.to_string(), msg),
+        },
+    }
+}
+
 #[macro_export]
 macro_rules! chk {
     ($op:expr, $result:expr, $verbose:expr) => {
