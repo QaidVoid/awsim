@@ -248,7 +248,11 @@ Step-by-step checklist for implementing a new service:
 
 2. **Add to workspace** in root `Cargo.toml`
 
-3. **Vendor the Smithy model** into `models/{service}/` (from https://github.com/aws/api-models-aws)
+3. **Vendor the Smithy model** into `models/{service}.json` from
+   https://github.com/aws/api-models-aws. Add the service to the `SERVICES`
+   table in `xtask/src/main.rs`, then run `cargo xtask update-models {service}`
+   (or `--all`). It pins the upstream commit and records it in
+   `models/PROVENANCE.md`.
 
 4. **Implement `ServiceHandler`** in `src/lib.rs`
 

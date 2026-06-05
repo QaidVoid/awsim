@@ -67,6 +67,7 @@ members = [
   "crates/awsim-transfer",
   "crates/awsim-waf",
   "crates/awsim-xray",
+  "xtask",
 ]
 
 [workspace.package]
