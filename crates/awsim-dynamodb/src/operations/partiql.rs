@@ -96,6 +96,11 @@ pub fn execute_transaction(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    let (idempotency, replay) = super::idempotency::begin(state, input, ctx)?;
+    if let Some(cached) = replay {
+        return Ok(cached);
+    }
+
     let stmts = input
         .get("TransactStatements")
         .and_then(|v| v.as_array())
@@ -125,7 +130,9 @@ pub fn execute_transaction(
         }
     }
 
-    Ok(json!({ "Responses": responses }))
+    let result = json!({ "Responses": responses });
+    idempotency.record(state, &result);
+    Ok(result)
 }
 
 // ─── Core statement runner ────────────────────────────────────────────────────
