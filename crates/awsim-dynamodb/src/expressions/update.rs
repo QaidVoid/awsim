@@ -640,13 +640,13 @@ mod tests {
     fn delete_subtracts_from_nested_string_set() {
         let mut item = DynamoItem::new();
         item.insert(
-            "owner".into(),
+            "profile".into(),
             json!({ "M": { "tags": { "SS": ["a", "b", "c"] } } }),
         );
         let mut values = Map::new();
         values.insert(":rm".into(), json!({ "SS": ["b"] }));
-        apply_update_expression(&mut item, "DELETE owner.tags :rm", &names(), &values).unwrap();
-        let tags = item["owner"]["M"]["tags"]["SS"].as_array().unwrap();
+        apply_update_expression(&mut item, "DELETE profile.tags :rm", &names(), &values).unwrap();
+        let tags = item["profile"]["M"]["tags"]["SS"].as_array().unwrap();
         let strs: Vec<&str> = tags.iter().filter_map(|v| v.as_str()).collect();
         assert_eq!(strs, ["a", "c"]);
     }
