@@ -287,6 +287,21 @@ pub fn query(
         }
     };
 
+    // Strongly consistent reads are not supported on GSIs: a GSI lags the
+    // base table, so AWS rejects ConsistentRead=true on an index query with
+    // ValidationException rather than silently serving stale-but-consistent
+    // data. (Our storage is synchronous, but we honor the contract anyway.)
+    if gsi_slot.is_some()
+        && input
+            .get("ConsistentRead")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    {
+        return Err(AwsError::validation(
+            "Consistent reads are not supported on global secondary indexes",
+        ));
+    }
+
     // KeyConditionExpression has stricter rules than FilterExpression:
     // partition key may only use `=`, sort key only `=, <, <=, >, >=,
     // BETWEEN, begins_with`, and the connective between them must be AND.
@@ -593,6 +608,21 @@ pub fn scan(
         .unwrap_or(false);
 
     drop(table);
+
+    // ConsistentRead is not supported when scanning a GSI: AWS rejects
+    // ConsistentRead=true on an index scan with ValidationException because a
+    // GSI only offers eventually consistent reads. See [`query`] for the same
+    // guard on the Query path.
+    if scan_index_is_gsi
+        && input
+            .get("ConsistentRead")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    {
+        return Err(AwsError::validation(
+            "Consistent reads are not supported on global secondary indexes",
+        ));
+    }
 
     // Parallel Scan: Segment/TotalSegments shard the table into N disjoint
     // slices. Both must be supplied together; we hash each row's (pk, sk)
@@ -1450,6 +1480,68 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "ValidationException");
+    }
+
+    fn tenant_gsi() -> Vec<crate::state::GlobalSecondaryIndex> {
+        use crate::state::{GlobalSecondaryIndex, Projection};
+        vec![GlobalSecondaryIndex {
+            index_name: "byTenant".into(),
+            key_schema: vec![
+                KeySchemaElement {
+                    attribute_name: "tenant".into(),
+                    key_type: "HASH".into(),
+                },
+                KeySchemaElement {
+                    attribute_name: "ts".into(),
+                    key_type: "RANGE".into(),
+                },
+            ],
+            projection: Projection {
+                projection_type: "ALL".into(),
+                non_key_attributes: vec![],
+            },
+            status: "ACTIVE".into(),
+        }]
+    }
+
+    #[test]
+    fn query_on_gsi_rejects_consistent_read() {
+        let state = make_state_with_gsi(tenant_gsi());
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let err = query(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "IndexName": "byTenant",
+                "ConsistentRead": true,
+                "KeyConditionExpression": "tenant = :t",
+                "ExpressionAttributeValues": { ":t": {"S": "a"} },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("global secondary index"));
+    }
+
+    #[test]
+    fn scan_on_gsi_rejects_consistent_read() {
+        let state = make_state_with_gsi(tenant_gsi());
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let err = scan(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "IndexName": "byTenant",
+                "ConsistentRead": true,
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("global secondary index"));
     }
 
     #[test]
