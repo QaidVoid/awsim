@@ -210,7 +210,10 @@ pub fn query(
     let key_condition = parse_condition(key_condition_expr)?;
     let filter_condition = filter_expr.map(parse_condition).transpose()?;
 
-    let projection_paths: Vec<String> = projection_expr.map(parse_projection).unwrap_or_default();
+    let projection_paths: Vec<String> = projection_expr
+        .map(parse_projection)
+        .transpose()?
+        .unwrap_or_default();
 
     // Base-table key names, captured while `table` is still borrowed. A GSI
     // query's LastEvaluatedKey must carry these as a resume tiebreaker even
@@ -597,7 +600,10 @@ pub fn scan(
         .cloned();
 
     let filter_condition = filter_expr.map(parse_condition).transpose()?;
-    let projection_paths: Vec<String> = projection_expr.map(parse_projection).unwrap_or_default();
+    let projection_paths: Vec<String> = projection_expr
+        .map(parse_projection)
+        .transpose()?
+        .unwrap_or_default();
 
     let hash_key_name = table.hash_key().unwrap_or("").to_string();
     let range_key_name = table.range_key().map(|s| s.to_string());
@@ -1405,6 +1411,51 @@ mod tests {
     }
 
     #[test]
+    fn scan_rejects_reserved_word_in_filter_even_on_empty_table() {
+        // No items: AWS still validates the expression, so a bare reserved
+        // word must be rejected up front rather than slipping through because
+        // nothing was evaluated.
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let err = scan(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "FilterExpression": "Size = :v",
+                "ExpressionAttributeValues": {":v": {"N": "1"}},
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(
+            err.message.contains("reserved keyword"),
+            "got {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn query_rejects_reserved_word_in_projection() {
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let err = query(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "KeyConditionExpression": "pk = :p",
+                "ExpressionAttributeValues": {":p": {"S": "x"}},
+                "ProjectionExpression": "Status",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
     fn parallel_scan_partitions_rows_disjointly_and_covers_all() {
         let state = make_state();
         let sqlite = SqliteStore::in_memory().unwrap();
@@ -1634,7 +1685,7 @@ mod tests {
         let state = make_state();
         let sqlite = SqliteStore::in_memory().unwrap();
         let c = ctx();
-        // Three sort-key buckets; the key condition selects only sk = "y".
+        // Three sort-key slots; the key condition selects only sk = "y".
         for sk in ["x", "y", "z"] {
             put_item(
                 &state,
@@ -2207,7 +2258,7 @@ mod tests {
                     "Item": {
                         "pk": {"S": "p"},
                         "sk": {"S": format!("{i:03}")},
-                        "bucket": {"N": (i % 10).to_string()},
+                        "slot": {"N": (i % 10).to_string()},
                     },
                 }),
                 &c,
@@ -2218,7 +2269,7 @@ mod tests {
         let req = json!({
             "TableName": "t",
             "KeyConditionExpression": "pk = :pk",
-            "FilterExpression": "bucket = :z",
+            "FilterExpression": "slot = :z",
             "ExpressionAttributeValues": { ":pk": {"S": "p"}, ":z": {"N": "0"} },
             "Limit": 10,
         });
@@ -2244,7 +2295,7 @@ mod tests {
     fn scan_limit_counts_evaluated_items_not_matches() {
         // Same semantics for Scan: 30 rows in 30 partitions, scanned in
         // (pk,sk) order p000..p029. Limit=10 evaluates p000..p009; only
-        // p000 has bucket 0 -> Count=1, ScannedCount=10, LEK at p009.
+        // p000 has slot 0 -> Count=1, ScannedCount=10, LEK at p009.
         let state = make_state();
         let sqlite = SqliteStore::in_memory().unwrap();
         let c = ctx();
@@ -2257,7 +2308,7 @@ mod tests {
                     "Item": {
                         "pk": {"S": format!("p{i:03}")},
                         "sk": {"S": "row"},
-                        "bucket": {"N": (i % 10).to_string()},
+                        "slot": {"N": (i % 10).to_string()},
                     },
                 }),
                 &c,
@@ -2270,7 +2321,7 @@ mod tests {
             &sqlite,
             &json!({
                 "TableName": "t",
-                "FilterExpression": "bucket = :z",
+                "FilterExpression": "slot = :z",
                 "ExpressionAttributeValues": { ":z": {"N": "0"} },
                 "Limit": 10,
             }),

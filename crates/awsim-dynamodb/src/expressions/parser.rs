@@ -478,19 +478,82 @@ impl Parser {
 // ─── Public parse functions ───────────────────────────────────────────────────
 
 /// Parse a condition/filter expression string into a ConditionExpr AST.
+///
+/// Rejects reserved keywords used as bare attribute names up front, so the
+/// request fails regardless of whether any stored item would have matched.
 pub fn parse_condition(expr: &str) -> Result<ConditionExpr, AwsError> {
     let tokens = Lexer::new(expr).tokenize();
     let mut parser = Parser::new(tokens);
-    parser.parse_or()
+    let ast = parser.parse_or()?;
+    check_reserved_in_condition(&ast)?;
+    Ok(ast)
+}
+
+/// Reject reserved keywords used as bare attribute names anywhere in a parsed
+/// condition. Value placeholders (`:v`) are skipped; only attribute paths are
+/// checked.
+fn check_reserved_in_condition(expr: &ConditionExpr) -> Result<(), AwsError> {
+    let check = |operand: &Operand| -> Result<(), AwsError> {
+        if let Operand::Path(p) = operand {
+            super::reserved::check_path(p)?;
+        }
+        Ok(())
+    };
+    match expr {
+        ConditionExpr::Comparison { left, right, .. } => {
+            check(left)?;
+            check(right)?;
+        }
+        ConditionExpr::Between { operand, low, high } => {
+            check(operand)?;
+            check(low)?;
+            check(high)?;
+        }
+        ConditionExpr::In { operand, values } => {
+            check(operand)?;
+            for v in values {
+                check(v)?;
+            }
+        }
+        ConditionExpr::Logical { children, .. } => {
+            for child in children {
+                check_reserved_in_condition(child)?;
+            }
+        }
+        ConditionExpr::Not(inner) => check_reserved_in_condition(inner)?,
+        ConditionExpr::AttributeExists(path) | ConditionExpr::AttributeNotExists(path) => {
+            super::reserved::check_path(path)?;
+        }
+        ConditionExpr::AttributeType(path, operand) => {
+            super::reserved::check_path(path)?;
+            check(operand)?;
+        }
+        ConditionExpr::BeginsWith(a, b) | ConditionExpr::Contains(a, b) => {
+            check(a)?;
+            check(b)?;
+        }
+        ConditionExpr::SizeComparison { path, right, .. } => {
+            super::reserved::check_path(path)?;
+            check(right)?;
+        }
+    }
+    Ok(())
 }
 
 /// Parse a projection expression into a list of path strings.
 /// e.g. "#n, address.city" → ["#n", "address.city"]
-pub fn parse_projection(expr: &str) -> Vec<String> {
-    expr.split(',')
+///
+/// Rejects reserved keywords used as bare attribute names.
+pub fn parse_projection(expr: &str) -> Result<Vec<String>, AwsError> {
+    let paths: Vec<String> = expr
+        .split(',')
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .collect()
+        .collect();
+    for path in &paths {
+        super::reserved::check_path(path)?;
+    }
+    Ok(paths)
 }
 
 /// DynamoDB caps a fully-resolved document path at 64 KB. Paths longer

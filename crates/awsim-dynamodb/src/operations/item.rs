@@ -235,7 +235,7 @@ fn apply_projection(
     match projection_expr {
         None => Ok(item.clone()),
         Some(expr) => {
-            let paths = crate::expressions::parse_projection(expr);
+            let paths = crate::expressions::parse_projection(expr)?;
             let mut result = DynamoItem::new();
             for path in paths {
                 let resolved = crate::expressions::parser::resolve_path(&path, expr_attr_names)?;
@@ -975,6 +975,40 @@ mod tests {
 
         assert_eq!(res["Attributes"]["name"], json!({"S": "Alice"}));
         assert_eq!(res["Attributes"]["hits"], json!({"N": "2"}));
+    }
+
+    #[test]
+    fn put_item_rejects_reserved_word_in_condition() {
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let bare = put_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Item": {"pk": {"S": "u"}, "sk": {"S": "p"}},
+                "ConditionExpression": "Status = :s",
+                "ExpressionAttributeValues": {":s": {"S": "new"}},
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(bare.code, "ValidationException");
+        assert!(bare.message.contains("reserved keyword"));
+
+        // Aliasing the reserved word makes the same condition valid.
+        let aliased = put_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Item": {"pk": {"S": "u"}, "sk": {"S": "p"}},
+                "ConditionExpression": "attribute_not_exists(#st)",
+                "ExpressionAttributeNames": {"#st": "Status"},
+            }),
+            &ctx(),
+        );
+        assert!(aliased.is_ok(), "aliased reserved word must be accepted");
     }
 
     #[test]

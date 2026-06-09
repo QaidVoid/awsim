@@ -142,6 +142,20 @@ fn parse_update_expression(expr: &str) -> Result<UpdateClauses, AwsError> {
         }
     }
 
+    // Reject reserved keywords used as bare target attribute names.
+    for (path, _) in &set_actions {
+        super::reserved::check_path(path)?;
+    }
+    for path in &remove_paths {
+        super::reserved::check_path(path)?;
+    }
+    for (path, _) in &add_actions {
+        super::reserved::check_path(path)?;
+    }
+    for (path, _) in &delete_actions {
+        super::reserved::check_path(path)?;
+    }
+
     Ok((set_actions, remove_paths, add_actions, delete_actions))
 }
 
@@ -606,11 +620,11 @@ mod tests {
     #[test]
     fn add_increments_nested_numeric_attribute() {
         let mut item = DynamoItem::new();
-        item.insert("stats".into(), json!({ "M": { "count": {"N": "5"} } }));
+        item.insert("stats".into(), json!({ "M": { "hits": {"N": "5"} } }));
         let mut values = Map::new();
         values.insert(":n".into(), json!({ "N": "3" }));
-        apply_update_expression(&mut item, "ADD stats.count :n", &names(), &values).unwrap();
-        assert_eq!(item["stats"]["M"]["count"]["N"], json!("8"));
+        apply_update_expression(&mut item, "ADD stats.hits :n", &names(), &values).unwrap();
+        assert_eq!(item["stats"]["M"]["hits"]["N"], json!("8"));
     }
 
     #[test]
@@ -618,21 +632,21 @@ mod tests {
         let mut item = DynamoItem::new();
         let mut values = Map::new();
         values.insert(":n".into(), json!({ "N": "1" }));
-        apply_update_expression(&mut item, "ADD stats.count :n", &names(), &values).unwrap();
-        assert_eq!(item["stats"]["M"]["count"]["N"], json!("1"));
+        apply_update_expression(&mut item, "ADD stats.hits :n", &names(), &values).unwrap();
+        assert_eq!(item["stats"]["M"]["hits"]["N"], json!("1"));
     }
 
     #[test]
     fn delete_subtracts_from_nested_string_set() {
         let mut item = DynamoItem::new();
         item.insert(
-            "user".into(),
+            "profile".into(),
             json!({ "M": { "tags": { "SS": ["a", "b", "c"] } } }),
         );
         let mut values = Map::new();
         values.insert(":rm".into(), json!({ "SS": ["b"] }));
-        apply_update_expression(&mut item, "DELETE user.tags :rm", &names(), &values).unwrap();
-        let tags = item["user"]["M"]["tags"]["SS"].as_array().unwrap();
+        apply_update_expression(&mut item, "DELETE profile.tags :rm", &names(), &values).unwrap();
+        let tags = item["profile"]["M"]["tags"]["SS"].as_array().unwrap();
         let strs: Vec<&str> = tags.iter().filter_map(|v| v.as_str()).collect();
         assert_eq!(strs, ["a", "c"]);
     }
