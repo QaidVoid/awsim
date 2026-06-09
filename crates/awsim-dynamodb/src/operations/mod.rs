@@ -278,6 +278,41 @@ pub fn build_consumed_capacity(
     Some(Value::Object(cc))
 }
 
+/// Build the `ItemCollectionMetrics` entry for a write that touched the item
+/// whose key attributes are `key_source`.
+///
+/// AWS only emits this when the caller passes `ReturnItemCollectionMetrics=SIZE`
+/// **and** the table has at least one local secondary index (item collections
+/// only exist for LSIs); it returns `None` in every other case so callers can
+/// conditionally insert the field. `key_source` may be the full item or just
+/// the key map, since only the partition key is read from it.
+pub fn item_collection_metrics(
+    input: &Value,
+    table: &crate::state::Table,
+    key_source: &crate::state::DynamoItem,
+) -> Option<Value> {
+    if opt_str(input, "ReturnItemCollectionMetrics") != Some("SIZE") || table.lsi.is_empty() {
+        return None;
+    }
+    let hash_key = table.hash_key()?;
+    let hk_value = key_source.get(hash_key)?;
+    Some(serde_json::json!({
+        "ItemCollectionKey": { hash_key: hk_value },
+        "SizeEstimateRangeGB": [0.0, 1.0],
+    }))
+}
+
+/// Append one `ItemCollectionMetrics` entry to a per-table-name array,
+/// creating the table's array on first use. Used by the batch and transact
+/// write paths, which key metrics by table name.
+pub fn push_item_collection(map: &mut serde_json::Map<String, Value>, table: &str, entry: Value) {
+    map.entry(table.to_string())
+        .or_insert_with(|| Value::Array(Vec::new()))
+        .as_array_mut()
+        .expect("item collection bucket is an array")
+        .push(entry);
+}
+
 #[cfg(test)]
 mod expr_attr_value_tests {
     use super::*;

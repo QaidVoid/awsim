@@ -11,7 +11,9 @@ use crate::{
 use super::item::{
     ITEM_MAX_BYTES, estimate_item_bytes, estimate_value_bytes, item_to_json, parse_item,
 };
-use super::{read_capacity_units, write_capacity_units};
+use super::{
+    item_collection_metrics, push_item_collection, read_capacity_units, write_capacity_units,
+};
 
 /// AWS BatchGetItem caps a single call at 100 keys total across all
 /// tables, and at 16 MB of response payload. Items beyond the byte
@@ -210,6 +212,9 @@ pub fn batch_write_item(
     let mut sqlite_ops: Vec<SqliteOp> = Vec::new();
     let mut write_bytes_by_table: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
+    // ItemCollectionMetrics, when requested, is a per-table array of one
+    // entry per affected item in a table that has an LSI.
+    let mut item_collections: serde_json::Map<String, Value> = serde_json::Map::new();
 
     for (table_name, requests) in request_items {
         let requests_arr = requests.as_array().ok_or_else(|| {
@@ -243,6 +248,9 @@ pub fn batch_write_item(
                 if let Some(keys) = extract_item_keys(&table, &item) {
                     let attrs = item_to_storage_value(&item);
                     *write_bytes_by_table.entry(table_name.clone()).or_default() += item_bytes;
+                    if let Some(icm) = item_collection_metrics(input, &table, &item) {
+                        push_item_collection(&mut item_collections, table_name, icm);
+                    }
                     sqlite_ops.push(SqliteOp::Put {
                         table: table_name.clone(),
                         pk: keys.pk,
@@ -261,6 +269,9 @@ pub fn batch_write_item(
                     // item size; without an upfront SQLite read we
                     // approximate at the 1 KiB-per-WCU minimum.
                     *write_bytes_by_table.entry(table_name.clone()).or_default() += 1;
+                    if let Some(icm) = item_collection_metrics(input, &table, &key) {
+                        push_item_collection(&mut item_collections, table_name, icm);
+                    }
                     sqlite_ops.push(SqliteOp::Delete {
                         table: table_name.clone(),
                         pk,
@@ -297,5 +308,114 @@ pub fn batch_write_item(
         }
     }
 
-    Ok(json!({ "UnprocessedItems": unprocessed_items }))
+    let mut result = json!({ "UnprocessedItems": unprocessed_items });
+    if !item_collections.is_empty() {
+        result["ItemCollectionMetrics"] = Value::Object(item_collections);
+    }
+    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{KeySchemaElement, LocalSecondaryIndex, Projection, Table};
+    use std::collections::VecDeque;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("dynamodb", "us-east-1")
+    }
+
+    fn state_with_lsi_table() -> DynamoState {
+        let state = DynamoState::default();
+        let table = Table {
+            name: "t".into(),
+            arn: "arn:aws:dynamodb:us-east-1:000000000000:table/t".into(),
+            key_schema: vec![
+                KeySchemaElement {
+                    attribute_name: "pk".into(),
+                    key_type: "HASH".into(),
+                },
+                KeySchemaElement {
+                    attribute_name: "sk".into(),
+                    key_type: "RANGE".into(),
+                },
+            ],
+            attribute_definitions: vec![],
+            billing_mode: "PAY_PER_REQUEST".into(),
+            status: "ACTIVE".into(),
+            created_at: 0.0,
+            gsi: vec![],
+            lsi: vec![LocalSecondaryIndex {
+                index_name: "byLsi".into(),
+                key_schema: vec![KeySchemaElement {
+                    attribute_name: "pk".into(),
+                    key_type: "HASH".into(),
+                }],
+                projection: Projection {
+                    projection_type: "ALL".into(),
+                    non_key_attributes: vec![],
+                },
+            }],
+            stream_enabled: false,
+            stream_arn: None,
+            stream_view_type: None,
+            stream_records: VecDeque::new(),
+            stream_sequence: 0,
+            ttl: Default::default(),
+            tags: Default::default(),
+            deletion_protection_enabled: false,
+            sse: Default::default(),
+            read_capacity_units: 0,
+            write_capacity_units: 0,
+        };
+        state.tables.insert("t".into(), table);
+        state
+    }
+
+    #[test]
+    fn batch_write_returns_item_collection_metrics_for_lsi_table() {
+        let state = state_with_lsi_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let res = batch_write_item(
+            &state,
+            &sqlite,
+            &json!({
+                "ReturnItemCollectionMetrics": "SIZE",
+                "RequestItems": {
+                    "t": [
+                        {"PutRequest": {"Item": {"pk": {"S": "a"}, "sk": {"S": "1"}}}},
+                        {"DeleteRequest": {"Key": {"pk": {"S": "b"}, "sk": {"S": "2"}}}},
+                    ]
+                }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        // Per-table map keyed by table name, one entry per affected item.
+        let entries = res["ItemCollectionMetrics"]["t"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["ItemCollectionKey"], json!({"pk": {"S": "a"}}));
+    }
+
+    #[test]
+    fn batch_write_omits_item_collection_metrics_without_lsi() {
+        let state = state_with_lsi_table();
+        // Strip the LSI so the table no longer has item collections.
+        state.tables.get_mut("t").unwrap().lsi.clear();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let res = batch_write_item(
+            &state,
+            &sqlite,
+            &json!({
+                "ReturnItemCollectionMetrics": "SIZE",
+                "RequestItems": {
+                    "t": [{"PutRequest": {"Item": {"pk": {"S": "a"}, "sk": {"S": "1"}}}}]
+                }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(res.get("ItemCollectionMetrics").is_none());
+    }
 }
