@@ -60,6 +60,20 @@ fn validate_attribute_name(name: &str) -> Result<(), AwsError> {
     Ok(())
 }
 
+/// Validate a stream view type from a `StreamSpecification`. AWS rejects any
+/// value outside the four legal types with a `ValidationException`.
+fn validate_stream_view_type(view_type: &str) -> Result<(), AwsError> {
+    const VALID: [&str; 4] = ["KEYS_ONLY", "NEW_IMAGE", "OLD_IMAGE", "NEW_AND_OLD_IMAGES"];
+    if VALID.contains(&view_type) {
+        Ok(())
+    } else {
+        Err(AwsError::validation(format!(
+            "Member must satisfy enum value set: \
+             [KEYS_ONLY, NEW_IMAGE, OLD_IMAGE, NEW_AND_OLD_IMAGES] (got {view_type})"
+        )))
+    }
+}
+
 fn validate_attribute_names(defs: &[AttributeDefinition]) -> Result<(), AwsError> {
     for d in defs {
         validate_attribute_name(&d.attribute_name)?;
@@ -434,6 +448,7 @@ pub fn create_table(
                     .and_then(|v| v.as_str())
                     .unwrap_or("NEW_AND_OLD_IMAGES")
                     .to_string();
+                validate_stream_view_type(&view_type)?;
                 let timestamp = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
@@ -709,6 +724,7 @@ pub fn update_table(
                 .and_then(|v| v.as_str())
                 .unwrap_or("NEW_AND_OLD_IMAGES")
                 .to_string();
+            validate_stream_view_type(&view_type)?;
             let timestamp = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
@@ -1794,6 +1810,15 @@ mod tests {
 
     fn ctx() -> RequestContext {
         RequestContext::new("dynamodb", "us-east-1")
+    }
+
+    #[test]
+    fn validate_stream_view_type_accepts_legal_rejects_others() {
+        for ok in ["KEYS_ONLY", "NEW_IMAGE", "OLD_IMAGE", "NEW_AND_OLD_IMAGES"] {
+            assert!(validate_stream_view_type(ok).is_ok(), "{ok} must be valid");
+        }
+        let err = validate_stream_view_type("BOTH").unwrap_err();
+        assert_eq!(err.code, "ValidationException");
     }
 
     fn state_with_table(name: &str) -> DynamoState {
