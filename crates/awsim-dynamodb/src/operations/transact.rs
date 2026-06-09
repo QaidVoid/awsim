@@ -14,7 +14,8 @@ use crate::{
 use super::{
     get_expr_attr_names, get_expr_attr_values,
     item::{estimate_item_bytes, estimate_value_bytes, item_to_json, parse_item},
-    opt_str, read_capacity_units, validate_expr_attr_values, write_capacity_units,
+    item_collection_metrics, opt_str, push_item_collection, read_capacity_units,
+    validate_expr_attr_values, write_capacity_units,
 };
 
 /// Decode a stored sqlite row into a `DynamoItem`. Returns `None` when
@@ -248,6 +249,11 @@ pub fn transact_write_items(
     // DynamoDB transactional writes charge at the 2x multiplier.
     let mut write_bytes_by_table: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
+    // ItemCollectionMetrics, when requested, is a per-table array of one
+    // entry per written item in a table that has an LSI. ConditionCheck
+    // actions don't write, so they don't contribute. Collected during the
+    // build phase and only returned if the transaction commits.
+    let mut item_collections: serde_json::Map<String, Value> = serde_json::Map::new();
 
     for tx_item in transact_items {
         if let Some(put) = tx_item.get("Put") {
@@ -265,6 +271,9 @@ pub fn transact_write_items(
                         format!("Table not found: {table_name}"),
                     )
                 })?;
+                if let Some(icm) = item_collection_metrics(input, &table, &item) {
+                    push_item_collection(&mut item_collections, &table_name, icm);
+                }
                 extract_item_keys(&table, &item)
                     .ok_or_else(|| AwsError::validation("Could not construct key"))?
             };
@@ -300,6 +309,9 @@ pub fn transact_write_items(
                         format!("Table not found: {table_name}"),
                     )
                 })?;
+                if let Some(icm) = item_collection_metrics(input, &table, &key) {
+                    push_item_collection(&mut item_collections, &table_name, icm);
+                }
                 extract_pk_sk(&table, &key)
                     .ok_or_else(|| AwsError::validation("Could not construct key"))?
             };
@@ -338,6 +350,9 @@ pub fn transact_write_items(
                         format!("Table not found: {table_name}"),
                     )
                 })?;
+                if let Some(icm) = item_collection_metrics(input, &table, &key) {
+                    push_item_collection(&mut item_collections, &table_name, icm);
+                }
                 extract_pk_sk(&table, &key)
                     .ok_or_else(|| AwsError::validation("Could not construct key"))?
             };
@@ -653,7 +668,11 @@ pub fn transact_write_items(
         Ok(())
     })?;
 
-    Ok(json!({}))
+    let mut result = json!({});
+    if !item_collections.is_empty() {
+        result["ItemCollectionMetrics"] = Value::Object(item_collections);
+    }
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -700,6 +719,46 @@ mod tests {
         };
         state.tables.insert("t".into(), table);
         state
+    }
+
+    #[test]
+    fn write_items_returns_item_collection_metrics_keyed_by_table() {
+        use crate::state::{LocalSecondaryIndex, Projection};
+        let state = make_state_with_table();
+        {
+            let mut t = state.tables.get_mut("t").unwrap();
+            t.lsi = vec![LocalSecondaryIndex {
+                index_name: "byLsi".into(),
+                key_schema: vec![KeySchemaElement {
+                    attribute_name: "pk".into(),
+                    key_type: "HASH".into(),
+                }],
+                projection: Projection {
+                    projection_type: "ALL".into(),
+                    non_key_attributes: vec![],
+                },
+            }];
+        }
+        let sqlite = SqliteStore::in_memory().unwrap();
+
+        let res = transact_write_items(
+            &state,
+            &sqlite,
+            &json!({
+                "ReturnItemCollectionMetrics": "SIZE",
+                "TransactItems": [
+                    {"Put": {"TableName": "t", "Item": {"pk": {"S": "a"}, "sk": {"S": "x"}}}},
+                    {"Put": {"TableName": "t", "Item": {"pk": {"S": "b"}, "sk": {"S": "y"}}}},
+                ],
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        // Per-table map -> array, one entry per written item.
+        let entries = res["ItemCollectionMetrics"]["t"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["ItemCollectionKey"], json!({"pk": {"S": "a"}}));
     }
 
     #[test]
