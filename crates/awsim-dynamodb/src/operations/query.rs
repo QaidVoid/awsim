@@ -172,6 +172,8 @@ pub fn query(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    let input = super::legacy::rewrite(input)?;
+    let input = input.as_ref();
     let table_name = require_str(input, "TableName")?;
     validate_expr_attr_values(input)?;
 
@@ -567,6 +569,8 @@ pub fn scan(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    let input = super::legacy::rewrite(input)?;
+    let input = input.as_ref();
     let table_name = require_str(input, "TableName")?;
     validate_expr_attr_values(input)?;
 
@@ -1317,6 +1321,87 @@ mod tests {
         };
         state.tables.insert("t".into(), table);
         state
+    }
+
+    #[test]
+    fn query_honors_legacy_key_conditions() {
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        for sk in ["a1", "a2", "b1"] {
+            put_item(
+                &state,
+                &sqlite,
+                &json!({"TableName": "t", "Item": {"pk": {"S": "p1"}, "sk": {"S": sk}}}),
+                &c,
+            )
+            .unwrap();
+        }
+        // A different partition that the query must not return.
+        put_item(
+            &state,
+            &sqlite,
+            &json!({"TableName": "t", "Item": {"pk": {"S": "p2"}, "sk": {"S": "a1"}}}),
+            &c,
+        )
+        .unwrap();
+
+        let resp = query(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "KeyConditions": {
+                    "pk": {"ComparisonOperator": "EQ", "AttributeValueList": [{"S": "p1"}]},
+                    "sk": {"ComparisonOperator": "BEGINS_WITH", "AttributeValueList": [{"S": "a"}]},
+                },
+            }),
+            &c,
+        )
+        .unwrap();
+
+        assert_eq!(
+            resp["Count"],
+            json!(2),
+            "only p1 items with sk begins_with a"
+        );
+    }
+
+    #[test]
+    fn scan_honors_legacy_scan_filter() {
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        put_item(
+            &state,
+            &sqlite,
+            &json!({"TableName": "t", "Item": {"pk": {"S": "p1"}, "sk": {"S": "s"}, "tier": {"S": "gold"}}}),
+            &c,
+        )
+        .unwrap();
+        put_item(
+            &state,
+            &sqlite,
+            &json!({"TableName": "t", "Item": {"pk": {"S": "p2"}, "sk": {"S": "s"}, "tier": {"S": "silver"}}}),
+            &c,
+        )
+        .unwrap();
+
+        let resp = scan(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "ScanFilter": {
+                    "tier": {"ComparisonOperator": "EQ", "AttributeValueList": [{"S": "gold"}]}
+                },
+            }),
+            &c,
+        )
+        .unwrap();
+
+        assert_eq!(resp["Count"], json!(1));
+        assert_eq!(resp["Items"][0]["tier"], json!({"S": "gold"}));
     }
 
     #[test]

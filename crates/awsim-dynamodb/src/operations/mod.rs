@@ -2,6 +2,7 @@ pub mod backup;
 pub mod batch;
 pub mod item;
 pub mod kinesis_dest;
+pub mod legacy;
 pub mod partiql;
 pub mod query;
 pub mod resource_policy;
