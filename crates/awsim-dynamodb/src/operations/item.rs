@@ -31,8 +31,8 @@ fn fetch_existing(
 
 use super::reject_attrs_to_get_with_projection;
 use super::{
-    build_consumed_capacity, get_expr_attr_names, get_expr_attr_values, opt_str,
-    read_capacity_units, require_str, validate_expr_attr_values, write_capacity_units,
+    build_consumed_capacity, get_expr_attr_names, get_expr_attr_values, item_collection_metrics,
+    opt_str, read_capacity_units, require_str, validate_expr_attr_values, write_capacity_units,
 };
 
 /// Build a `ConditionalCheckFailedException` matching the real DynamoDB shape:
@@ -320,7 +320,7 @@ pub fn put_item(
     // the lock so we get them while we hold the canonical schema view.
     // Pull schema-derived bits up front, then drop the dashmap guard so
     // we never hold it across SQLite IO.
-    let (sqlite_keys, keys_item) = {
+    let (sqlite_keys, keys_item, item_collection) = {
         let table = state.tables.get(&table_name).ok_or_else(|| {
             AwsError::service_not_found(
                 "ResourceNotFoundException",
@@ -355,7 +355,8 @@ pub fn put_item(
                 keys_item.insert(k.to_string(), v.clone());
             }
         }
-        (sqlite_keys, keys_item)
+        let item_collection = item_collection_metrics(input, &table, &item);
+        (sqlite_keys, keys_item, item_collection)
     };
 
     let expr_attr_names = get_expr_attr_names(input);
@@ -411,6 +412,9 @@ pub fn put_item(
     state.enforce_throughput(&table_name, BucketKind::Write, write_units)?;
     if let Some(cc) = build_consumed_capacity(input, &table_name, 0.0, write_units, None) {
         result["ConsumedCapacity"] = cc;
+    }
+    if let Some(icm) = item_collection {
+        result["ItemCollectionMetrics"] = icm;
     }
     Ok(result)
 }
@@ -477,7 +481,7 @@ pub fn delete_item(
 
     let key = parse_item(&input["Key"]).ok_or_else(|| AwsError::validation("Key is required"))?;
 
-    let (sqlite_pk_sk, keys_item) = {
+    let (sqlite_pk_sk, keys_item, item_collection) = {
         let table = state.tables.get(&table_name).ok_or_else(|| {
             AwsError::service_not_found(
                 "ResourceNotFoundException",
@@ -494,7 +498,8 @@ pub fn delete_item(
                 keys_item.insert(k.to_string(), v.clone());
             }
         }
-        (sqlite_pk_sk, keys_item)
+        let item_collection = item_collection_metrics(input, &table, &key);
+        (sqlite_pk_sk, keys_item, item_collection)
     };
 
     let expr_attr_names = get_expr_attr_names(input);
@@ -548,6 +553,9 @@ pub fn delete_item(
     if let Some(cc) = build_consumed_capacity(input, &table_name, 0.0, write_units, None) {
         result["ConsumedCapacity"] = cc;
     }
+    if let Some(icm) = item_collection {
+        result["ItemCollectionMetrics"] = icm;
+    }
     Ok(result)
 }
 
@@ -562,7 +570,7 @@ pub fn update_item(
 
     let key = parse_item(&input["Key"]).ok_or_else(|| AwsError::validation("Key is required"))?;
 
-    let (sqlite_pk_sk, keys_item) = {
+    let (sqlite_pk_sk, keys_item, item_collection) = {
         let table = state.tables.get(&table_name).ok_or_else(|| {
             AwsError::service_not_found(
                 "ResourceNotFoundException",
@@ -579,7 +587,8 @@ pub fn update_item(
                 keys_item.insert(k.to_string(), v.clone());
             }
         }
-        (sqlite_pk_sk, keys_item)
+        let item_collection = item_collection_metrics(input, &table, &key);
+        (sqlite_pk_sk, keys_item, item_collection)
     };
 
     let expr_attr_names = get_expr_attr_names(input);
@@ -725,6 +734,9 @@ pub fn update_item(
     if let Some(cc) = build_consumed_capacity(input, &table_name, 0.0, write_units, None) {
         result["ConsumedCapacity"] = cc;
     }
+    if let Some(icm) = item_collection {
+        result["ItemCollectionMetrics"] = icm;
+    }
     Ok(result)
 }
 
@@ -816,6 +828,103 @@ mod tests {
         };
         state.tables.insert("t".into(), table);
         state
+    }
+
+    /// Same as `make_state_with_table` but the table carries one LSI, which
+    /// is the precondition for `ItemCollectionMetrics`.
+    fn make_state_with_lsi_table() -> DynamoState {
+        use crate::state::{LocalSecondaryIndex, Projection};
+        let state = make_state_with_table();
+        {
+            let mut t = state.tables.get_mut("t").unwrap();
+            t.lsi = vec![LocalSecondaryIndex {
+                index_name: "byLsi".into(),
+                key_schema: vec![
+                    KeySchemaElement {
+                        attribute_name: "pk".into(),
+                        key_type: "HASH".into(),
+                    },
+                    KeySchemaElement {
+                        attribute_name: "lsi_sk".into(),
+                        key_type: "RANGE".into(),
+                    },
+                ],
+                projection: Projection {
+                    projection_type: "ALL".into(),
+                    non_key_attributes: vec![],
+                },
+            }];
+        }
+        state
+    }
+
+    #[test]
+    fn put_item_item_collection_metrics_gated_on_lsi_and_request() {
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        let requested = json!({
+            "TableName": "t",
+            "Item": {"pk": {"S": "u1"}, "sk": {"S": "p"}},
+            "ReturnItemCollectionMetrics": "SIZE",
+        });
+
+        // LSI table + requested: metric present, keyed by the partition key.
+        let res = put_item(&make_state_with_lsi_table(), &sqlite, &requested, &c).unwrap();
+        let icm = &res["ItemCollectionMetrics"];
+        assert_eq!(icm["ItemCollectionKey"], json!({"pk": {"S": "u1"}}));
+        assert!(icm["SizeEstimateRangeGB"].is_array());
+
+        // No LSI: AWS omits the field even when requested.
+        let res = put_item(&make_state_with_table(), &sqlite, &requested, &c).unwrap();
+        assert!(res.get("ItemCollectionMetrics").is_none());
+
+        // LSI table but not requested: omitted.
+        let not_requested = json!({
+            "TableName": "t",
+            "Item": {"pk": {"S": "u2"}, "sk": {"S": "p"}},
+        });
+        let res = put_item(&make_state_with_lsi_table(), &sqlite, &not_requested, &c).unwrap();
+        assert!(res.get("ItemCollectionMetrics").is_none());
+    }
+
+    #[test]
+    fn update_and_delete_return_item_collection_metrics_on_lsi_table() {
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+
+        let upd = update_item(
+            &make_state_with_lsi_table(),
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Key": {"pk": {"S": "k"}, "sk": {"S": "s"}},
+                "UpdateExpression": "SET v = :v",
+                "ExpressionAttributeValues": {":v": {"N": "1"}},
+                "ReturnItemCollectionMetrics": "SIZE",
+            }),
+            &c,
+        )
+        .unwrap();
+        assert_eq!(
+            upd["ItemCollectionMetrics"]["ItemCollectionKey"],
+            json!({"pk": {"S": "k"}})
+        );
+
+        let del = delete_item(
+            &make_state_with_lsi_table(),
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Key": {"pk": {"S": "k"}, "sk": {"S": "s"}},
+                "ReturnItemCollectionMetrics": "SIZE",
+            }),
+            &c,
+        )
+        .unwrap();
+        assert_eq!(
+            del["ItemCollectionMetrics"]["ItemCollectionKey"],
+            json!({"pk": {"S": "k"}})
+        );
     }
 
     #[test]
