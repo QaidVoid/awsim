@@ -83,6 +83,23 @@ fn emit_stream_record(
     let seq = table.stream_sequence;
     let sequence_number = format!("{:022}", seq);
 
+    let view_type = table
+        .stream_view_type
+        .clone()
+        .unwrap_or_else(|| "NEW_AND_OLD_IMAGES".to_string());
+
+    // Drop the images the table's StreamViewType does not project before
+    // they reach the record. `Keys` is always present; KEYS_ONLY carries
+    // nothing else, NEW_IMAGE/OLD_IMAGE carry one side, and any other value
+    // (including the NEW_AND_OLD_IMAGES default) carries both.
+    let (new_image, old_image) = match view_type.as_str() {
+        "KEYS_ONLY" => (None, None),
+        "NEW_IMAGE" => (new_image, None),
+        "OLD_IMAGE" => (None, old_image),
+        _ => (new_image, old_image),
+    };
+
+    // Size the record from what it actually carries after projection.
     let size_bytes: u64 = {
         let mut sz = 0u64;
         for (k, v) in &keys {
@@ -100,11 +117,6 @@ fn emit_stream_record(
         }
         sz
     };
-
-    let view_type = table
-        .stream_view_type
-        .clone()
-        .unwrap_or_else(|| "NEW_AND_OLD_IMAGES".to_string());
 
     let record = StreamRecord {
         event_id: Uuid::new_v4().to_string(),
@@ -951,6 +963,64 @@ mod tests {
             .unwrap()
             .expect("sqlite store");
         assert_eq!(stored["name"], json!({"S": "Alice"}));
+    }
+
+    fn make_streamed_state(view_type: &str) -> DynamoState {
+        let state = make_state_with_table();
+        {
+            let mut t = state.tables.get_mut("t").unwrap();
+            t.stream_enabled = true;
+            t.stream_arn = Some("arn:aws:dynamodb:us-east-1:000000000000:table/t/stream/1".into());
+            t.stream_view_type = Some(view_type.to_string());
+        }
+        state
+    }
+
+    #[test]
+    fn stream_records_respect_view_type() {
+        // Keys are always present; the images carried depend on the
+        // table's StreamViewType.
+        for (view_type, want_new, want_old) in [
+            ("KEYS_ONLY", false, false),
+            ("NEW_IMAGE", true, false),
+            ("OLD_IMAGE", false, true),
+            ("NEW_AND_OLD_IMAGES", true, true),
+        ] {
+            let state = make_streamed_state(view_type);
+            let sqlite = SqliteStore::in_memory().unwrap();
+            let c = ctx();
+
+            let put = |v: &str| {
+                json!({
+                    "TableName": "t",
+                    "Item": {"pk": {"S": "a"}, "sk": {"S": "b"}, "v": {"S": v}},
+                })
+            };
+            // INSERT then MODIFY so the second record has both images
+            // available to filter.
+            put_item(&state, &sqlite, &put("1"), &c).unwrap();
+            put_item(&state, &sqlite, &put("2"), &c).unwrap();
+
+            let table = state.tables.get("t").unwrap();
+            let modify = table
+                .stream_records
+                .iter()
+                .find(|r| r.event_name == "MODIFY")
+                .expect("MODIFY record");
+
+            assert_eq!(modify.dynamodb.stream_view_type, view_type);
+            assert!(modify.dynamodb.keys.contains_key("pk"));
+            assert_eq!(
+                modify.dynamodb.new_image.is_some(),
+                want_new,
+                "{view_type}: new_image presence"
+            );
+            assert_eq!(
+                modify.dynamodb.old_image.is_some(),
+                want_old,
+                "{view_type}: old_image presence"
+            );
+        }
     }
 
     #[test]
