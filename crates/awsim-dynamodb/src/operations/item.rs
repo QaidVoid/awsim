@@ -302,6 +302,8 @@ pub fn put_item(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    let input = super::legacy::rewrite(input)?;
+    let input = input.as_ref();
     let table_name = require_str(input, "TableName")?.to_string();
     validate_expr_attr_values(input)?;
 
@@ -476,6 +478,8 @@ pub fn delete_item(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    let input = super::legacy::rewrite(input)?;
+    let input = input.as_ref();
     let table_name = require_str(input, "TableName")?.to_string();
     validate_expr_attr_values(input)?;
 
@@ -565,6 +569,8 @@ pub fn update_item(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    let input = super::legacy::rewrite(input)?;
+    let input = input.as_ref();
     let table_name = require_str(input, "TableName")?.to_string();
     validate_expr_attr_values(input)?;
 
@@ -925,6 +931,50 @@ mod tests {
             del["ItemCollectionMetrics"]["ItemCollectionKey"],
             json!({"pk": {"S": "k"}})
         );
+    }
+
+    #[test]
+    fn put_item_honors_legacy_expected_exists_false() {
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        let req = json!({
+            "TableName": "t",
+            "Item": {"pk": {"S": "u"}, "sk": {"S": "p"}},
+            "Expected": {"pk": {"Exists": false}},
+        });
+
+        // First write: pk does not exist, so the legacy guard passes.
+        put_item(&state, &sqlite, &req, &c).unwrap();
+        // Second write: pk now exists, so attribute_not_exists fails.
+        let err = put_item(&state, &sqlite, &req, &c).unwrap_err();
+        assert_eq!(err.code, "ConditionalCheckFailedException");
+    }
+
+    #[test]
+    fn update_item_applies_legacy_attribute_updates() {
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+
+        let res = update_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Key": {"pk": {"S": "u"}, "sk": {"S": "p"}},
+                "AttributeUpdates": {
+                    "name": {"Action": "PUT", "Value": {"S": "Alice"}},
+                    "hits": {"Action": "ADD", "Value": {"N": "2"}},
+                },
+                "ReturnValues": "ALL_NEW",
+            }),
+            &c,
+        )
+        .unwrap();
+
+        assert_eq!(res["Attributes"]["name"], json!({"S": "Alice"}));
+        assert_eq!(res["Attributes"]["hits"], json!({"N": "2"}));
     }
 
     #[test]
