@@ -175,6 +175,13 @@ pub fn transact_write_items(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    // Replay an identical retry that reused this ClientRequestToken; otherwise
+    // hold a guard to record the response once the transaction commits.
+    let (idempotency, replay) = super::idempotency::begin(state, input, ctx)?;
+    if let Some(cached) = replay {
+        return Ok(cached);
+    }
+
     let transact_items = input
         .get("TransactItems")
         .and_then(|v| v.as_array())
@@ -672,6 +679,7 @@ pub fn transact_write_items(
     if !item_collections.is_empty() {
         result["ItemCollectionMetrics"] = Value::Object(item_collections);
     }
+    idempotency.record(state, &result);
     Ok(result)
 }
 
@@ -759,6 +767,62 @@ mod tests {
         let entries = res["ItemCollectionMetrics"]["t"].as_array().unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0]["ItemCollectionKey"], json!({"pk": {"S": "a"}}));
+    }
+
+    #[test]
+    fn write_items_replays_repeated_token_without_reapplying() {
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        let req = json!({
+            "ClientRequestToken": "tok-1",
+            "TransactItems": [{
+                "Update": {
+                    "TableName": "t",
+                    "Key": {"pk": {"S": "a"}, "sk": {"S": "b"}},
+                    "UpdateExpression": "ADD hits :one",
+                    "ExpressionAttributeValues": {":one": {"N": "1"}},
+                }
+            }],
+        });
+
+        transact_write_items(&state, &sqlite, &req, &c).unwrap();
+        // Same token: replayed, so the ADD is not applied a second time.
+        transact_write_items(&state, &sqlite, &req, &c).unwrap();
+
+        // A different token applies the increment again.
+        let mut req2 = req.clone();
+        req2["ClientRequestToken"] = json!("tok-2");
+        transact_write_items(&state, &sqlite, &req2, &c).unwrap();
+
+        let item = sqlite
+            .get_item(&c.account_id, &c.region, "t", "a", "b")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            item["hits"],
+            json!({"N": "2"}),
+            "replay must not double-apply"
+        );
+    }
+
+    #[test]
+    fn write_items_rejects_token_reuse_with_different_payload() {
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        let req = json!({
+            "ClientRequestToken": "dup",
+            "TransactItems": [
+                {"Put": {"TableName": "t", "Item": {"pk": {"S": "a"}, "sk": {"S": "b"}}}}
+            ],
+        });
+        transact_write_items(&state, &sqlite, &req, &c).unwrap();
+
+        let mut changed = req.clone();
+        changed["TransactItems"][0]["Put"]["Item"]["sk"] = json!({"S": "c"});
+        let err = transact_write_items(&state, &sqlite, &changed, &c).unwrap_err();
+        assert_eq!(err.code, "IdempotentParameterMismatchException");
     }
 
     #[test]

@@ -293,6 +293,21 @@ pub struct GlobalTable {
     pub replication_group: Vec<GlobalTableReplica>,
 }
 
+/// A cached transactional response, keyed by `ClientRequestToken`, used to make
+/// `TransactWriteItems` and `ExecuteTransaction` idempotent within AWS's
+/// 10-minute window.
+#[derive(Debug, Clone)]
+pub struct IdempotencyEntry {
+    /// Hash of the request payload (minus the token) seen with this token. A
+    /// later request with the same token but a different fingerprint is a
+    /// parameter mismatch.
+    pub fingerprint: u64,
+    /// The successful response to replay for a matching retry.
+    pub response: Value,
+    /// Unix epoch seconds when the entry was stored, for window expiry.
+    pub stored_at: f64,
+}
+
 #[derive(Default)]
 pub struct DynamoState {
     pub tables: DashMap<String, Table>,
@@ -305,6 +320,10 @@ pub struct DynamoState {
     /// Global tables keyed by GlobalTableName. The implementation models
     /// the metadata only — there's no cross-region data replication.
     pub global_tables: DashMap<String, GlobalTable>,
+    /// Idempotency cache for transactional writes, keyed by
+    /// `{account}:{region}:{ClientRequestToken}`. Ephemeral (not snapshotted);
+    /// entries expire after a 10-minute window.
+    pub idempotency: DashMap<String, IdempotencyEntry>,
     /// Per-table token buckets driving `BillingMode == PROVISIONED`
     /// throttling. Looked up after each item / query / batch op so
     /// over-quota requests get a real
@@ -328,6 +347,7 @@ impl std::fmt::Debug for DynamoState {
             .field("pitr_enabled", &self.pitr_enabled)
             .field("resource_policies", &self.resource_policies)
             .field("global_tables", &self.global_tables)
+            .field("idempotency", &self.idempotency)
             .finish()
     }
 }
