@@ -21,7 +21,9 @@ pub struct StreamRecordData {
     pub sequence_number: String,
     /// Approximate size of the record in bytes.
     pub size_bytes: u64,
-    /// Always "NEW_AND_OLD_IMAGES" for AWSim.
+    /// The owning table's StreamViewType: "KEYS_ONLY", "NEW_IMAGE",
+    /// "OLD_IMAGE", or "NEW_AND_OLD_IMAGES". Determines which of
+    /// `new_image` / `old_image` are populated.
     pub stream_view_type: String,
 }
 
