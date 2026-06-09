@@ -1,0 +1,72 @@
+# DynamoDB reserved words, one per line. Blank lines and lines starting with
+# '#' are ignored. Matching is case-insensitive.
+#
+# This is a STARTER SUBSET of the most commonly hit reserved words. Replace or
+# extend it with the full official AWS DynamoDB reserved-words list for complete
+# parity. The validation code in reserved.rs reads this file verbatim, so no
+# code change is needed when the list grows.
+
+ABORT
+ABSOLUTE
+ACTION
+ADD
+ALL
+ALTER
+AND
+ANY
+AS
+ASC
+BETWEEN
+BY
+BYTE
+COLUMN
+COMMENT
+COUNT
+CREATE
+DATA
+DATABASE
+DATE
+DELETE
+DESC
+DROP
+ELEMENT
+EXISTS
+FILTER
+FROM
+GROUP
+HASH
+IN
+INDEX
+INSERT
+INTO
+KEY
+KEYS
+LANGUAGE
+LIKE
+LIMIT
+LIST
+LOCAL
+MAP
+NAME
+NUMBER
+OR
+ORDER
+RANGE
+REGION
+SCAN
+SELECT
+SET
+SIZE
+SOURCE
+STATUS
+TABLE
+TIME
+TIMESTAMP
+TYPE
+UPDATE
+USER
+VALUE
+VALUES
+WHERE
+YEAR
+ZONE

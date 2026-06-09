@@ -210,7 +210,10 @@ pub fn query(
     let key_condition = parse_condition(key_condition_expr)?;
     let filter_condition = filter_expr.map(parse_condition).transpose()?;
 
-    let projection_paths: Vec<String> = projection_expr.map(parse_projection).unwrap_or_default();
+    let projection_paths: Vec<String> = projection_expr
+        .map(parse_projection)
+        .transpose()?
+        .unwrap_or_default();
 
     // Base-table key names, captured while `table` is still borrowed. A GSI
     // query's LastEvaluatedKey must carry these as a resume tiebreaker even
@@ -597,7 +600,10 @@ pub fn scan(
         .cloned();
 
     let filter_condition = filter_expr.map(parse_condition).transpose()?;
-    let projection_paths: Vec<String> = projection_expr.map(parse_projection).unwrap_or_default();
+    let projection_paths: Vec<String> = projection_expr
+        .map(parse_projection)
+        .transpose()?
+        .unwrap_or_default();
 
     let hash_key_name = table.hash_key().unwrap_or("").to_string();
     let range_key_name = table.range_key().map(|s| s.to_string());
@@ -1402,6 +1408,51 @@ mod tests {
 
         assert_eq!(resp["Count"], json!(1));
         assert_eq!(resp["Items"][0]["tier"], json!({"S": "gold"}));
+    }
+
+    #[test]
+    fn scan_rejects_reserved_word_in_filter_even_on_empty_table() {
+        // No items: AWS still validates the expression, so a bare reserved
+        // word must be rejected up front rather than slipping through because
+        // nothing was evaluated.
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let err = scan(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "FilterExpression": "Size = :v",
+                "ExpressionAttributeValues": {":v": {"N": "1"}},
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(
+            err.message.contains("reserved keyword"),
+            "got {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn query_rejects_reserved_word_in_projection() {
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let err = query(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "KeyConditionExpression": "pk = :p",
+                "ExpressionAttributeValues": {":p": {"S": "x"}},
+                "ProjectionExpression": "Status",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
     }
 
     #[test]
