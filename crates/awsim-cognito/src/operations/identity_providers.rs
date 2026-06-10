@@ -59,7 +59,7 @@ pub fn create_identity_provider(
     })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -70,7 +70,7 @@ pub fn create_identity_provider(
         .iter()
         .any(|idp| idp.provider_name == provider_name)
     {
-        return Err(AwsError::conflict(
+        return Err(AwsError::bad_request(
             "DuplicateProviderException",
             format!("Identity provider already exists: {provider_name}"),
         ));
@@ -121,7 +121,7 @@ pub fn describe_identity_provider(
     })?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -132,7 +132,7 @@ pub fn describe_identity_provider(
         .iter()
         .find(|idp| idp.provider_name == provider_name)
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Identity provider not found: {provider_name}"),
             )
@@ -158,7 +158,7 @@ pub fn update_identity_provider(
     })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -170,7 +170,7 @@ pub fn update_identity_provider(
         .iter_mut()
         .find(|idp| idp.provider_name == provider_name)
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Identity provider not found: {provider_name}"),
             )
@@ -213,7 +213,7 @@ pub fn delete_identity_provider(
     })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -224,7 +224,7 @@ pub fn delete_identity_provider(
         .retain(|idp| idp.provider_name != provider_name);
 
     if pool.identity_providers.len() == len_before {
-        return Err(AwsError::not_found(
+        return Err(AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("Identity provider not found: {provider_name}"),
         ));
@@ -252,7 +252,7 @@ pub fn list_identity_providers(
     let limit = cap_max_results(input["MaxResults"].as_i64(), 60, 60);
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -300,7 +300,7 @@ pub fn get_identity_provider_by_identifier(
     })?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -314,7 +314,7 @@ pub fn get_identity_provider_by_identifier(
                 || idp.provider_name == idp_identifier
         })
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Identity provider not found for identifier: {idp_identifier}"),
             )
@@ -361,7 +361,7 @@ pub fn admin_link_provider_for_user(
     })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -376,14 +376,14 @@ pub fn admin_link_provider_for_user(
         })
         .cloned()
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "UserNotFoundException",
                 format!("Destination user not found: {dest_value}"),
             )
         })?;
 
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         )
@@ -428,7 +428,7 @@ pub fn admin_disable_provider_for_user(
         })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -449,7 +449,7 @@ pub fn admin_disable_provider_for_user(
     }
 
     if !found {
-        return Err(AwsError::not_found(
+        return Err(AwsError::service_not_found(
             "UserNotFoundException",
             format!("No user found with provider {provider_name} value {provider_attr_value}"),
         ));

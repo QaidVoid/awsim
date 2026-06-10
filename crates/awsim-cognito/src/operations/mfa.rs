@@ -60,7 +60,7 @@ pub fn set_user_pool_mfa_config(
     })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -98,7 +98,7 @@ pub fn get_user_pool_mfa_config(
     })?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -123,8 +123,9 @@ pub fn associate_software_token(
 ) -> Result<Value, AwsError> {
     // Resolve username from AccessToken or Session
     let username = if let Some(token) = input["AccessToken"].as_str() {
-        username_from_access_token(token)
-            .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid access token"))?
+        username_from_access_token(token).ok_or_else(|| {
+            AwsError::bad_request("NotAuthorizedException", "Invalid access token")
+        })?
     } else if let Some(_session) = input["Session"].as_str() {
         // Session-based flow: session stores pool_id+username in MFA session map.
         // For dev emulator we look it up from the session store on CognitoState.
@@ -133,7 +134,7 @@ pub fn associate_software_token(
             .mfa_sessions
             .get(session)
             .map(|e| e.username.clone())
-            .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid session"))?
+            .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid session"))?
     } else {
         return Err(AwsError::bad_request(
             "InvalidParameterException",
@@ -181,14 +182,15 @@ pub fn verify_software_token(
     }
 
     let username = if let Some(token) = input["AccessToken"].as_str() {
-        username_from_access_token(token)
-            .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid access token"))?
+        username_from_access_token(token).ok_or_else(|| {
+            AwsError::bad_request("NotAuthorizedException", "Invalid access token")
+        })?
     } else if let Some(session) = input["Session"].as_str() {
         state
             .mfa_sessions
             .get(session)
             .map(|e| e.username.clone())
-            .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid session"))?
+            .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid session"))?
     } else {
         return Err(AwsError::bad_request(
             "InvalidParameterException",
@@ -219,7 +221,7 @@ pub fn verify_software_token(
         }
     }
 
-    Err(AwsError::not_found(
+    Err(AwsError::service_not_found(
         "UserNotFoundException",
         format!("User not found: {username}"),
     ))
@@ -239,7 +241,7 @@ pub fn set_user_mfa_preference(
     })?;
 
     let username = username_from_access_token(access_token)
-        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
 
     apply_mfa_preference(state, &username, input);
 
@@ -264,14 +266,14 @@ pub fn admin_set_user_mfa_preference(
     })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
     })?;
 
     let user = pool.users.get_mut(username).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         )

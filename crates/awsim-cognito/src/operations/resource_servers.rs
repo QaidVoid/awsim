@@ -58,7 +58,7 @@ pub fn create_resource_server(
         .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "Name is required"))?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -69,7 +69,7 @@ pub fn create_resource_server(
         .iter()
         .any(|rs| rs.identifier == identifier)
     {
-        return Err(AwsError::conflict(
+        return Err(AwsError::bad_request(
             "InvalidParameterException",
             format!("Resource server already exists: {identifier}"),
         ));
@@ -107,7 +107,7 @@ pub fn describe_resource_server(
     })?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -118,7 +118,7 @@ pub fn describe_resource_server(
         .iter()
         .find(|rs| rs.identifier == identifier)
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Resource server not found: {identifier}"),
             )
@@ -144,7 +144,7 @@ pub fn update_resource_server(
     })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -155,7 +155,7 @@ pub fn update_resource_server(
         .iter_mut()
         .find(|rs| rs.identifier == identifier)
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Resource server not found: {identifier}"),
             )
@@ -191,7 +191,7 @@ pub fn delete_resource_server(
     })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -202,7 +202,7 @@ pub fn delete_resource_server(
         .retain(|rs| rs.identifier != identifier);
 
     if pool.resource_servers.len() == len_before {
-        return Err(AwsError::not_found(
+        return Err(AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("Resource server not found: {identifier}"),
         ));
@@ -230,7 +230,7 @@ pub fn list_resource_servers(
     let limit = cap_max_results(input["MaxResults"].as_i64(), 50, 50);
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )

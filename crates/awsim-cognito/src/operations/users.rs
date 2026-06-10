@@ -245,7 +245,7 @@ fn enforce_write_attributes<'a>(
     }
     for name in names {
         if !client.write_attributes.iter().any(|w| w == name) {
-            return Err(AwsError::forbidden(
+            return Err(AwsError::bad_request(
                 "NotAuthorizedException",
                 "A client attempted to write unauthorized attribute",
             ));
@@ -339,7 +339,7 @@ fn ensure_attribute_unique(
         }
     });
     if collision {
-        return Err(AwsError::conflict(
+        return Err(AwsError::bad_request(
             "UsernameExistsException",
             format!("An account with the given {attr} already exists"),
         ));
@@ -428,11 +428,11 @@ pub fn sign_up(
             let pool_id = e.id.clone();
             drop(e);
             state.user_pools.get_mut(&pool_id).ok_or_else(|| {
-                AwsError::not_found("ResourceNotFoundException", "User pool not found")
+                AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
             })?
         }
         None => {
-            return Err(AwsError::not_found(
+            return Err(AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("No user pool found for client: {client_id}"),
             ));
@@ -440,7 +440,7 @@ pub fn sign_up(
     };
 
     if pool.users.contains_key(username) {
-        return Err(AwsError::conflict(
+        return Err(AwsError::bad_request(
             "UsernameExistsException",
             format!("Username already exists: {username}"),
         ));
@@ -518,14 +518,14 @@ pub fn confirm_sign_up(
         .find(|e| e.clients.contains_key(client_id));
 
     let pool_id = pool_entry.map(|e| e.id.clone()).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("No user pool found for client: {client_id}"),
         )
     })?;
 
     let mut pool = state.user_pools.get_mut(&pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -534,7 +534,7 @@ pub fn confirm_sign_up(
     let code_key = format!("{pool_id}:{username}");
     let auto_verified = pool.auto_verified_attributes.clone();
     let user = pool.users.get_mut(username).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         )
@@ -626,20 +626,20 @@ pub fn admin_confirm_sign_up(
     })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
     })?;
 
     let username = resolve_username(&pool, username).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         )
     })?;
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         )
@@ -679,14 +679,14 @@ pub fn admin_create_user(
     let password = input["TemporaryPassword"].as_str().unwrap_or("Temp@1234");
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
     })?;
 
     if pool.users.contains_key(username) {
-        return Err(AwsError::conflict(
+        return Err(AwsError::bad_request(
             "UsernameExistsException",
             format!("Username already exists: {username}"),
         ));
@@ -729,20 +729,20 @@ pub fn admin_delete_user(
     })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
     })?;
 
     let username = resolve_username(&pool, username).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         )
     })?;
     if pool.users.remove(&username).is_none() {
-        return Err(AwsError::not_found(
+        return Err(AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         ));
@@ -769,20 +769,20 @@ pub fn admin_get_user(
     })?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
     })?;
 
     let username = resolve_username(&pool, username).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         )
     })?;
     let user = pool.users.get(&username).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         )
@@ -814,7 +814,7 @@ pub fn admin_set_user_password(
     let permanent = input["Permanent"].as_bool().unwrap_or(false);
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -823,13 +823,13 @@ pub fn admin_set_user_password(
     super::auth_policy::validate_password(&pool.policies, password)?;
 
     let username = resolve_username(&pool, username).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         )
     })?;
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         )
@@ -874,7 +874,7 @@ pub fn list_users(
     })?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -948,14 +948,14 @@ pub fn get_user(
     })?;
 
     if state.revoked_tokens.revoked.contains_key(access_token) {
-        return Err(AwsError::forbidden(
+        return Err(AwsError::bad_request(
             "NotAuthorizedException",
             "Token has been revoked",
         ));
     }
 
     let claims = crate::jwt::verify_access_token(access_token)
-        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
     let username = claims.username;
 
     for pool_entry in state.user_pools.iter() {
@@ -981,7 +981,7 @@ pub fn get_user(
         }
     }
 
-    Err(AwsError::not_found(
+    Err(AwsError::service_not_found(
         "UserNotFoundException",
         format!("User not found: {username}"),
     ))
@@ -1015,7 +1015,7 @@ pub fn forgot_password(
         .find(|e| e.clients.contains_key(client_id));
 
     let pool_id = pool_entry.map(|e| e.id.clone()).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("No pool found for client: {client_id}"),
         )
@@ -1030,14 +1030,14 @@ pub fn forgot_password(
     let dest;
     {
         let mut pool = state.user_pools.get_mut(&pool_id).ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("User pool not found: {pool_id}"),
             )
         })?;
         let lambda_arn = pool.lambda_config.get("CustomMessage").cloned();
         let user = pool.users.get_mut(username).ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "UserNotFoundException",
                 format!("User not found: {username}"),
             )
@@ -1123,14 +1123,14 @@ pub fn confirm_forgot_password(
         .find(|e| e.clients.contains_key(client_id));
 
     let pool_id = pool_entry.map(|e| e.id.clone()).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("No pool found for client: {client_id}"),
         )
     })?;
 
     let mut pool = state.user_pools.get_mut(&pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -1138,7 +1138,7 @@ pub fn confirm_forgot_password(
     super::auth_policy::validate_password(&pool.policies, password)?;
 
     let user = pool.users.get_mut(username).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         )
@@ -1214,27 +1214,27 @@ pub fn change_password(
     })?;
 
     if state.revoked_tokens.revoked.contains_key(access_token) {
-        return Err(AwsError::forbidden(
+        return Err(AwsError::bad_request(
             "NotAuthorizedException",
             "Token has been revoked",
         ));
     }
 
     let username = crate::jwt::extract_username_from_access_token(access_token)
-        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
 
     for mut pool_entry in state.user_pools.iter_mut() {
         if pool_entry.users.contains_key(&username) {
             super::auth_policy::validate_password(&pool_entry.policies, proposed)?;
             let pool_id = pool_entry.id.clone();
             let user = pool_entry.users.get_mut(&username).ok_or_else(|| {
-                AwsError::not_found(
+                AwsError::service_not_found(
                     "UserNotFoundException",
                     format!("User not found: {username}"),
                 )
             })?;
             if !crate::password::verify(previous, &user.password_hash) {
-                return Err(AwsError::forbidden(
+                return Err(AwsError::bad_request(
                     "NotAuthorizedException",
                     "Incorrect previous password",
                 ));
@@ -1249,7 +1249,7 @@ pub fn change_password(
         }
     }
 
-    Err(AwsError::not_found(
+    Err(AwsError::service_not_found(
         "UserNotFoundException",
         format!("User not found: {username}"),
     ))
@@ -1309,20 +1309,20 @@ pub fn admin_enable_user(
     })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
     })?;
 
     let username = resolve_username(&pool, username).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         )
     })?;
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         )
@@ -1350,20 +1350,20 @@ pub fn admin_disable_user(
     })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
     })?;
 
     let username = resolve_username(&pool, username).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         )
     })?;
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         )
@@ -1391,20 +1391,20 @@ pub fn admin_reset_user_password(
     })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
     })?;
 
     let username = resolve_username(&pool, username).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         )
     })?;
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         )
@@ -1432,7 +1432,7 @@ pub fn admin_update_user_attributes(
     })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -1441,13 +1441,13 @@ pub fn admin_update_user_attributes(
     let username_attrs = pool.username_attributes.clone();
     let schema = pool.schema.clone();
     let username = resolve_username(&pool, username).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         )
     })?;
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         )
@@ -1528,7 +1528,7 @@ pub fn admin_delete_user_attributes(
     })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -1536,13 +1536,13 @@ pub fn admin_delete_user_attributes(
 
     let schema = pool.schema.clone();
     let username = resolve_username(&pool, username).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         )
     })?;
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         )
@@ -1579,14 +1579,14 @@ pub fn update_user_attributes(
     })?;
 
     if state.revoked_tokens.revoked.contains_key(access_token) {
-        return Err(AwsError::forbidden(
+        return Err(AwsError::bad_request(
             "NotAuthorizedException",
             "Token has been revoked",
         ));
     }
 
     let claims = crate::jwt::verify_access_token(access_token)
-        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
     let username = claims.username;
 
     let new_attrs = parse_user_attributes(input, "UserAttributes");
@@ -1610,7 +1610,7 @@ pub fn update_user_attributes(
         }
     }
 
-    Err(AwsError::not_found(
+    Err(AwsError::service_not_found(
         "UserNotFoundException",
         format!("User not found: {username}"),
     ))
@@ -1630,14 +1630,14 @@ pub fn delete_user_attributes(
     })?;
 
     if state.revoked_tokens.revoked.contains_key(access_token) {
-        return Err(AwsError::forbidden(
+        return Err(AwsError::bad_request(
             "NotAuthorizedException",
             "Token has been revoked",
         ));
     }
 
     let claims = crate::jwt::verify_access_token(access_token)
-        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
     let username = claims.username;
 
     let attr_names: Vec<String> = input["UserAttributeNames"]
@@ -1668,7 +1668,7 @@ pub fn delete_user_attributes(
         }
     }
 
-    Err(AwsError::not_found(
+    Err(AwsError::service_not_found(
         "UserNotFoundException",
         format!("User not found: {username}"),
     ))
@@ -1688,14 +1688,14 @@ pub fn delete_user(
     })?;
 
     if state.revoked_tokens.revoked.contains_key(access_token) {
-        return Err(AwsError::forbidden(
+        return Err(AwsError::bad_request(
             "NotAuthorizedException",
             "Token has been revoked",
         ));
     }
 
     let username = crate::jwt::extract_username_from_access_token(access_token)
-        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
 
     for mut pool_entry in state.user_pools.iter_mut() {
         if pool_entry.users.remove(&username).is_some() {
@@ -1708,7 +1708,7 @@ pub fn delete_user(
         }
     }
 
-    Err(AwsError::not_found(
+    Err(AwsError::service_not_found(
         "UserNotFoundException",
         format!("User not found: {username}"),
     ))
@@ -1742,20 +1742,20 @@ pub fn resend_confirmation_code(
         .find(|e| e.clients.contains_key(client_id));
 
     let pool_id = pool_entry.map(|e| e.id.clone()).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("No pool found for client: {client_id}"),
         )
     })?;
 
     let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
     })?;
     if !pool.users.contains_key(username) {
-        return Err(AwsError::not_found(
+        return Err(AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         ));
@@ -1793,14 +1793,14 @@ pub fn get_user_attribute_verification_code(
     })?;
 
     if state.revoked_tokens.revoked.contains_key(access_token) {
-        return Err(AwsError::forbidden(
+        return Err(AwsError::bad_request(
             "NotAuthorizedException",
             "Token has been revoked",
         ));
     }
 
     let username = crate::jwt::extract_username_from_access_token(access_token)
-        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
 
     for mut pool_entry in state.user_pools.iter_mut() {
         if let Some(user) = pool_entry.users.get_mut(&username) {
@@ -1820,7 +1820,7 @@ pub fn get_user_attribute_verification_code(
         }
     }
 
-    Err(AwsError::not_found(
+    Err(AwsError::service_not_found(
         "UserNotFoundException",
         format!("User not found: {username}"),
     ))
@@ -1846,14 +1846,14 @@ pub fn verify_user_attribute(
         .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "Code is required"))?;
 
     if state.revoked_tokens.revoked.contains_key(access_token) {
-        return Err(AwsError::forbidden(
+        return Err(AwsError::bad_request(
             "NotAuthorizedException",
             "Token has been revoked",
         ));
     }
 
     let username = crate::jwt::extract_username_from_access_token(access_token)
-        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
 
     for mut pool_entry in state.user_pools.iter_mut() {
         if let Some(user) = pool_entry.users.get_mut(&username) {
@@ -1891,7 +1891,7 @@ pub fn verify_user_attribute(
         }
     }
 
-    Err(AwsError::not_found(
+    Err(AwsError::service_not_found(
         "UserNotFoundException",
         format!("User not found: {username}"),
     ))
@@ -1914,20 +1914,20 @@ pub fn admin_user_global_sign_out(
     })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
     })?;
 
     let username = resolve_username(&pool, username).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         )
     })?;
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         )
@@ -1982,20 +1982,20 @@ pub fn admin_list_user_auth_events(
     let max_results = input["MaxResults"].as_u64().unwrap_or(60).clamp(1, 60) as usize;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
     })?;
 
     let username = resolve_username(&pool, username).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         )
     })?;
     let user = pool.users.get(&username).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         )

@@ -40,7 +40,7 @@ pub fn set_risk_configuration(
     };
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -79,7 +79,7 @@ pub fn describe_risk_configuration(
     let client_id = input["ClientId"].as_str();
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -173,13 +173,13 @@ fn apply_feedback(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
     })?;
     let user = pool.users.get_mut(username).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         )
@@ -189,7 +189,7 @@ fn apply_feedback(
         .iter_mut()
         .find(|e| e.event_id == event_id)
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Auth event not found: {event_id}"),
             )

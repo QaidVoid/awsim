@@ -44,7 +44,7 @@ pub fn set_ui_customization(
     let now = now_epoch();
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -95,7 +95,7 @@ pub fn get_ui_customization(
     let client_key = input["ClientId"].as_str().unwrap_or("pool").to_string();
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -144,7 +144,7 @@ pub fn create_managed_login_branding(
     let branding_id = Uuid::new_v4().to_string();
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -187,7 +187,7 @@ pub fn describe_managed_login_branding(
     })?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -198,7 +198,7 @@ pub fn describe_managed_login_branding(
         .iter()
         .find(|b| b.branding_id == branding_id)
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Branding not found: {branding_id}"),
             )
@@ -224,7 +224,7 @@ pub fn describe_managed_login_branding_by_client(
     })?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -235,7 +235,7 @@ pub fn describe_managed_login_branding_by_client(
         .iter()
         .find(|b| b.client_id.as_deref() == Some(client_id))
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("No branding found for client: {client_id}"),
             )
@@ -265,7 +265,7 @@ pub fn update_managed_login_branding(
     let now = now_epoch();
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -276,7 +276,7 @@ pub fn update_managed_login_branding(
         .iter_mut()
         .find(|b| b.branding_id == branding_id)
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Branding not found: {branding_id}"),
             )
@@ -315,7 +315,7 @@ pub fn delete_managed_login_branding(
     })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -325,7 +325,7 @@ pub fn delete_managed_login_branding(
     pool.managed_login_brandings
         .retain(|b| b.branding_id != branding_id);
     if pool.managed_login_brandings.len() == len_before {
-        return Err(AwsError::not_found(
+        return Err(AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("Branding not found: {branding_id}"),
         ));

@@ -95,7 +95,7 @@ pub fn create_user_import_job(
     };
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -125,7 +125,7 @@ pub fn describe_user_import_job(
         .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "JobId is required"))?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -136,7 +136,7 @@ pub fn describe_user_import_job(
         .iter()
         .find(|j| j.job_id == job_id)
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Import job not found: {job_id}"),
             )
@@ -163,7 +163,7 @@ pub fn start_user_import_job(
 
     let now = now_epoch();
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -174,7 +174,7 @@ pub fn start_user_import_job(
         .iter_mut()
         .find(|j| j.job_id == job_id)
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Import job not found: {job_id}"),
             )
@@ -214,7 +214,7 @@ pub fn stop_user_import_job(
 
     let now = now_epoch();
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -225,7 +225,7 @@ pub fn stop_user_import_job(
         .iter_mut()
         .find(|j| j.job_id == job_id)
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Import job not found: {job_id}"),
             )
@@ -254,7 +254,7 @@ pub fn list_user_import_jobs(
     let max_results = input["MaxResults"].as_u64().unwrap_or(60) as usize;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -284,7 +284,7 @@ pub fn get_csv_header(
 
     // Verify pool exists
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )

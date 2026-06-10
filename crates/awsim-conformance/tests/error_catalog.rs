@@ -422,26 +422,41 @@ fn eks_error_factories_match_smithy() {
     );
 }
 
+/// Variant for Cognito: the Smithy models annotate several shapes with
+/// 403/404 `httpError` traits, but the live JSON-1.1 service answers
+/// every client error with HTTP 400 and SDKs dispatch on the `__type`
+/// shape name. Pin the wire code to the model and the status to 400.
+fn assert_cognito_matches(err: AwsError, smithy: &SmithyError, label: &str) {
+    assert_eq!(
+        err.code, smithy.wire_code,
+        "[{label}] code mismatch (smithy shape {})",
+        smithy.shape_name
+    );
+    assert_eq!(
+        err.status.as_u16(),
+        400,
+        "[{label}] Cognito client errors are HTTP 400 on the wire",
+    );
+}
+
 #[test]
 fn cognito_identity_error_factories_match_smithy() {
     // Cognito Identity reuses the same helper module as Cognito IDP
     // because the IdentityService and IdentityProvider services run
-    // from the same crate. The codes that overlap (NotAuthorized,
-    // ResourceNotFound, InvalidParameter) carry the same statuses in
-    // both Smithy models.
+    // from the same crate.
     let errors = load("cognito-identity");
 
-    assert_matches(
+    assert_cognito_matches(
         awsim_cognito::error::resource_not_found("Identity pool"),
         &expect(&errors, "ResourceNotFoundException"),
         "resource_not_found",
     );
-    assert_matches(
+    assert_cognito_matches(
         awsim_cognito::error::not_authorized("invalid token"),
         &expect(&errors, "NotAuthorizedException"),
         "not_authorized",
     );
-    assert_matches(
+    assert_cognito_matches(
         awsim_cognito::error::invalid_parameter("IdentityPoolId is required"),
         &expect(&errors, "InvalidParameterException"),
         "invalid_parameter",
@@ -452,37 +467,37 @@ fn cognito_identity_error_factories_match_smithy() {
 fn cognito_idp_error_factories_match_smithy() {
     let errors = load("cognito-idp");
 
-    assert_matches(
+    assert_cognito_matches(
         awsim_cognito::error::not_authorized("bad password"),
         &expect(&errors, "NotAuthorizedException"),
         "not_authorized",
     );
-    assert_matches(
+    assert_cognito_matches(
         awsim_cognito::error::resource_not_found("UserPool not found"),
         &expect(&errors, "ResourceNotFoundException"),
         "resource_not_found",
     );
-    assert_matches(
+    assert_cognito_matches(
         awsim_cognito::error::user_not_found("User alice"),
         &expect(&errors, "UserNotFoundException"),
         "user_not_found",
     );
-    assert_matches(
+    assert_cognito_matches(
         awsim_cognito::error::invalid_parameter("ClientId is required"),
         &expect(&errors, "InvalidParameterException"),
         "invalid_parameter",
     );
-    assert_matches(
+    assert_cognito_matches(
         awsim_cognito::error::invalid_password("too short"),
         &expect(&errors, "InvalidPasswordException"),
         "invalid_password",
     );
-    assert_matches(
+    assert_cognito_matches(
         awsim_cognito::error::code_mismatch("OTP wrong"),
         &expect(&errors, "CodeMismatchException"),
         "code_mismatch",
     );
-    assert_matches(
+    assert_cognito_matches(
         awsim_cognito::error::username_exists("alice"),
         &expect(&errors, "UsernameExistsException"),
         "username_exists",

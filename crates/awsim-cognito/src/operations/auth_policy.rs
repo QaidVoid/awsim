@@ -95,7 +95,7 @@ pub fn check_not_locked(user: &mut CognitoUser) -> Result<(), AwsError> {
     let now = now_epoch();
     if let Some(until) = user.locked_until_secs {
         if until > now {
-            return Err(AwsError::forbidden(
+            return Err(AwsError::bad_request(
                 "NotAuthorizedException",
                 "Password attempts exceeded",
             ));

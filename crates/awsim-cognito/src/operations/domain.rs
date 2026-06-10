@@ -21,14 +21,14 @@ pub fn create_user_pool_domain(
         .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "Domain is required"))?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
     })?;
 
     if state.domain_pool_map.contains_key(domain) {
-        return Err(AwsError::conflict(
+        return Err(AwsError::bad_request(
             "InvalidParameterException",
             format!("Domain already exists: {domain}"),
         ));
@@ -66,7 +66,7 @@ pub fn describe_user_pool_domain(
         drop(pool_id_ref);
 
         let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("User pool not found for domain: {domain}"),
             )
@@ -104,7 +104,7 @@ pub fn delete_user_pool_domain(
         .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "Domain is required"))?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -135,7 +135,7 @@ pub fn update_user_pool_domain(
 
     // Verify pool exists
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -151,7 +151,7 @@ pub fn update_user_pool_domain(
     }
 
     let mut pool_mut = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )

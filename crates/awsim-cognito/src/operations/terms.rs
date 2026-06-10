@@ -64,7 +64,7 @@ pub fn create_terms(
     let now = now_epoch();
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -101,7 +101,7 @@ pub fn update_terms(
         .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "TermsId is required"))?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -112,7 +112,7 @@ pub fn update_terms(
         .iter_mut()
         .find(|t| t.terms_id == terms_id)
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Terms not found: {terms_id}"),
             )
@@ -150,7 +150,7 @@ pub fn delete_terms(
         .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "TermsId is required"))?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -159,7 +159,7 @@ pub fn delete_terms(
     let len_before = pool.terms.len();
     pool.terms.retain(|t| t.terms_id != terms_id);
     if pool.terms.len() == len_before {
-        return Err(AwsError::not_found(
+        return Err(AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("Terms not found: {terms_id}"),
         ));
@@ -182,7 +182,7 @@ pub fn describe_terms(
         .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "TermsId is required"))?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -193,7 +193,7 @@ pub fn describe_terms(
         .iter()
         .find(|t| t.terms_id == terms_id)
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Terms not found: {terms_id}"),
             )
@@ -213,7 +213,7 @@ pub fn list_terms(
     let max_results = input["MaxResults"].as_u64().unwrap_or(60) as usize;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
