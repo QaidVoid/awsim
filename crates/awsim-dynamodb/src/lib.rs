@@ -512,7 +512,7 @@ impl ServiceHandler for DynamoDbService {
 
             // Continuous Backups
             "DescribeContinuousBackups" => {
-                operations::table::describe_continuous_backups(&state, &input, ctx)
+                operations::backup::describe_continuous_backups(&state, &input, ctx)
             }
             "UpdateContinuousBackups" => {
                 operations::backup::update_continuous_backups(&state, &input, ctx)

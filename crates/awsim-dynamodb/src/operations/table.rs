@@ -8,8 +8,8 @@ use tracing::info;
 
 use crate::sqlite_store::SqliteStore;
 use crate::state::{
-    AttributeDefinition, DynamoState, GlobalSecondaryIndex, KeySchemaElement, LocalSecondaryIndex,
-    Projection, SseSpecification, Table, TtlSpecification,
+    AttributeDefinition, ContributorInsightsEntry, DynamoState, GlobalSecondaryIndex,
+    KeySchemaElement, LocalSecondaryIndex, Projection, SseSpecification, Table, TtlSpecification,
 };
 
 use super::{opt_str, require_str};
@@ -1014,34 +1014,6 @@ pub fn update_time_to_live(
     }))
 }
 
-// ─── Continuous Backups ───────────────────────────────────────────────────────
-
-/// DescribeContinuousBackups — Return stub backup configuration for a table.
-pub fn describe_continuous_backups(
-    state: &DynamoState,
-    input: &Value,
-    _ctx: &RequestContext,
-) -> Result<Value, AwsError> {
-    let table_name = require_str(input, "TableName")?;
-
-    // Verify the table exists.
-    if !state.tables.contains_key(table_name) {
-        return Err(AwsError::service_not_found(
-            "TableNotFoundException",
-            format!("Table '{table_name}' not found"),
-        ));
-    }
-
-    Ok(json!({
-        "ContinuousBackupsDescription": {
-            "ContinuousBackupsStatus": "ENABLED",
-            "PointInTimeRecoveryDescription": {
-                "PointInTimeRecoveryStatus": "DISABLED"
-            }
-        }
-    }))
-}
-
 // ─── Tagging ─────────────────────────────────────────────────────────────────
 
 /// TagResource — Add or overwrite tags on a table.
@@ -1635,70 +1607,166 @@ pub fn list_imports(
     Ok(json!({ "ImportSummaryList": summaries }))
 }
 
-// ─── Contributor Insights stubs ───────────────────────────────────────────────
+// ─── Contributor Insights ─────────────────────────────────────────────────────
 
-/// DescribeContributorInsights — Return DISABLED status for any table.
+/// Key for the contributor-insights map: `{table}` or `{table}/{index}`.
+fn insights_key(table_name: &str, index_name: Option<&str>) -> String {
+    match index_name {
+        Some(index) => format!("{table_name}/{index}"),
+        None => table_name.to_string(),
+    }
+}
+
+/// Validate the table exists and, when `IndexName` is given, that the index
+/// exists on it. Returns the optional index name on success.
+fn check_insights_target<'a>(
+    state: &DynamoState,
+    table_name: &str,
+    input: &'a Value,
+) -> Result<Option<&'a str>, AwsError> {
+    let Some(table) = state.tables.get(table_name) else {
+        return Err(AwsError::service_not_found(
+            "ResourceNotFoundException",
+            format!("Table '{table_name}' not found"),
+        ));
+    };
+
+    let index_name = opt_str(input, "IndexName");
+    if let Some(index) = index_name {
+        let known = table.gsi.iter().any(|g| g.index_name == index)
+            || table.lsi.iter().any(|l| l.index_name == index);
+        if !known {
+            return Err(AwsError::service_not_found(
+                "ResourceNotFoundException",
+                format!("Index '{index}' not found on table '{table_name}'"),
+            ));
+        }
+    }
+    Ok(index_name)
+}
+
+/// Converge a transient insights status on read. AWS reports `ENABLING` /
+/// `DISABLING` briefly after an update and then settles; with no async
+/// provisioning we settle on the next describe or list.
+fn settle_insights_status(entry: &mut ContributorInsightsEntry) {
+    let settled = match entry.status.as_str() {
+        "ENABLING" => "ENABLED",
+        "DISABLING" => "DISABLED",
+        other => other,
+    };
+    if entry.status != settled {
+        entry.status = settled.to_string();
+        entry.last_update = now_epoch_f64();
+    }
+}
+
+/// DescribeContributorInsights reports the stored status for a table or
+/// index, settling transient `ENABLING` / `DISABLING` states on read. A
+/// target that was never updated reports `DISABLED`.
 pub fn describe_contributor_insights(
     state: &DynamoState,
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let table_name = require_str(input, "TableName")?;
+    let index_name = check_insights_target(state, table_name, input)?;
 
-    if !state.tables.contains_key(table_name) {
-        return Err(AwsError::service_not_found(
-            "ResourceNotFoundException",
-            format!("Table '{table_name}' not found"),
-        ));
-    }
-
-    Ok(json!({
+    let key = insights_key(table_name, index_name);
+    let mut response = json!({
         "TableName": table_name,
         "ContributorInsightsStatus": "DISABLED",
         "ContributorInsightsRuleList": [],
         "FailureException": null
-    }))
+    });
+    if let Some(index) = index_name {
+        response["IndexName"] = json!(index);
+    }
+    if let Some(mut entry) = state.contributor_insights.get_mut(&key) {
+        settle_insights_status(&mut entry);
+        response["ContributorInsightsStatus"] = json!(entry.status);
+        response["LastUpdateDateTime"] = json!(entry.last_update);
+    }
+    Ok(response)
 }
 
-/// UpdateContributorInsights — Stub: acknowledge and return DISABLED.
+/// UpdateContributorInsights enables or disables Contributor Insights for a
+/// table or index. It returns the transient `ENABLING` / `DISABLING` status,
+/// which settles on the next describe.
 pub fn update_contributor_insights(
     state: &DynamoState,
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let table_name = require_str(input, "TableName")?;
+    let index_name = check_insights_target(state, table_name, input)?;
 
-    if !state.tables.contains_key(table_name) {
-        return Err(AwsError::service_not_found(
-            "ResourceNotFoundException",
-            format!("Table '{table_name}' not found"),
-        ));
-    }
-
-    let status = input
-        .get("ContributorInsightsAction")
-        .and_then(|v| v.as_str())
-        .unwrap_or("DISABLE");
-
-    let new_status = if status == "ENABLE" {
-        "ENABLING"
-    } else {
-        "DISABLING"
+    let action = require_str(input, "ContributorInsightsAction")?;
+    let new_status = match action {
+        "ENABLE" => "ENABLING",
+        "DISABLE" => "DISABLING",
+        other => {
+            return Err(AwsError::validation(format!(
+                "Value '{other}' at 'contributorInsightsAction' failed to satisfy \
+                 constraint: Member must satisfy enum value set: [ENABLE, DISABLE]"
+            )));
+        }
     };
 
-    Ok(json!({
+    state.contributor_insights.insert(
+        insights_key(table_name, index_name),
+        ContributorInsightsEntry {
+            table_name: table_name.to_string(),
+            index_name: index_name.map(str::to_string),
+            status: new_status.to_string(),
+            last_update: now_epoch_f64(),
+        },
+    );
+
+    let mut response = json!({
         "TableName": table_name,
         "ContributorInsightsStatus": new_status
-    }))
+    });
+    if let Some(index) = index_name {
+        response["IndexName"] = json!(index);
+    }
+    Ok(response)
 }
 
-/// ListContributorInsights — Return an empty list.
+/// ListContributorInsights summarizes every stored insights configuration,
+/// optionally filtered by `TableName`. Transient statuses settle on read.
 pub fn list_contributor_insights(
-    _state: &DynamoState,
-    _input: &Value,
+    state: &DynamoState,
+    input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    Ok(json!({ "ContributorInsightsSummaries": [] }))
+    let filter = opt_str(input, "TableName");
+
+    let mut summaries = Vec::new();
+    for mut entry in state.contributor_insights.iter_mut() {
+        if filter.is_some_and(|t| t != entry.table_name) {
+            continue;
+        }
+        settle_insights_status(&mut entry);
+        let mut summary = json!({
+            "TableName": entry.table_name,
+            "ContributorInsightsStatus": entry.status
+        });
+        if let Some(index) = &entry.index_name {
+            summary["IndexName"] = json!(index);
+        }
+        summaries.push(summary);
+    }
+    summaries.sort_by(|a, b| {
+        let key = |v: &Value| {
+            (
+                v["TableName"].as_str().unwrap_or_default().to_string(),
+                v["IndexName"].as_str().unwrap_or_default().to_string(),
+            )
+        };
+        key(a).cmp(&key(b))
+    });
+
+    Ok(json!({ "ContributorInsightsSummaries": summaries }))
 }
 
 pub fn describe_table_replica_auto_scaling(
@@ -2380,5 +2448,141 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.code, "ValidationException");
         assert!(err.message.contains("aws:"));
+    }
+
+    #[test]
+    fn contributor_insights_enable_settles_to_enabled_on_describe() {
+        let state = state_with_table("t");
+        let c = ctx();
+
+        let fresh =
+            describe_contributor_insights(&state, &json!({ "TableName": "t" }), &c).unwrap();
+        assert_eq!(fresh["ContributorInsightsStatus"], json!("DISABLED"));
+
+        let resp = update_contributor_insights(
+            &state,
+            &json!({ "TableName": "t", "ContributorInsightsAction": "ENABLE" }),
+            &c,
+        )
+        .unwrap();
+        assert_eq!(resp["ContributorInsightsStatus"], json!("ENABLING"));
+
+        let resp = describe_contributor_insights(&state, &json!({ "TableName": "t" }), &c).unwrap();
+        assert_eq!(resp["ContributorInsightsStatus"], json!("ENABLED"));
+        assert!(resp["LastUpdateDateTime"].as_f64().unwrap() > 0.0);
+
+        let resp = update_contributor_insights(
+            &state,
+            &json!({ "TableName": "t", "ContributorInsightsAction": "DISABLE" }),
+            &c,
+        )
+        .unwrap();
+        assert_eq!(resp["ContributorInsightsStatus"], json!("DISABLING"));
+
+        let resp = describe_contributor_insights(&state, &json!({ "TableName": "t" }), &c).unwrap();
+        assert_eq!(resp["ContributorInsightsStatus"], json!("DISABLED"));
+    }
+
+    #[test]
+    fn contributor_insights_index_tracked_separately_and_validated() {
+        let state = state_with_table("t");
+        state
+            .tables
+            .get_mut("t")
+            .unwrap()
+            .gsi
+            .push(GlobalSecondaryIndex {
+                index_name: "by-tag".into(),
+                key_schema: vec![KeySchemaElement {
+                    attribute_name: "tag".into(),
+                    key_type: "HASH".into(),
+                }],
+                projection: Projection {
+                    projection_type: "ALL".into(),
+                    non_key_attributes: vec![],
+                },
+                status: "ACTIVE".into(),
+            });
+        let c = ctx();
+
+        let err = update_contributor_insights(
+            &state,
+            &json!({
+                "TableName": "t",
+                "IndexName": "nope",
+                "ContributorInsightsAction": "ENABLE"
+            }),
+            &c,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ResourceNotFoundException");
+
+        update_contributor_insights(
+            &state,
+            &json!({
+                "TableName": "t",
+                "IndexName": "by-tag",
+                "ContributorInsightsAction": "ENABLE"
+            }),
+            &c,
+        )
+        .unwrap();
+
+        let table_level =
+            describe_contributor_insights(&state, &json!({ "TableName": "t" }), &c).unwrap();
+        assert_eq!(table_level["ContributorInsightsStatus"], json!("DISABLED"));
+
+        let index_level = describe_contributor_insights(
+            &state,
+            &json!({ "TableName": "t", "IndexName": "by-tag" }),
+            &c,
+        )
+        .unwrap();
+        assert_eq!(index_level["ContributorInsightsStatus"], json!("ENABLED"));
+        assert_eq!(index_level["IndexName"], json!("by-tag"));
+    }
+
+    #[test]
+    fn contributor_insights_rejects_unknown_action() {
+        let state = state_with_table("t");
+        let err = update_contributor_insights(
+            &state,
+            &json!({ "TableName": "t", "ContributorInsightsAction": "PAUSE" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn list_contributor_insights_filters_by_table() {
+        let state = state_with_table("a");
+        let c = ctx();
+        state
+            .tables
+            .insert("b".to_string(), state.tables.get("a").unwrap().clone());
+        for table in ["a", "b"] {
+            update_contributor_insights(
+                &state,
+                &json!({ "TableName": table, "ContributorInsightsAction": "ENABLE" }),
+                &c,
+            )
+            .unwrap();
+        }
+
+        let all = list_contributor_insights(&state, &json!({}), &c).unwrap();
+        assert_eq!(
+            all["ContributorInsightsSummaries"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+
+        let only_b = list_contributor_insights(&state, &json!({ "TableName": "b" }), &c).unwrap();
+        let summaries = only_b["ContributorInsightsSummaries"].as_array().unwrap();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0]["TableName"], json!("b"));
+        assert_eq!(summaries[0]["ContributorInsightsStatus"], json!("ENABLED"));
     }
 }

@@ -308,6 +308,20 @@ pub struct IdempotencyEntry {
     pub stored_at: f64,
 }
 
+/// Contributor Insights configuration for a table or index, mirroring the
+/// AWS status lifecycle (`ENABLING` settles to `ENABLED`, `DISABLING` to
+/// `DISABLED` on the next describe or list).
+#[derive(Debug, Clone)]
+pub struct ContributorInsightsEntry {
+    pub table_name: String,
+    /// `None` for table-level insights, `Some` for a per-index config.
+    pub index_name: Option<String>,
+    /// "ENABLING" | "ENABLED" | "DISABLING" | "DISABLED"
+    pub status: String,
+    /// Unix epoch seconds of the last status change.
+    pub last_update: f64,
+}
+
 #[derive(Default)]
 pub struct DynamoState {
     pub tables: DashMap<String, Table>,
@@ -315,7 +329,13 @@ pub struct DynamoState {
     pub exports: DashMap<String, ExportRecord>,
     pub imports: DashMap<String, ImportRecord>,
     pub kinesis_destinations: DashMap<String, Vec<KinesisStreamingDestination>>,
-    pub pitr_enabled: DashMap<String, bool>,
+    /// Tables with point-in-time recovery enabled, mapped to the Unix epoch
+    /// seconds when PITR was switched on. The enable time doubles as the
+    /// `EarliestRestorableDateTime` reported by `DescribeContinuousBackups`.
+    pub pitr_enabled_at: DashMap<String, f64>,
+    /// Contributor Insights configurations keyed by
+    /// `{table}` or `{table}/{index}`.
+    pub contributor_insights: DashMap<String, ContributorInsightsEntry>,
     pub resource_policies: DashMap<String, String>,
     /// Global tables keyed by GlobalTableName. The implementation models
     /// the metadata only — there's no cross-region data replication.
@@ -344,7 +364,8 @@ impl std::fmt::Debug for DynamoState {
             .field("exports", &self.exports)
             .field("imports", &self.imports)
             .field("kinesis_destinations", &self.kinesis_destinations)
-            .field("pitr_enabled", &self.pitr_enabled)
+            .field("pitr_enabled_at", &self.pitr_enabled_at)
+            .field("contributor_insights", &self.contributor_insights)
             .field("resource_policies", &self.resource_policies)
             .field("global_tables", &self.global_tables)
             .field("idempotency", &self.idempotency)
