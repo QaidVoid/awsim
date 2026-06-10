@@ -33,6 +33,10 @@ use state::{DynamoState, DynamoStateSnapshot, Table};
 pub struct DynamoDbService {
     store: AccountRegionStore<DynamoState>,
     sqlite: Arc<SqliteStore>,
+    /// In-process S3 writer used by `ExportTableToPointInTime` to emit
+    /// data and manifest objects. Unset until [`Self::set_s3_writer`]
+    /// runs; exports then record metadata only.
+    s3_writer: std::sync::OnceLock<Arc<dyn awsim_core::S3ObjectWriter>>,
     /// Holds the per-process `TempDir` for the no-data-dir case so
     /// `dynamodb.db` + `.db-wal` + `.db-shm` are deleted when the
     /// service drops. `None` when persistent storage is in use — the
@@ -63,6 +67,7 @@ impl DynamoDbService {
         Self {
             store: AccountRegionStore::new(),
             sqlite: Arc::new(sqlite),
+            s3_writer: std::sync::OnceLock::new(),
             _tempdir: Some(dir),
         }
     }
@@ -89,8 +94,16 @@ impl DynamoDbService {
         Self {
             store: AccountRegionStore::new(),
             sqlite: Arc::new(sqlite),
+            s3_writer: std::sync::OnceLock::new(),
             _tempdir: None,
         }
+    }
+
+    /// Wire the in-process S3 writer that `ExportTableToPointInTime` uses
+    /// to deliver data and manifest objects into the embedded S3. May be
+    /// called after the service is registered; only the first call wins.
+    pub fn set_s3_writer(&self, writer: Arc<dyn awsim_core::S3ObjectWriter>) {
+        let _ = self.s3_writer.set(writer);
     }
 
     /// Reclaim disk space after heavy DELETE / UPDATE churn — exposed
@@ -649,10 +662,25 @@ impl ServiceHandler for DynamoDbService {
             "DescribeGlobalTable" => operations::table::describe_global_table(&state, &input, ctx),
             "ListGlobalTables" => operations::table::list_global_tables(&state, &input, ctx),
 
-            // Exports
+            // Exports move data into S3 synchronously, so they run on
+            // the blocking pool like the other sqlite-backed operations.
             "DescribeExport" => operations::export_import::describe_export(&state, &input, ctx),
             "ExportTableToPointInTime" => {
-                operations::export_import::export_table_to_point_in_time(&state, &input, ctx)
+                let state = state.clone();
+                let sqlite = self.sqlite.clone();
+                let writer = self.s3_writer.get().cloned();
+                let input = input.clone();
+                let ctx = ctx.clone();
+                run_blocking(move || {
+                    operations::export_import::export_table_to_point_in_time(
+                        &state,
+                        &sqlite,
+                        writer.as_ref(),
+                        &input,
+                        &ctx,
+                    )
+                })
+                .await
             }
             "ListExports" => operations::export_import::list_exports(&state, &input, ctx),
 

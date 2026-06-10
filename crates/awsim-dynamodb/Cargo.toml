@@ -16,6 +16,9 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 rust_decimal = { workspace = true }
+# Gzip for export data files and compressed import objects, matching the
+# S3 object layout AWS produces for DynamoDB exports.
+flate2 = "1"
 
 # SQLite-backed item storage. `bundled` ships sqlite C source so we don't
 # depend on the system library — important for distributable awsim builds.

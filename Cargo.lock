@@ -2146,6 +2146,7 @@ dependencies = [
  "awsim-core",
  "base64",
  "dashmap",
+ "flate2",
  "r2d2",
  "r2d2_sqlite",
  "refinery",

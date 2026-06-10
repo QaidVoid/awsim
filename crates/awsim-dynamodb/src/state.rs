@@ -250,6 +250,20 @@ pub struct ExportRecord {
     pub s3_prefix: Option<String>,
     pub start_time: f64,
     pub end_time: Option<f64>,
+    /// Number of items written to S3. `None` until the export ran with a
+    /// wired S3 writer.
+    #[serde(default)]
+    pub item_count: Option<u64>,
+    /// Uncompressed byte size of the exported data.
+    #[serde(default)]
+    pub billed_size_bytes: Option<u64>,
+    /// S3 key of `manifest-summary.json` for the export.
+    #[serde(default)]
+    pub export_manifest: Option<String>,
+    #[serde(default)]
+    pub failure_code: Option<String>,
+    #[serde(default)]
+    pub failure_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
