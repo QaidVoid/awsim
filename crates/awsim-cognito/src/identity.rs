@@ -608,8 +608,8 @@ fn get_credentials_for_identity(
     // Determine the IAM role to assume
     let role_arn = determine_role(&pool, &identity, input).ok_or_else(|| {
         AwsError::bad_request(
-            "NotAuthorizedException",
-            "No role configured for this identity's authentication state",
+            "InvalidIdentityPoolConfigurationException",
+            "Invalid identity pool configuration. Check assigned IAM roles for this pool.",
         )
     })?;
 
@@ -1831,7 +1831,7 @@ mod tests {
             "000000000000",
         )
         .unwrap_err();
-        assert_eq!(err.code, "NotAuthorizedException");
+        assert_eq!(err.code, "InvalidIdentityPoolConfigurationException");
     }
 
     #[test]
@@ -2116,7 +2116,7 @@ mod tests {
             "000000000000",
         )
         .unwrap_err();
-        assert_eq!(err.code, "NotAuthorizedException");
+        assert_eq!(err.code, "InvalidIdentityPoolConfigurationException");
     }
 
     #[test]

@@ -79,8 +79,8 @@ fn check_code_rate_limit(user: &mut CognitoUser) -> Result<(), AwsError> {
     if let Some(until) = user.code_locked_until_secs {
         if now_epoch() < until {
             return Err(AwsError::bad_request(
-                "TooManyRequestsException",
-                "Too many attempts in a short period of time; try again later.",
+                "LimitExceededException",
+                "Attempt limit exceeded, please try after some time.",
             ));
         }
         // Cool-off elapsed; clear so the user can try again.
@@ -98,8 +98,8 @@ fn record_code_failure(user: &mut CognitoUser, mismatch_err: AwsError) -> AwsErr
     if user.code_failed_attempts >= CODE_ATTEMPT_LIMIT {
         user.code_locked_until_secs = Some(now_epoch() + CODE_LOCKOUT_SECS);
         return AwsError::bad_request(
-            "TooManyRequestsException",
-            "Too many attempts in a short period of time; try again later.",
+            "LimitExceededException",
+            "Attempt limit exceeded, please try after some time.",
         );
     }
     mismatch_err
@@ -269,8 +269,9 @@ fn enforce_write_attributes<'a>(
 ///
 /// When `AliasAttributes` is set (and we're not already pinning via
 /// UsernameAttributes), the alias value must be globally unique within
-/// the pool — same `UsernameExistsException` if it collides with
-/// another user's matching attribute.
+/// the pool; a collision with another user's matching attribute raises
+/// `AliasExistsException` there, versus `UsernameExistsException` on
+/// the UsernameAttributes path.
 fn prepare_user_attributes(
     pool: &UserPool,
     username: &str,
@@ -298,7 +299,7 @@ fn prepare_user_attributes(
             }
             _ => {}
         }
-        ensure_attribute_unique(pool, username, ua, username)?;
+        ensure_attribute_unique(pool, username, ua, username, "UsernameExistsException")?;
     }
 
     for alias in &pool.alias_attributes {
@@ -306,7 +307,7 @@ fn prepare_user_attributes(
             continue;
         }
         if let Some(value) = attrs.get(alias) {
-            ensure_attribute_unique(pool, username, alias, value)?;
+            ensure_attribute_unique(pool, username, alias, value, "AliasExistsException")?;
         }
     }
 
@@ -318,6 +319,7 @@ fn ensure_attribute_unique(
     new_username: &str,
     attr: &str,
     value: &str,
+    code: &str,
 ) -> Result<(), AwsError> {
     let case_insensitive = matches!(attr, "email" | "preferred_username");
     let needle = if case_insensitive {
@@ -339,9 +341,14 @@ fn ensure_attribute_unique(
         }
     });
     if collision {
+        let display = if attr == "phone_number" {
+            "phone number"
+        } else {
+            attr
+        };
         return Err(AwsError::bad_request(
-            "UsernameExistsException",
-            format!("An account with the given {attr} already exists"),
+            code,
+            format!("An account with the given {display} already exists."),
         ));
     }
     Ok(())
@@ -2158,13 +2165,13 @@ mod tests {
 
         // The threshold-th failure flips the lockout.
         let err = record_code_failure(&mut user, dummy());
-        assert_eq!(err.code, "TooManyRequestsException");
+        assert_eq!(err.code, "LimitExceededException");
         assert!(user.code_locked_until_secs.is_some());
 
         // Subsequent attempts are rejected by the rate-limit gate even if
         // the caller would have provided the right code.
         let err = check_code_rate_limit(&mut user).unwrap_err();
-        assert_eq!(err.code, "TooManyRequestsException");
+        assert_eq!(err.code, "LimitExceededException");
     }
 
     #[test]
@@ -2448,7 +2455,7 @@ mod tests {
             &ctx(),
         )
         .unwrap_err();
-        assert_eq!(err.code, "NotAuthorizedException");
+        assert_eq!(err.code, "InvalidParameterException");
     }
 
     #[test]

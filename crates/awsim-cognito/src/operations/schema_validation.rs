@@ -120,9 +120,9 @@ pub fn validate_mutability(
         Ok(())
     } else {
         Err(AwsError::bad_request(
-            "NotAuthorizedException",
+            "InvalidParameterException",
             format!(
-                "user.{} is read-only or not mutable",
+                "user.{}: Attribute cannot be updated.",
                 violations.join(", user.")
             ),
         ))
@@ -382,7 +382,7 @@ mod tests {
         let mut changed = HashMap::new();
         changed.insert("custom:org".to_string(), "globex".to_string());
         let err = validate_mutability(&schema, &existing, &changed).unwrap_err();
-        assert_eq!(err.code, "NotAuthorizedException");
+        assert_eq!(err.code, "InvalidParameterException");
 
         // First-time set (no prior value) -> ok.
         let empty = HashMap::new();
