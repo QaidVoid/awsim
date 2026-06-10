@@ -310,12 +310,14 @@ fn verify_code_mfa(
         .mfa_sessions
         .get(session_id)
         .map(|e| e.value().clone())
-        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid session"))?;
+        .ok_or_else(|| {
+            AwsError::bad_request("NotAuthorizedException", "Invalid session for the user.")
+        })?;
     if !session_still_valid(session_meta.issued_at) {
         state.mfa_sessions.remove(session_id);
         return Err(AwsError::bad_request(
             "NotAuthorizedException",
-            "MFA session has expired; restart the auth flow",
+            "Invalid session for the user, session is expired.",
         ));
     }
 
@@ -333,7 +335,7 @@ fn verify_code_mfa(
     if expected.as_str() != user_code {
         return Err(AwsError::bad_request(
             "CodeMismatchException",
-            "Invalid MFA code",
+            "Invalid code received for user",
         ));
     }
 
@@ -395,12 +397,14 @@ fn complete_software_token_mfa(
         .mfa_sessions
         .get(session_id)
         .map(|e| e.value().clone())
-        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid session"))?;
+        .ok_or_else(|| {
+            AwsError::bad_request("NotAuthorizedException", "Invalid session for the user.")
+        })?;
     if !session_still_valid(session_meta.issued_at) {
         state.mfa_sessions.remove(session_id);
         return Err(AwsError::bad_request(
             "NotAuthorizedException",
-            "MFA session has expired; restart the auth flow",
+            "Invalid session for the user, session is expired.",
         ));
     }
 
@@ -420,7 +424,7 @@ fn complete_software_token_mfa(
     if !awsim_core::totp::verify_str(secret, user_code, 1) {
         return Err(AwsError::bad_request(
             "CodeMismatchException",
-            "Invalid software token code",
+            "Invalid code received for user",
         ));
     }
 
@@ -803,7 +807,7 @@ pub fn initiate_auth(
                     );
                     return Err(AwsError::bad_request(
                         "NotAuthorizedException",
-                        "Incorrect username or password",
+                        "Incorrect username or password.",
                     ));
                 }
 
@@ -838,7 +842,7 @@ pub fn initiate_auth(
             if user.status == "UNCONFIRMED" {
                 return Err(AwsError::bad_request(
                     "UserNotConfirmedException",
-                    "User is not confirmed",
+                    "User is not confirmed.",
                 ));
             }
 
@@ -1150,7 +1154,7 @@ pub fn admin_initiate_auth(
                     );
                     return Err(AwsError::bad_request(
                         "NotAuthorizedException",
-                        "Incorrect username or password",
+                        "Incorrect username or password.",
                     ));
                 }
 
@@ -1185,7 +1189,7 @@ pub fn admin_initiate_auth(
             if user.status == "UNCONFIRMED" {
                 return Err(AwsError::bad_request(
                     "UserNotConfirmedException",
-                    "User is not confirmed",
+                    "User is not confirmed.",
                 ));
             }
 
@@ -1457,13 +1461,13 @@ pub fn respond_to_auth_challenge(
                 .get(session_id)
                 .map(|e| e.value().clone())
                 .ok_or_else(|| {
-                    AwsError::bad_request("NotAuthorizedException", "Invalid session")
+                    AwsError::bad_request("NotAuthorizedException", "Invalid session for the user.")
                 })?;
             if !session_still_valid(session_meta.issued_at) {
                 state.mfa_sessions.remove(session_id);
                 return Err(AwsError::bad_request(
                     "NotAuthorizedException",
-                    "MFA session has expired; restart the auth flow",
+                    "Invalid session for the user, session is expired.",
                 ));
             }
 
@@ -1715,7 +1719,7 @@ pub fn get_user_auth_factors(
     })?;
 
     let username = crate::jwt::extract_username_from_access_token(token)
-        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid Access Token"))?;
 
     // Find pool containing this user
     for pool_ref in state.user_pools.iter() {
@@ -1858,7 +1862,9 @@ fn verify_srp_password(
         .srp_sessions
         .get(session_id)
         .map(|e| e.value().clone())
-        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid session"))?;
+        .ok_or_else(|| {
+            AwsError::bad_request("NotAuthorizedException", "Invalid session for the user.")
+        })?;
     if session.client_id != client_id || session.pool_id != pool_id {
         return Err(AwsError::bad_request(
             "NotAuthorizedException",
@@ -1869,7 +1875,7 @@ fn verify_srp_password(
         state.srp_sessions.remove(session_id);
         return Err(AwsError::bad_request(
             "NotAuthorizedException",
-            "SRP session has expired; restart the auth flow",
+            "Invalid session for the user, session is expired.",
         ));
     }
 
@@ -1886,7 +1892,7 @@ fn verify_srp_password(
     if secret_block_b64 != session.secret_block_b64 {
         return Err(AwsError::bad_request(
             "NotAuthorizedException",
-            "PASSWORD_CLAIM_SECRET_BLOCK does not match server-issued value",
+            "Incorrect username or password.",
         ));
     }
     let timestamp = resp["TIMESTAMP"].as_str().ok_or_else(|| {
@@ -1950,7 +1956,7 @@ fn verify_srp_password(
     if !crate::srp::ct_eq(&expected, &provided_sig) {
         return Err(AwsError::bad_request(
             "NotAuthorizedException",
-            "PASSWORD_CLAIM_SIGNATURE does not match",
+            "Incorrect username or password.",
         ));
     }
 
@@ -2100,12 +2106,14 @@ fn verify_custom_auth_response(
         .mfa_sessions
         .get(session_id)
         .map(|e| e.value().clone())
-        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid session"))?;
+        .ok_or_else(|| {
+            AwsError::bad_request("NotAuthorizedException", "Invalid session for the user.")
+        })?;
     if !session_still_valid(session.issued_at) {
         state.mfa_sessions.remove(session_id);
         return Err(AwsError::bad_request(
             "NotAuthorizedException",
-            "Custom auth session has expired; restart the auth flow",
+            "Invalid session for the user, session is expired.",
         ));
     }
     if session.pool_id != pool_id {

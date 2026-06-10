@@ -64,11 +64,11 @@ pub fn set_user_settings(
     if state.revoked_tokens.revoked.contains_key(access_token) {
         return Err(AwsError::bad_request(
             "NotAuthorizedException",
-            "Token has been revoked",
+            "Access Token has been revoked",
         ));
     }
     let username = crate::jwt::extract_username_from_access_token(access_token)
-        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid Access Token"))?;
     let mfa_options = parse_mfa_options(&input["MFAOptions"]);
 
     for mut pool_entry in state.user_pools.iter_mut() {

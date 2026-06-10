@@ -124,7 +124,7 @@ pub fn associate_software_token(
     // Resolve username from AccessToken or Session
     let username = if let Some(token) = input["AccessToken"].as_str() {
         username_from_access_token(token).ok_or_else(|| {
-            AwsError::bad_request("NotAuthorizedException", "Invalid access token")
+            AwsError::bad_request("NotAuthorizedException", "Invalid Access Token")
         })?
     } else if let Some(_session) = input["Session"].as_str() {
         // Session-based flow: session stores pool_id+username in MFA session map.
@@ -134,7 +134,9 @@ pub fn associate_software_token(
             .mfa_sessions
             .get(session)
             .map(|e| e.username.clone())
-            .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid session"))?
+            .ok_or_else(|| {
+                AwsError::bad_request("NotAuthorizedException", "Invalid session for the user.")
+            })?
     } else {
         return Err(AwsError::bad_request(
             "InvalidParameterException",
@@ -183,14 +185,16 @@ pub fn verify_software_token(
 
     let username = if let Some(token) = input["AccessToken"].as_str() {
         username_from_access_token(token).ok_or_else(|| {
-            AwsError::bad_request("NotAuthorizedException", "Invalid access token")
+            AwsError::bad_request("NotAuthorizedException", "Invalid Access Token")
         })?
     } else if let Some(session) = input["Session"].as_str() {
         state
             .mfa_sessions
             .get(session)
             .map(|e| e.username.clone())
-            .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid session"))?
+            .ok_or_else(|| {
+                AwsError::bad_request("NotAuthorizedException", "Invalid session for the user.")
+            })?
     } else {
         return Err(AwsError::bad_request(
             "InvalidParameterException",
@@ -212,7 +216,7 @@ pub fn verify_software_token(
             if !awsim_core::totp::verify_str(&secret, user_code, 1) {
                 return Err(AwsError::bad_request(
                     "EnableSoftwareTokenMFAException",
-                    "Invalid software token code",
+                    "Code mismatch",
                 ));
             }
             user.totp_verified = true;
@@ -241,7 +245,7 @@ pub fn set_user_mfa_preference(
     })?;
 
     let username = username_from_access_token(access_token)
-        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid Access Token"))?;
 
     apply_mfa_preference(state, &username, input);
 

@@ -957,12 +957,12 @@ pub fn get_user(
     if state.revoked_tokens.revoked.contains_key(access_token) {
         return Err(AwsError::bad_request(
             "NotAuthorizedException",
-            "Token has been revoked",
+            "Access Token has been revoked",
         ));
     }
 
     let claims = crate::jwt::verify_access_token(access_token)
-        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid Access Token"))?;
     let username = claims.username;
 
     for pool_entry in state.user_pools.iter() {
@@ -1223,12 +1223,12 @@ pub fn change_password(
     if state.revoked_tokens.revoked.contains_key(access_token) {
         return Err(AwsError::bad_request(
             "NotAuthorizedException",
-            "Token has been revoked",
+            "Access Token has been revoked",
         ));
     }
 
     let username = crate::jwt::extract_username_from_access_token(access_token)
-        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid Access Token"))?;
 
     for mut pool_entry in state.user_pools.iter_mut() {
         if pool_entry.users.contains_key(&username) {
@@ -1243,7 +1243,7 @@ pub fn change_password(
             if !crate::password::verify(previous, &user.password_hash) {
                 return Err(AwsError::bad_request(
                     "NotAuthorizedException",
-                    "Incorrect previous password",
+                    "Incorrect username or password.",
                 ));
             }
             user.password_hash = crate::password::hash(proposed)?;
@@ -1588,12 +1588,12 @@ pub fn update_user_attributes(
     if state.revoked_tokens.revoked.contains_key(access_token) {
         return Err(AwsError::bad_request(
             "NotAuthorizedException",
-            "Token has been revoked",
+            "Access Token has been revoked",
         ));
     }
 
     let claims = crate::jwt::verify_access_token(access_token)
-        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid Access Token"))?;
     let username = claims.username;
 
     let new_attrs = parse_user_attributes(input, "UserAttributes");
@@ -1639,12 +1639,12 @@ pub fn delete_user_attributes(
     if state.revoked_tokens.revoked.contains_key(access_token) {
         return Err(AwsError::bad_request(
             "NotAuthorizedException",
-            "Token has been revoked",
+            "Access Token has been revoked",
         ));
     }
 
     let claims = crate::jwt::verify_access_token(access_token)
-        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid Access Token"))?;
     let username = claims.username;
 
     let attr_names: Vec<String> = input["UserAttributeNames"]
@@ -1697,12 +1697,12 @@ pub fn delete_user(
     if state.revoked_tokens.revoked.contains_key(access_token) {
         return Err(AwsError::bad_request(
             "NotAuthorizedException",
-            "Token has been revoked",
+            "Access Token has been revoked",
         ));
     }
 
     let username = crate::jwt::extract_username_from_access_token(access_token)
-        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid Access Token"))?;
 
     for mut pool_entry in state.user_pools.iter_mut() {
         if pool_entry.users.remove(&username).is_some() {
@@ -1802,12 +1802,12 @@ pub fn get_user_attribute_verification_code(
     if state.revoked_tokens.revoked.contains_key(access_token) {
         return Err(AwsError::bad_request(
             "NotAuthorizedException",
-            "Token has been revoked",
+            "Access Token has been revoked",
         ));
     }
 
     let username = crate::jwt::extract_username_from_access_token(access_token)
-        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid Access Token"))?;
 
     for mut pool_entry in state.user_pools.iter_mut() {
         if let Some(user) = pool_entry.users.get_mut(&username) {
@@ -1855,12 +1855,12 @@ pub fn verify_user_attribute(
     if state.revoked_tokens.revoked.contains_key(access_token) {
         return Err(AwsError::bad_request(
             "NotAuthorizedException",
-            "Token has been revoked",
+            "Access Token has been revoked",
         ));
     }
 
     let username = crate::jwt::extract_username_from_access_token(access_token)
-        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid Access Token"))?;
 
     for mut pool_entry in state.user_pools.iter_mut() {
         if let Some(user) = pool_entry.users.get_mut(&username) {
