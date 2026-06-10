@@ -35,9 +35,9 @@ pub fn set_ui_customization(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
     let client_key = input["ClientId"].as_str().unwrap_or("pool").to_string();
     let css = input["CSS"].as_str().map(String::from);
     let image_url = input["ImageFile"].as_str().map(String::from);
@@ -89,9 +89,9 @@ pub fn get_ui_customization(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
     let client_key = input["ClientId"].as_str().unwrap_or("pool").to_string();
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
@@ -134,9 +134,9 @@ pub fn create_managed_login_branding(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
     let client_id = input["ClientId"].as_str().map(String::from);
     let settings = input["Settings"].clone();
     let assets: Vec<Value> = input["Assets"].as_array().cloned().unwrap_or_default();
@@ -176,11 +176,14 @@ pub fn describe_managed_login_branding(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
     let branding_id = input["ManagedLoginBrandingId"].as_str().ok_or_else(|| {
-        AwsError::bad_request("InvalidParameter", "ManagedLoginBrandingId is required")
+        AwsError::bad_request(
+            "InvalidParameterException",
+            "ManagedLoginBrandingId is required",
+        )
     })?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
@@ -213,12 +216,12 @@ pub fn describe_managed_login_branding_by_client(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let client_id = input["ClientId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ClientId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let client_id = input["ClientId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ClientId is required")
+    })?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -250,11 +253,14 @@ pub fn update_managed_login_branding(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
     let branding_id = input["ManagedLoginBrandingId"].as_str().ok_or_else(|| {
-        AwsError::bad_request("InvalidParameter", "ManagedLoginBrandingId is required")
+        AwsError::bad_request(
+            "InvalidParameterException",
+            "ManagedLoginBrandingId is required",
+        )
     })?;
     let now = now_epoch();
 
@@ -298,11 +304,14 @@ pub fn delete_managed_login_branding(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
     let branding_id = input["ManagedLoginBrandingId"].as_str().ok_or_else(|| {
-        AwsError::bad_request("InvalidParameter", "ManagedLoginBrandingId is required")
+        AwsError::bad_request(
+            "InvalidParameterException",
+            "ManagedLoginBrandingId is required",
+        )
     })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {

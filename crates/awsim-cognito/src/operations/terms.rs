@@ -51,12 +51,12 @@ pub fn create_terms(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let terms_name = input["TermsName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "TermsName is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let terms_name = input["TermsName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "TermsName is required")
+    })?;
     let terms_source = input["TermsSource"].as_str().unwrap_or("LINK").to_string();
     let enforcement = input["Enforcement"].as_str().unwrap_or("NONE").to_string();
     let client_id = input["ClientId"].as_str().map(String::from);
@@ -93,12 +93,12 @@ pub fn update_terms(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
     let terms_id = input["TermsId"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "TermsId is required"))?;
+        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "TermsId is required"))?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -142,12 +142,12 @@ pub fn delete_terms(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
     let terms_id = input["TermsId"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "TermsId is required"))?;
+        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "TermsId is required"))?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -174,12 +174,12 @@ pub fn describe_terms(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
     let terms_id = input["TermsId"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "TermsId is required"))?;
+        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "TermsId is required"))?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -207,9 +207,9 @@ pub fn list_terms(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
     let max_results = input["MaxResults"].as_u64().unwrap_or(60) as usize;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {

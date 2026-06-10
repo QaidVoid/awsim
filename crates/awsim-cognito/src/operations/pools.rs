@@ -120,9 +120,9 @@ pub fn create_user_pool(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_name = input["PoolName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "PoolName is required"))?;
+    let pool_name = input["PoolName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "PoolName is required")
+    })?;
 
     let random = &Uuid::new_v4().to_string()[..8];
     let pool_id = format!("{0}_{1}", ctx.region, random);
@@ -211,9 +211,9 @@ pub fn delete_user_pool(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
 
     if state.user_pools.remove(pool_id).is_none() {
         return Err(AwsError::not_found(
@@ -235,9 +235,9 @@ pub fn describe_user_pool(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -312,9 +312,9 @@ pub fn update_user_pool(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -355,12 +355,12 @@ pub fn create_user_pool_client(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let client_name = input["ClientName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ClientName is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let client_name = input["ClientName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ClientName is required")
+    })?;
 
     let explicit_auth_flows: Vec<String> = input["ExplicitAuthFlows"]
         .as_array()
@@ -494,12 +494,12 @@ pub fn describe_user_pool_client(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let client_id = input["ClientId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ClientId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let client_id = input["ClientId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ClientId is required")
+    })?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -527,12 +527,12 @@ pub fn delete_user_pool_client(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let client_id = input["ClientId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ClientId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let client_id = input["ClientId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ClientId is required")
+    })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -561,9 +561,9 @@ pub fn list_user_pool_clients(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
 
     let max_results = input["MaxResults"].as_u64().unwrap_or(60) as usize;
 
@@ -599,12 +599,12 @@ pub fn update_user_pool_client(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let client_id = input["ClientId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ClientId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let client_id = input["ClientId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ClientId is required")
+    })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -719,9 +719,9 @@ pub fn add_custom_attributes(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -737,7 +737,7 @@ pub fn add_custom_attributes(
     let mut parsed: Vec<SchemaAttribute> = Vec::with_capacity(attrs.len());
     for attr in attrs {
         let name = attr["Name"].as_str().ok_or_else(|| {
-            AwsError::bad_request("InvalidParameter", "Attribute Name is required")
+            AwsError::bad_request("InvalidParameterException", "Attribute Name is required")
         })?;
         parsed.push(parse_custom_schema_entry(name, attr)?);
     }
@@ -1083,9 +1083,9 @@ pub fn get_signing_certificate(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
 
     let _pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -1115,9 +1115,9 @@ pub fn get_log_delivery_configuration(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -1151,9 +1151,9 @@ pub fn set_log_delivery_configuration(
 ) -> Result<Value, AwsError> {
     use crate::state::LogDeliveryConfiguration;
 
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
     let log_configs: Vec<serde_json::Value> = input["LogConfigurations"]
         .as_array()
         .cloned()

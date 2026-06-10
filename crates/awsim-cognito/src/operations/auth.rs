@@ -687,12 +687,12 @@ pub fn initiate_auth(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let client_id = input["ClientId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ClientId is required"))?;
-    let auth_flow = input["AuthFlow"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AuthFlow is required"))?;
+    let client_id = input["ClientId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ClientId is required")
+    })?;
+    let auth_flow = input["AuthFlow"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "AuthFlow is required")
+    })?;
     let params = &input["AuthParameters"];
 
     let pool_entry = state
@@ -727,12 +727,12 @@ pub fn initiate_auth(
         "USER_SRP_AUTH" => start_srp_challenge(state, client_id, &pool_id, params),
         "CUSTOM_AUTH" => start_custom_auth_challenge(state, client_id, &pool_id, params, ctx),
         "USER_PASSWORD_AUTH" => {
-            let raw_username = params["USERNAME"]
-                .as_str()
-                .ok_or_else(|| AwsError::bad_request("InvalidParameter", "USERNAME is required"))?;
-            let password = params["PASSWORD"]
-                .as_str()
-                .ok_or_else(|| AwsError::bad_request("InvalidParameter", "PASSWORD is required"))?;
+            let raw_username = params["USERNAME"].as_str().ok_or_else(|| {
+                AwsError::bad_request("InvalidParameterException", "USERNAME is required")
+            })?;
+            let password = params["PASSWORD"].as_str().ok_or_else(|| {
+                AwsError::bad_request("InvalidParameterException", "PASSWORD is required")
+            })?;
             crate::secret_hash::validate_for_client(
                 state,
                 client_id,
@@ -962,7 +962,7 @@ pub fn initiate_auth(
         }
         "REFRESH_TOKEN_AUTH" | "REFRESH_TOKEN" => {
             let refresh_tok = params["REFRESH_TOKEN"].as_str().ok_or_else(|| {
-                AwsError::bad_request("InvalidParameter", "REFRESH_TOKEN is required")
+                AwsError::bad_request("InvalidParameterException", "REFRESH_TOKEN is required")
             })?;
 
             // Extract sub from our opaque refresh token format: "refresh-{sub}-{uuid}"
@@ -1015,7 +1015,7 @@ pub fn initiate_auth(
             ))
         }
         flow => Err(AwsError::bad_request(
-            "InvalidParameter",
+            "InvalidParameterException",
             format!("Unsupported AuthFlow: {flow}"),
         )),
     }
@@ -1030,15 +1030,15 @@ pub fn admin_initiate_auth(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let client_id = input["ClientId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ClientId is required"))?;
-    let auth_flow = input["AuthFlow"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AuthFlow is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let client_id = input["ClientId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ClientId is required")
+    })?;
+    let auth_flow = input["AuthFlow"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "AuthFlow is required")
+    })?;
     let params = &input["AuthParameters"];
 
     {
@@ -1069,12 +1069,12 @@ pub fn admin_initiate_auth(
 
     match auth_flow {
         "USER_PASSWORD_AUTH" | "ADMIN_USER_PASSWORD_AUTH" | "USER_SRP_AUTH" => {
-            let raw_username = params["USERNAME"]
-                .as_str()
-                .ok_or_else(|| AwsError::bad_request("InvalidParameter", "USERNAME is required"))?;
-            let password = params["PASSWORD"]
-                .as_str()
-                .ok_or_else(|| AwsError::bad_request("InvalidParameter", "PASSWORD is required"))?;
+            let raw_username = params["USERNAME"].as_str().ok_or_else(|| {
+                AwsError::bad_request("InvalidParameterException", "USERNAME is required")
+            })?;
+            let password = params["PASSWORD"].as_str().ok_or_else(|| {
+                AwsError::bad_request("InvalidParameterException", "PASSWORD is required")
+            })?;
             crate::secret_hash::validate_for_client(
                 state,
                 client_id,
@@ -1300,7 +1300,7 @@ pub fn admin_initiate_auth(
             Ok(result)
         }
         flow => Err(AwsError::bad_request(
-            "InvalidParameter",
+            "InvalidParameterException",
             format!("Unsupported AuthFlow: {flow}"),
         )),
     }
@@ -1315,12 +1315,12 @@ pub fn respond_to_auth_challenge(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let client_id = input["ClientId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ClientId is required"))?;
-    let challenge_name = input["ChallengeName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ChallengeName is required"))?;
+    let client_id = input["ClientId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ClientId is required")
+    })?;
+    let challenge_name = input["ChallengeName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ChallengeName is required")
+    })?;
     let responses = &input["ChallengeResponses"];
 
     let pool_entry = state
@@ -1362,13 +1362,13 @@ pub fn respond_to_auth_challenge(
         "NEW_PASSWORD_REQUIRED" => {
             let username = responses["USERNAME"].as_str().ok_or_else(|| {
                 AwsError::bad_request(
-                    "InvalidParameter",
+                    "InvalidParameterException",
                     "USERNAME is required in ChallengeResponses",
                 )
             })?;
             let new_password = responses["NEW_PASSWORD"].as_str().ok_or_else(|| {
                 AwsError::bad_request(
-                    "InvalidParameter",
+                    "InvalidParameterException",
                     "NEW_PASSWORD is required in ChallengeResponses",
                 )
             })?;
@@ -1507,7 +1507,7 @@ pub fn respond_to_auth_challenge(
             verify_custom_auth_response(state, &pool_id, client_id, &ctx.region, input, ctx)
         }
         name => Err(AwsError::bad_request(
-            "InvalidParameter",
+            "InvalidParameterException",
             format!("Unsupported ChallengeName: {name}"),
         )),
     }
@@ -1522,28 +1522,28 @@ pub fn admin_respond_to_auth_challenge(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let client_id = input["ClientId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ClientId is required"))?;
-    let challenge_name = input["ChallengeName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ChallengeName is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let client_id = input["ClientId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ClientId is required")
+    })?;
+    let challenge_name = input["ChallengeName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ChallengeName is required")
+    })?;
     let responses = &input["ChallengeResponses"];
 
     match challenge_name {
         "NEW_PASSWORD_REQUIRED" => {
             let username = responses["USERNAME"].as_str().ok_or_else(|| {
                 AwsError::bad_request(
-                    "InvalidParameter",
+                    "InvalidParameterException",
                     "USERNAME is required in ChallengeResponses",
                 )
             })?;
             let new_password = responses["NEW_PASSWORD"].as_str().ok_or_else(|| {
                 AwsError::bad_request(
-                    "InvalidParameter",
+                    "InvalidParameterException",
                     "NEW_PASSWORD is required in ChallengeResponses",
                 )
             })?;
@@ -1621,7 +1621,7 @@ pub fn admin_respond_to_auth_challenge(
             EMAIL_OTP_KEY,
         ),
         name => Err(AwsError::bad_request(
-            "InvalidParameter",
+            "InvalidParameterException",
             format!("Unsupported ChallengeName: {name}"),
         )),
     }
@@ -1636,12 +1636,12 @@ pub fn get_tokens_from_refresh_token(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let refresh_tok = input["RefreshToken"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "RefreshToken is required"))?;
-    let client_id = input["ClientId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ClientId is required"))?;
+    let refresh_tok = input["RefreshToken"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "RefreshToken is required")
+    })?;
+    let client_id = input["ClientId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ClientId is required")
+    })?;
 
     let pool_entry = state
         .user_pools
@@ -1698,9 +1698,9 @@ pub fn get_user_auth_factors(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let token = input["AccessToken"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
+    let token = input["AccessToken"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "AccessToken is required")
+    })?;
 
     let username = crate::jwt::extract_username_from_access_token(token)
         .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid access token"))?;
@@ -1742,9 +1742,9 @@ fn start_srp_challenge(
     use num_bigint::BigUint;
     use num_traits::Num;
 
-    let raw_username = params["USERNAME"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "USERNAME is required"))?;
+    let raw_username = params["USERNAME"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "USERNAME is required")
+    })?;
     crate::secret_hash::validate_for_client(
         state,
         client_id,
@@ -1753,7 +1753,7 @@ fn start_srp_challenge(
     )?;
     let srp_a_hex = params["SRP_A"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "SRP_A is required"))?;
+        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "SRP_A is required"))?;
     if BigUint::from_str_radix(srp_a_hex, 16).is_err() {
         return Err(AwsError::bad_request(
             "InvalidParameterException",
@@ -1987,9 +1987,9 @@ fn start_custom_auth_challenge(
     params: &serde_json::Value,
     ctx: &RequestContext,
 ) -> Result<serde_json::Value, AwsError> {
-    let raw_username = params["USERNAME"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "USERNAME is required"))?;
+    let raw_username = params["USERNAME"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "USERNAME is required")
+    })?;
     crate::secret_hash::validate_for_client(
         state,
         client_id,

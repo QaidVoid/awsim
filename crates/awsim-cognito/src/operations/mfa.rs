@@ -55,9 +55,9 @@ pub fn set_user_pool_mfa_config(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -93,9 +93,9 @@ pub fn get_user_pool_mfa_config(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -136,7 +136,7 @@ pub fn associate_software_token(
             .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid session"))?
     } else {
         return Err(AwsError::bad_request(
-            "InvalidParameter",
+            "InvalidParameterException",
             "Either AccessToken or Session is required",
         ));
     };
@@ -169,9 +169,9 @@ pub fn verify_software_token(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let user_code = input["UserCode"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserCode is required"))?;
+    let user_code = input["UserCode"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserCode is required")
+    })?;
 
     if user_code.len() != 6 || !user_code.chars().all(|c| c.is_ascii_digit()) {
         return Err(AwsError::bad_request(
@@ -191,7 +191,7 @@ pub fn verify_software_token(
             .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid session"))?
     } else {
         return Err(AwsError::bad_request(
-            "InvalidParameter",
+            "InvalidParameterException",
             "Either AccessToken or Session is required",
         ));
     };
@@ -234,9 +234,9 @@ pub fn set_user_mfa_preference(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let access_token = input["AccessToken"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
+    let access_token = input["AccessToken"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "AccessToken is required")
+    })?;
 
     let username = username_from_access_token(access_token)
         .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid access token"))?;
@@ -256,12 +256,12 @@ pub fn admin_set_user_mfa_preference(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let username = input["Username"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Username is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let username = input["Username"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "Username is required")
+    })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::not_found(

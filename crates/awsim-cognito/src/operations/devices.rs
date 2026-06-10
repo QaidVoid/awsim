@@ -56,12 +56,12 @@ pub fn confirm_device(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let token = input["AccessToken"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
-    let device_key = input["DeviceKey"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "DeviceKey is required"))?;
+    let token = input["AccessToken"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "AccessToken is required")
+    })?;
+    let device_key = input["DeviceKey"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "DeviceKey is required")
+    })?;
     let device_name = input["DeviceName"].as_str().map(String::from);
 
     let (pool_id, username) = get_username_from_token(state, token)?;
@@ -105,12 +105,12 @@ pub fn get_device(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let token = input["AccessToken"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
-    let device_key = input["DeviceKey"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "DeviceKey is required"))?;
+    let token = input["AccessToken"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "AccessToken is required")
+    })?;
+    let device_key = input["DeviceKey"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "DeviceKey is required")
+    })?;
 
     let (pool_id, username) = get_username_from_token(state, token)?;
 
@@ -148,9 +148,9 @@ pub fn list_devices(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let token = input["AccessToken"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
+    let token = input["AccessToken"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "AccessToken is required")
+    })?;
     let limit = input["Limit"].as_u64().unwrap_or(60) as usize;
 
     let (pool_id, username) = get_username_from_token(state, token)?;
@@ -184,12 +184,12 @@ pub fn update_device_status(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let token = input["AccessToken"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
-    let device_key = input["DeviceKey"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "DeviceKey is required"))?;
+    let token = input["AccessToken"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "AccessToken is required")
+    })?;
+    let device_key = input["DeviceKey"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "DeviceKey is required")
+    })?;
     let status = input["DeviceRememberedStatus"]
         .as_str()
         .unwrap_or("remembered");
@@ -235,12 +235,12 @@ pub fn forget_device(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let token = input["AccessToken"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
-    let device_key = input["DeviceKey"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "DeviceKey is required"))?;
+    let token = input["AccessToken"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "AccessToken is required")
+    })?;
+    let device_key = input["DeviceKey"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "DeviceKey is required")
+    })?;
 
     let (pool_id, username) = get_username_from_token(state, token)?;
 
@@ -277,15 +277,15 @@ pub fn admin_get_device(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let username = input["Username"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Username is required"))?;
-    let device_key = input["DeviceKey"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "DeviceKey is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let username = input["Username"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "Username is required")
+    })?;
+    let device_key = input["DeviceKey"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "DeviceKey is required")
+    })?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -322,12 +322,12 @@ pub fn admin_list_devices(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let username = input["Username"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Username is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let username = input["Username"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "Username is required")
+    })?;
     let limit = input["Limit"].as_u64().unwrap_or(60) as usize;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
@@ -361,15 +361,15 @@ pub fn admin_update_device_status(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let username = input["Username"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Username is required"))?;
-    let device_key = input["DeviceKey"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "DeviceKey is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let username = input["Username"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "Username is required")
+    })?;
+    let device_key = input["DeviceKey"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "DeviceKey is required")
+    })?;
     let status = input["DeviceRememberedStatus"]
         .as_str()
         .unwrap_or("remembered");
@@ -414,15 +414,15 @@ pub fn admin_forget_device(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let username = input["Username"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Username is required"))?;
-    let device_key = input["DeviceKey"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "DeviceKey is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let username = input["Username"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "Username is required")
+    })?;
+    let device_key = input["DeviceKey"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "DeviceKey is required")
+    })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::not_found(

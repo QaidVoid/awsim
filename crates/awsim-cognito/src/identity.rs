@@ -2704,7 +2704,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            err.code.contains("Validation") || err.code.contains("InvalidParameter"),
+            err.code.contains("Validation") || err.code.contains("InvalidParameterException"),
             "expected validation, got {err:?}",
         );
     }
@@ -2728,7 +2728,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            err.code.contains("Validation") || err.code.contains("InvalidParameter"),
+            err.code.contains("Validation") || err.code.contains("InvalidParameterException"),
             "expected validation, got {err:?}",
         );
     }

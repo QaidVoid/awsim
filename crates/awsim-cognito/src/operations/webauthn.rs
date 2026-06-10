@@ -41,9 +41,9 @@ pub fn start_webauthn_registration(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let access_token = input["AccessToken"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
+    let access_token = input["AccessToken"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "AccessToken is required")
+    })?;
     let username = username_for_token(state, access_token)?;
     let challenge = Uuid::new_v4().to_string();
 
@@ -79,9 +79,9 @@ pub fn complete_webauthn_registration(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let access_token = input["AccessToken"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
+    let access_token = input["AccessToken"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "AccessToken is required")
+    })?;
     let credential = &input["Credential"];
     let username = username_for_token(state, access_token)?;
 
@@ -123,12 +123,12 @@ pub fn delete_webauthn_credential(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let access_token = input["AccessToken"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
-    let credential_id = input["CredentialId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "CredentialId is required"))?;
+    let access_token = input["AccessToken"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "AccessToken is required")
+    })?;
+    let credential_id = input["CredentialId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "CredentialId is required")
+    })?;
     let username = username_for_token(state, access_token)?;
 
     for mut pool_entry in state.user_pools.iter_mut() {
@@ -157,9 +157,9 @@ pub fn list_webauthn_credentials(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let access_token = input["AccessToken"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
+    let access_token = input["AccessToken"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "AccessToken is required")
+    })?;
     let max_results = input["MaxResults"].as_u64().unwrap_or(60) as usize;
     let username = username_for_token(state, access_token)?;
 

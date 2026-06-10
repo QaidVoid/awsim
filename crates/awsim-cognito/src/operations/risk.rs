@@ -13,9 +13,9 @@ pub fn set_risk_configuration(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
     let client_id = input["ClientId"].as_str().map(String::from);
 
     let config = RiskConfiguration {
@@ -73,9 +73,9 @@ pub fn describe_risk_configuration(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
     let client_id = input["ClientId"].as_str();
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
@@ -120,23 +120,23 @@ pub fn update_auth_event_feedback(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let username = input["Username"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Username is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let username = input["Username"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "Username is required")
+    })?;
     let event_id = input["EventId"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "EventId is required"))?;
+        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "EventId is required"))?;
     // FeedbackToken is opaque from our side; presence is required but we
     // don't validate it.
-    let _feedback_token = input["FeedbackToken"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "FeedbackToken is required"))?;
-    let feedback_value = input["FeedbackValue"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "FeedbackValue is required"))?;
+    let _feedback_token = input["FeedbackToken"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "FeedbackToken is required")
+    })?;
+    let feedback_value = input["FeedbackValue"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "FeedbackValue is required")
+    })?;
     apply_feedback(state, pool_id, username, event_id, feedback_value, ctx)
 }
 
@@ -149,18 +149,18 @@ pub fn admin_update_auth_event_feedback(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let username = input["Username"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Username is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let username = input["Username"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "Username is required")
+    })?;
     let event_id = input["EventId"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "EventId is required"))?;
-    let feedback_value = input["FeedbackValue"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "FeedbackValue is required"))?;
+        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "EventId is required"))?;
+    let feedback_value = input["FeedbackValue"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "FeedbackValue is required")
+    })?;
     apply_feedback(state, pool_id, username, event_id, feedback_value, ctx)
 }
 

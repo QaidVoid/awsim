@@ -44,12 +44,12 @@ pub fn create_group(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let group_name = input["GroupName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "GroupName is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let group_name = input["GroupName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "GroupName is required")
+    })?;
     let description = input["Description"]
         .as_str()
         .filter(|s| !s.is_empty())
@@ -113,12 +113,12 @@ pub fn get_group(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let group_name = input["GroupName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "GroupName is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let group_name = input["GroupName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "GroupName is required")
+    })?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -146,12 +146,12 @@ pub fn update_group(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let group_name = input["GroupName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "GroupName is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let group_name = input["GroupName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "GroupName is required")
+    })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -201,12 +201,12 @@ pub fn delete_group(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let group_name = input["GroupName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "GroupName is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let group_name = input["GroupName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "GroupName is required")
+    })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -242,9 +242,9 @@ pub fn list_groups(
 ) -> Result<Value, AwsError> {
     use awsim_core::pagination::{cap_max_results, paginate};
 
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
 
     let limit = cap_max_results(input["Limit"].as_i64(), 60, 60);
 
@@ -278,15 +278,15 @@ pub fn admin_add_user_to_group(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let username = input["Username"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Username is required"))?;
-    let group_name = input["GroupName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "GroupName is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let username = input["Username"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "Username is required")
+    })?;
+    let group_name = input["GroupName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "GroupName is required")
+    })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -332,15 +332,15 @@ pub fn admin_remove_user_from_group(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let username = input["Username"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Username is required"))?;
-    let group_name = input["GroupName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "GroupName is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let username = input["Username"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "Username is required")
+    })?;
+    let group_name = input["GroupName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "GroupName is required")
+    })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -377,12 +377,12 @@ pub fn admin_list_groups_for_user(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let username = input["Username"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Username is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let username = input["Username"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "Username is required")
+    })?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -423,12 +423,12 @@ pub fn list_users_in_group(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let group_name = input["GroupName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "GroupName is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let group_name = input["GroupName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "GroupName is required")
+    })?;
 
     let limit = input["Limit"].as_u64().unwrap_or(60) as usize;
 

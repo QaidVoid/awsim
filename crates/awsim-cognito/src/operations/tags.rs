@@ -14,9 +14,9 @@ pub fn tag_resource(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let resource_arn = input["ResourceArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ResourceArn is required"))?;
+    let resource_arn = input["ResourceArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ResourceArn is required")
+    })?;
 
     validate_aws_tags(&input["Tags"], &TagOpts::aws_default())?;
 
@@ -60,9 +60,9 @@ pub fn untag_resource(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let resource_arn = input["ResourceArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ResourceArn is required"))?;
+    let resource_arn = input["ResourceArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ResourceArn is required")
+    })?;
 
     validate_aws_tag_keys(&input["TagKeys"])?;
 
@@ -103,9 +103,9 @@ pub fn list_tags_for_resource(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let resource_arn = input["ResourceArn"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ResourceArn is required"))?;
+    let resource_arn = input["ResourceArn"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ResourceArn is required")
+    })?;
 
     // Check pool tags first
     for pool in state.user_pools.iter() {

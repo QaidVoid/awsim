@@ -47,15 +47,15 @@ pub fn create_resource_server(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let identifier = input["Identifier"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Identifier is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let identifier = input["Identifier"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "Identifier is required")
+    })?;
     let name = input["Name"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Name is required"))?;
+        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "Name is required"))?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -99,12 +99,12 @@ pub fn describe_resource_server(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let identifier = input["Identifier"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Identifier is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let identifier = input["Identifier"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "Identifier is required")
+    })?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -136,12 +136,12 @@ pub fn update_resource_server(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let identifier = input["Identifier"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Identifier is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let identifier = input["Identifier"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "Identifier is required")
+    })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -183,12 +183,12 @@ pub fn delete_resource_server(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let identifier = input["Identifier"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Identifier is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let identifier = input["Identifier"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "Identifier is required")
+    })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::not_found(
@@ -223,9 +223,9 @@ pub fn list_resource_servers(
 ) -> Result<Value, AwsError> {
     use awsim_core::pagination::{cap_max_results, paginate};
 
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
 
     let limit = cap_max_results(input["MaxResults"].as_i64(), 50, 50);
 
