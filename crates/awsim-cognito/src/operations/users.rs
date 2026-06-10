@@ -449,7 +449,7 @@ pub fn sign_up(
     if pool.users.contains_key(username) {
         return Err(AwsError::bad_request(
             "UsernameExistsException",
-            format!("Username already exists: {username}"),
+            "User already exists",
         ));
     }
 
@@ -541,10 +541,7 @@ pub fn confirm_sign_up(
     let code_key = format!("{pool_id}:{username}");
     let auto_verified = pool.auto_verified_attributes.clone();
     let user = pool.users.get_mut(username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
     check_code_rate_limit(user)?;
 
@@ -565,7 +562,7 @@ pub fn confirm_sign_up(
             state.confirmation_codes_issued.remove(&code_key);
             return Err(AwsError::bad_request(
                 "ExpiredCodeException",
-                "Confirmation code has expired",
+                "Invalid code provided, please request a code again.",
             ));
         }
         if provided != expected {
@@ -573,7 +570,7 @@ pub fn confirm_sign_up(
                 user,
                 AwsError::bad_request(
                     "CodeMismatchException",
-                    "Invalid verification code provided",
+                    "Invalid verification code provided, please try again.",
                 ),
             ));
         }
@@ -640,16 +637,10 @@ pub fn admin_confirm_sign_up(
     })?;
 
     let username = resolve_username(&pool, username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
     user.status = "CONFIRMED".to_string();
@@ -695,7 +686,7 @@ pub fn admin_create_user(
     if pool.users.contains_key(username) {
         return Err(AwsError::bad_request(
             "UsernameExistsException",
-            format!("Username already exists: {username}"),
+            "User account already exists.",
         ));
     }
 
@@ -743,15 +734,12 @@ pub fn admin_delete_user(
     })?;
 
     let username = resolve_username(&pool, username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
     if pool.users.remove(&username).is_none() {
         return Err(AwsError::service_not_found(
             "UserNotFoundException",
-            format!("User not found: {username}"),
+            "User does not exist.",
         ));
     }
 
@@ -783,16 +771,10 @@ pub fn admin_get_user(
     })?;
 
     let username = resolve_username(&pool, username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
     let user = pool.users.get(&username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
     Ok(user_to_value(user))
@@ -830,16 +812,10 @@ pub fn admin_set_user_password(
     super::auth_policy::validate_password(&pool.policies, password)?;
 
     let username = resolve_username(&pool, username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
     user.password_hash = crate::password::hash(password)?;
@@ -990,7 +966,7 @@ pub fn get_user(
 
     Err(AwsError::service_not_found(
         "UserNotFoundException",
-        format!("User not found: {username}"),
+        "User does not exist.",
     ))
 }
 
@@ -1044,10 +1020,7 @@ pub fn forgot_password(
         })?;
         let lambda_arn = pool.lambda_config.get("CustomMessage").cloned();
         let user = pool.users.get_mut(username).ok_or_else(|| {
-            AwsError::service_not_found(
-                "UserNotFoundException",
-                format!("User not found: {username}"),
-            )
+            AwsError::service_not_found("UserNotFoundException", "User does not exist.")
         })?;
         user.pending_verifications
             .insert(FORGOT_PASSWORD_KEY.to_string(), code.clone());
@@ -1145,10 +1118,7 @@ pub fn confirm_forgot_password(
     super::auth_policy::validate_password(&pool.policies, password)?;
 
     let user = pool.users.get_mut(username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
     check_code_rate_limit(user)?;
 
@@ -1159,7 +1129,7 @@ pub fn confirm_forgot_password(
         .ok_or_else(|| {
             AwsError::bad_request(
                 "ExpiredCodeException",
-                "No active forgot-password code for this user",
+                "Invalid code provided, please request a code again.",
             )
         })?;
     let issued = user
@@ -1172,7 +1142,7 @@ pub fn confirm_forgot_password(
             .remove(FORGOT_PASSWORD_KEY);
         return Err(AwsError::bad_request(
             "ExpiredCodeException",
-            "Forgot-password code has expired",
+            "Invalid code provided, please request a code again.",
         ));
     }
     if expected != confirmation_code {
@@ -1235,10 +1205,7 @@ pub fn change_password(
             super::auth_policy::validate_password(&pool_entry.policies, proposed)?;
             let pool_id = pool_entry.id.clone();
             let user = pool_entry.users.get_mut(&username).ok_or_else(|| {
-                AwsError::service_not_found(
-                    "UserNotFoundException",
-                    format!("User not found: {username}"),
-                )
+                AwsError::service_not_found("UserNotFoundException", "User does not exist.")
             })?;
             if !crate::password::verify(previous, &user.password_hash) {
                 return Err(AwsError::bad_request(
@@ -1258,7 +1225,7 @@ pub fn change_password(
 
     Err(AwsError::service_not_found(
         "UserNotFoundException",
-        format!("User not found: {username}"),
+        "User does not exist.",
     ))
 }
 
@@ -1323,16 +1290,10 @@ pub fn admin_enable_user(
     })?;
 
     let username = resolve_username(&pool, username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
     user.enabled = true;
@@ -1364,16 +1325,10 @@ pub fn admin_disable_user(
     })?;
 
     let username = resolve_username(&pool, username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
     user.enabled = false;
@@ -1405,16 +1360,10 @@ pub fn admin_reset_user_password(
     })?;
 
     let username = resolve_username(&pool, username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
     user.status = "RESET_REQUIRED".to_string();
@@ -1448,16 +1397,10 @@ pub fn admin_update_user_attributes(
     let username_attrs = pool.username_attributes.clone();
     let schema = pool.schema.clone();
     let username = resolve_username(&pool, username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
     let new_attrs = parse_user_attributes(input, "UserAttributes");
@@ -1543,16 +1486,10 @@ pub fn admin_delete_user_attributes(
 
     let schema = pool.schema.clone();
     let username = resolve_username(&pool, username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
     let names: Vec<String> = input["UserAttributeNames"]
@@ -1619,7 +1556,7 @@ pub fn update_user_attributes(
 
     Err(AwsError::service_not_found(
         "UserNotFoundException",
-        format!("User not found: {username}"),
+        "User does not exist.",
     ))
 }
 
@@ -1677,7 +1614,7 @@ pub fn delete_user_attributes(
 
     Err(AwsError::service_not_found(
         "UserNotFoundException",
-        format!("User not found: {username}"),
+        "User does not exist.",
     ))
 }
 
@@ -1717,7 +1654,7 @@ pub fn delete_user(
 
     Err(AwsError::service_not_found(
         "UserNotFoundException",
-        format!("User not found: {username}"),
+        "User does not exist.",
     ))
 }
 
@@ -1764,7 +1701,7 @@ pub fn resend_confirmation_code(
     if !pool.users.contains_key(username) {
         return Err(AwsError::service_not_found(
             "UserNotFoundException",
-            format!("User not found: {username}"),
+            "User does not exist.",
         ));
     }
 
@@ -1829,7 +1766,7 @@ pub fn get_user_attribute_verification_code(
 
     Err(AwsError::service_not_found(
         "UserNotFoundException",
-        format!("User not found: {username}"),
+        "User does not exist.",
     ))
 }
 
@@ -1875,7 +1812,7 @@ pub fn verify_user_attribute(
                     user.pending_verifications_issued.remove(attribute_name);
                     return Err(AwsError::bad_request(
                         "ExpiredCodeException",
-                        "Attribute verification code has expired",
+                        "Invalid code provided, please request a code again.",
                     ));
                 }
                 if _code != expected {
@@ -1883,7 +1820,7 @@ pub fn verify_user_attribute(
                         user,
                         AwsError::bad_request(
                             "CodeMismatchException",
-                            "Invalid verification code provided",
+                            "Invalid verification code provided, please try again.",
                         ),
                     ));
                 }
@@ -1900,7 +1837,7 @@ pub fn verify_user_attribute(
 
     Err(AwsError::service_not_found(
         "UserNotFoundException",
-        format!("User not found: {username}"),
+        "User does not exist.",
     ))
 }
 
@@ -1928,16 +1865,10 @@ pub fn admin_user_global_sign_out(
     })?;
 
     let username = resolve_username(&pool, username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
     for token in &user.revoked_refresh_tokens {
@@ -1996,16 +1927,10 @@ pub fn admin_list_user_auth_events(
     })?;
 
     let username = resolve_username(&pool, username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
     let user = pool.users.get(&username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
     // Newest first per AWS semantics, capped at MaxResults.

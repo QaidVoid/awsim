@@ -303,16 +303,10 @@ pub fn admin_add_user_to_group(
     }
 
     let username = super::users::resolve_username(&pool, username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
     if !user.groups.contains(&group_name.to_string()) {
@@ -350,16 +344,10 @@ pub fn admin_remove_user_from_group(
     })?;
 
     let username = super::users::resolve_username(&pool, username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
     user.groups.retain(|g| g != group_name);
@@ -392,16 +380,10 @@ pub fn admin_list_groups_for_user(
     })?;
 
     let username = super::users::resolve_username(&pool, username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
     let user = pool.users.get(&username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
     let groups: Vec<Value> = user

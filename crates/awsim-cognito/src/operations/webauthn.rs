@@ -70,7 +70,7 @@ pub fn start_webauthn_registration(
     }
     Err(AwsError::service_not_found(
         "UserNotFoundException",
-        format!("User not found: {username}"),
+        "User does not exist.",
     ))
 }
 
@@ -114,7 +114,7 @@ pub fn complete_webauthn_registration(
     }
     Err(AwsError::service_not_found(
         "UserNotFoundException",
-        format!("User not found: {username}"),
+        "User does not exist.",
     ))
 }
 
@@ -148,7 +148,7 @@ pub fn delete_webauthn_credential(
     }
     Err(AwsError::service_not_found(
         "UserNotFoundException",
-        format!("User not found: {username}"),
+        "User does not exist.",
     ))
 }
 
@@ -176,6 +176,6 @@ pub fn list_webauthn_credentials(
     }
     Err(AwsError::service_not_found(
         "UserNotFoundException",
-        format!("User not found: {username}"),
+        "User does not exist.",
     ))
 }

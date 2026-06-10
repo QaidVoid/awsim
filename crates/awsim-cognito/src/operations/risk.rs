@@ -179,10 +179,7 @@ fn apply_feedback(
         )
     })?;
     let user = pool.users.get_mut(username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
     let event = user
         .auth_events

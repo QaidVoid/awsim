@@ -43,10 +43,7 @@ pub fn admin_set_user_settings(
         )
     })?;
     let user = pool.users.get_mut(username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
     user.mfa_options = mfa_options;
     info!(username = %username, pool_id = %pool_id, "Cognito: admin set user settings");
@@ -79,6 +76,6 @@ pub fn set_user_settings(
     }
     Err(AwsError::service_not_found(
         "UserNotFoundException",
-        format!("User not found: {username}"),
+        "User does not exist.",
     ))
 }

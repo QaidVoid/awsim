@@ -43,7 +43,7 @@ fn get_username_from_token(
     }
     Err(AwsError::service_not_found(
         "UserNotFoundException",
-        format!("User not found: {username}"),
+        "User does not exist.",
     ))
 }
 
@@ -72,10 +72,7 @@ pub fn confirm_device(
     })?;
 
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
     // Remove existing device with same key if present
@@ -117,10 +114,7 @@ pub fn get_device(
         AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
     })?;
     let user = pool.users.get(&username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
     let device = user
@@ -157,10 +151,7 @@ pub fn list_devices(
         AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
     })?;
     let user = pool.users.get(&username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
     let devices: Vec<Value> = user
@@ -198,10 +189,7 @@ pub fn update_device_status(
         AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
     })?;
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
     let device = user
@@ -244,10 +232,7 @@ pub fn forget_device(
         AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
     })?;
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
     let len_before = user.devices.len();
@@ -289,10 +274,7 @@ pub fn admin_get_device(
         )
     })?;
     let user = pool.users.get(username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
     let device = user
         .devices
@@ -332,10 +314,7 @@ pub fn admin_list_devices(
         )
     })?;
     let user = pool.users.get(username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
     let devices: Vec<Value> = user
@@ -377,10 +356,7 @@ pub fn admin_update_device_status(
         )
     })?;
     let user = pool.users.get_mut(username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
     let device = user
         .devices
@@ -426,10 +402,7 @@ pub fn admin_forget_device(
         )
     })?;
     let user = pool.users.get_mut(username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
     let len_before = user.devices.len();

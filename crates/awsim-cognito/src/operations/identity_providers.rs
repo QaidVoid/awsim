@@ -383,10 +383,7 @@ pub fn admin_link_provider_for_user(
         })?;
 
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
     // Remove any existing link for this provider

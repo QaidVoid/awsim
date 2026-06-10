@@ -227,7 +227,7 @@ pub fn verify_software_token(
 
     Err(AwsError::service_not_found(
         "UserNotFoundException",
-        format!("User not found: {username}"),
+        "User does not exist.",
     ))
 }
 
@@ -277,10 +277,7 @@ pub fn admin_set_user_mfa_preference(
     })?;
 
     let user = pool.users.get_mut(username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
     apply_mfa_settings_to_user(user, input);

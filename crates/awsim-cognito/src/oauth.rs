@@ -1965,11 +1965,7 @@ async fn userinfo(
             match found {
                 Some(u) => u,
                 None => {
-                    return (
-                        StatusCode::UNAUTHORIZED,
-                        format!("User not found: {username}"),
-                    )
-                        .into_response();
+                    return (StatusCode::UNAUTHORIZED, "User does not exist.").into_response();
                 }
             }
         }

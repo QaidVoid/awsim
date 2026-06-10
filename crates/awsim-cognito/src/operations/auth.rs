@@ -324,10 +324,9 @@ fn verify_code_mfa(
     let pool = state.user_pools.get(&session_meta.pool_id).ok_or_else(|| {
         AwsError::service_not_found("ResourceNotFoundException", "Pool not found")
     })?;
-    let user = pool
-        .users
-        .get(&session_meta.username)
-        .ok_or_else(|| AwsError::service_not_found("UserNotFoundException", "User not found"))?;
+    let user = pool.users.get(&session_meta.username).ok_or_else(|| {
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
+    })?;
     let expected = user
         .pending_verifications
         .get(stash_key)
@@ -411,10 +410,9 @@ fn complete_software_token_mfa(
     let pool = state.user_pools.get(&session_meta.pool_id).ok_or_else(|| {
         AwsError::service_not_found("ResourceNotFoundException", "Pool not found")
     })?;
-    let user = pool
-        .users
-        .get(&session_meta.username)
-        .ok_or_else(|| AwsError::service_not_found("UserNotFoundException", "User not found"))?;
+    let user = pool.users.get(&session_meta.username).ok_or_else(|| {
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
+    })?;
     let secret = user.totp_secret.as_deref().ok_or_else(|| {
         AwsError::bad_request(
             "NotAuthorizedException",
@@ -746,10 +744,7 @@ pub fn initiate_auth(
                     AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
                 })?;
                 super::users::resolve_username_for_signin(&pool, raw_username).ok_or_else(|| {
-                    AwsError::service_not_found(
-                        "UserNotFoundException",
-                        format!("User not found: {raw_username}"),
-                    )
+                    AwsError::service_not_found("UserNotFoundException", "User does not exist.")
                 })?
             };
             let username = username.as_str();
@@ -786,10 +781,7 @@ pub fn initiate_auth(
                 let compromised = super::auth_policy::is_compromised_password(password);
 
                 let user = pool.users.get_mut(username).ok_or_else(|| {
-                    AwsError::service_not_found(
-                        "UserNotFoundException",
-                        format!("User not found: {username}"),
-                    )
+                    AwsError::service_not_found("UserNotFoundException", "User does not exist.")
                 })?;
                 if !user.enabled {
                     return Err(AwsError::bad_request(
@@ -833,10 +825,7 @@ pub fn initiate_auth(
                 AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
             })?;
             let user = pool.users.get(username).ok_or_else(|| {
-                AwsError::service_not_found(
-                    "UserNotFoundException",
-                    format!("User not found: {username}"),
-                )
+                AwsError::service_not_found("UserNotFoundException", "User does not exist.")
             })?;
 
             if user.status == "UNCONFIRMED" {
@@ -901,10 +890,7 @@ pub fn initiate_auth(
                         )
                     })?;
                     let user = pool.users.get_mut(username).ok_or_else(|| {
-                        AwsError::service_not_found(
-                            "UserNotFoundException",
-                            format!("User not found: {username}"),
-                        )
+                        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
                     })?;
                     issue_mfa_challenge(user)
                 };
@@ -923,10 +909,7 @@ pub fn initiate_auth(
                 AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
             })?;
             let user = pool.users.get(username).ok_or_else(|| {
-                AwsError::service_not_found(
-                    "UserNotFoundException",
-                    format!("User not found: {username}"),
-                )
+                AwsError::service_not_found("UserNotFoundException", "User does not exist.")
             })?;
 
             // Post-Authentication trigger (fire-and-forget)
@@ -1094,10 +1077,7 @@ pub fn admin_initiate_auth(
                     AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
                 })?;
                 super::users::resolve_username_for_signin(&pool, raw_username).ok_or_else(|| {
-                    AwsError::service_not_found(
-                        "UserNotFoundException",
-                        format!("User not found: {raw_username}"),
-                    )
+                    AwsError::service_not_found("UserNotFoundException", "User does not exist.")
                 })?
             };
             let username = username.as_str();
@@ -1133,10 +1113,7 @@ pub fn admin_initiate_auth(
                 let compromised = super::auth_policy::is_compromised_password(password);
 
                 let user = pool.users.get_mut(username).ok_or_else(|| {
-                    AwsError::service_not_found(
-                        "UserNotFoundException",
-                        format!("User not found: {username}"),
-                    )
+                    AwsError::service_not_found("UserNotFoundException", "User does not exist.")
                 })?;
                 if !user.enabled {
                     return Err(AwsError::bad_request(
@@ -1180,10 +1157,7 @@ pub fn admin_initiate_auth(
                 AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
             })?;
             let user = pool.users.get(username).ok_or_else(|| {
-                AwsError::service_not_found(
-                    "UserNotFoundException",
-                    format!("User not found: {username}"),
-                )
+                AwsError::service_not_found("UserNotFoundException", "User does not exist.")
             })?;
 
             if user.status == "UNCONFIRMED" {
@@ -1246,10 +1220,7 @@ pub fn admin_initiate_auth(
                         )
                     })?;
                     let user = pool.users.get_mut(username).ok_or_else(|| {
-                        AwsError::service_not_found(
-                            "UserNotFoundException",
-                            format!("User not found: {username}"),
-                        )
+                        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
                     })?;
                     issue_mfa_challenge(user)
                 };
@@ -1268,10 +1239,7 @@ pub fn admin_initiate_auth(
                 AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
             })?;
             let user = pool.users.get(username).ok_or_else(|| {
-                AwsError::service_not_found(
-                    "UserNotFoundException",
-                    format!("User not found: {username}"),
-                )
+                AwsError::service_not_found("UserNotFoundException", "User does not exist.")
             })?;
 
             // Post-Authentication trigger (fire-and-forget)
@@ -1389,10 +1357,7 @@ pub fn respond_to_auth_challenge(
             })?;
             let policy = pool.policies.clone();
             let user = pool.users.get_mut(username).ok_or_else(|| {
-                AwsError::service_not_found(
-                    "UserNotFoundException",
-                    format!("User not found: {username}"),
-                )
+                AwsError::service_not_found("UserNotFoundException", "User does not exist.")
             })?;
 
             super::auth_policy::validate_password(&policy, new_password)?;
@@ -1484,7 +1449,7 @@ pub fn respond_to_auth_challenge(
                                 )
                             })?;
                     let user = pool.users.get_mut(&session_meta.username).ok_or_else(|| {
-                        AwsError::service_not_found("UserNotFoundException", "User not found")
+                        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
                     })?;
                     let code = generate_mfa_code();
                     let destination = user
@@ -1580,10 +1545,7 @@ pub fn admin_respond_to_auth_challenge(
 
             let policy = pool.policies.clone();
             let user = pool.users.get_mut(username).ok_or_else(|| {
-                AwsError::service_not_found(
-                    "UserNotFoundException",
-                    format!("User not found: {username}"),
-                )
+                AwsError::service_not_found("UserNotFoundException", "User does not exist.")
             })?;
 
             super::auth_policy::validate_password(&policy, new_password)?;
@@ -1737,7 +1699,7 @@ pub fn get_user_auth_factors(
 
     Err(AwsError::service_not_found(
         "UserNotFoundException",
-        format!("User not found: {username}"),
+        "User does not exist.",
     ))
 }
 
@@ -1782,16 +1744,12 @@ fn start_srp_challenge(
     })?;
     let resolved_username = super::users::resolve_username_for_signin(&pool, raw_username)
         .ok_or_else(|| {
-            AwsError::service_not_found(
-                "UserNotFoundException",
-                format!("User not found: {raw_username}"),
-            )
+            AwsError::service_not_found("UserNotFoundException", "User does not exist.")
         })?;
 
-    let user = pool
-        .users
-        .get(&resolved_username)
-        .ok_or_else(|| AwsError::service_not_found("UserNotFoundException", "User not found"))?;
+    let user = pool.users.get(&resolved_username).ok_or_else(|| {
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
+    })?;
     if !user.enabled {
         return Err(AwsError::bad_request(
             "NotAuthorizedException",
@@ -1916,10 +1874,9 @@ fn verify_srp_password(
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
     })?;
-    let user = pool
-        .users
-        .get(&session.username)
-        .ok_or_else(|| AwsError::service_not_found("UserNotFoundException", "User not found"))?;
+    let user = pool.users.get(&session.username).ok_or_else(|| {
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
+    })?;
     let verifier_hex = user.srp_verifier.clone().ok_or_else(|| {
         crate::error::internal_error("User has no SRP verifier; cannot complete PASSWORD_VERIFIER")
     })?;
@@ -2017,10 +1974,7 @@ fn start_custom_auth_challenge(
     })?;
     let resolved_username = super::users::resolve_username_for_signin(&pool, raw_username)
         .ok_or_else(|| {
-            AwsError::service_not_found(
-                "UserNotFoundException",
-                format!("User not found: {raw_username}"),
-            )
+            AwsError::service_not_found("UserNotFoundException", "User does not exist.")
         })?;
     if let Some(user) = pool.users.get(&resolved_username)
         && !user.enabled
@@ -2157,10 +2111,9 @@ fn verify_custom_auth_response(
         ));
     }
 
-    let user = pool
-        .users
-        .get(&session.username)
-        .ok_or_else(|| AwsError::service_not_found("UserNotFoundException", "User not found"))?;
+    let user = pool.users.get(&session.username).ok_or_else(|| {
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
+    })?;
     let pairs = group_role_pairs(&pool, &user.groups);
     let validity = pool
         .clients
