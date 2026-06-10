@@ -1057,7 +1057,23 @@ fn parse_lambda_config(v: &Value) -> HashMap<String, String> {
     if let Some(obj) = v.as_object() {
         for (k, val) in obj {
             if let Some(s) = val.as_str() {
+                // Plain trigger -> ARN (PreSignUp, PostConfirmation, the V1
+                // PreTokenGeneration, ...).
                 map.insert(k.clone(), s.to_string());
+            } else if let Some(inner) = val.as_object() {
+                // Nested trigger config (PreTokenGenerationConfig,
+                // CustomEmailSender, CustomSMSSender) carries LambdaArn +
+                // LambdaVersion. Previously these were dropped entirely.
+                // Flatten the ARN under the trigger key minus the "Config"
+                // suffix and keep the version under "<key>Version" so the
+                // trigger can still be resolved and versioned.
+                if let Some(arn) = inner.get("LambdaArn").and_then(|a| a.as_str()) {
+                    let base = k.strip_suffix("Config").unwrap_or(k);
+                    map.insert(base.to_string(), arn.to_string());
+                    if let Some(ver) = inner.get("LambdaVersion").and_then(|x| x.as_str()) {
+                        map.insert(format!("{base}Version"), ver.to_string());
+                    }
+                }
             }
         }
     }
@@ -1471,5 +1487,30 @@ mod tests {
             .expect("email in response");
         assert_eq!(email["AttributeDataType"], "String");
         assert!(email["StringAttributeConstraints"]["MaxLength"].is_string());
+    }
+
+    #[test]
+    fn parse_lambda_config_keeps_nested_pretoken_config() {
+        // Plain V1 trigger plus the nested V2 PreTokenGenerationConfig that
+        // was previously dropped on the floor.
+        let cfg = parse_lambda_config(&json!({
+            "PreSignUp": "arn:fn:presignup",
+            "PreTokenGenerationConfig": {
+                "LambdaArn": "arn:fn:pretoken",
+                "LambdaVersion": "V2_0"
+            }
+        }));
+        assert_eq!(
+            cfg.get("PreSignUp").map(String::as_str),
+            Some("arn:fn:presignup")
+        );
+        assert_eq!(
+            cfg.get("PreTokenGeneration").map(String::as_str),
+            Some("arn:fn:pretoken")
+        );
+        assert_eq!(
+            cfg.get("PreTokenGenerationVersion").map(String::as_str),
+            Some("V2_0")
+        );
     }
 }
