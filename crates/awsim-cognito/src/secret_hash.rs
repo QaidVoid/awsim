@@ -64,6 +64,42 @@ pub fn validate_for_client(
     Ok(())
 }
 
+/// Validate a SecretHash that may have been computed over any of several
+/// username candidates. On REFRESH_TOKEN_AUTH the original sign-in username
+/// is not on the wire, so AWS accepts a hash computed with either the user's
+/// username or their `sub`. Passes for public clients; on a confidential
+/// client the supplied hash must match one of `candidates`.
+pub fn validate_any_username(
+    client: &UserPoolClient,
+    provided: Option<&str>,
+    candidates: &[&str],
+    client_id: &str,
+) -> Result<(), AwsError> {
+    let Some(secret) = client.client_secret.as_deref() else {
+        return Ok(());
+    };
+    let supplied = provided.ok_or_else(|| {
+        AwsError::bad_request(
+            "NotAuthorizedException",
+            format!("Unable to verify secret hash for client {client_id}."),
+        )
+    })?;
+    let ok = candidates.iter().any(|u| {
+        ct_eq(
+            compute(secret, u, client_id).as_bytes(),
+            supplied.as_bytes(),
+        )
+    });
+    if ok {
+        Ok(())
+    } else {
+        Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            format!("Unable to verify secret hash for client {client_id}."),
+        ))
+    }
+}
+
 /// Validate the supplied SecretHash against `client`'s configured secret.
 ///
 /// If the client has no secret (`GenerateSecret=false`), this is a no-op:

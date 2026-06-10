@@ -739,7 +739,7 @@ fn auth_flow_allowed(client: &UserPoolClient, auth_flow: &str) -> bool {
         "USER_PASSWORD_AUTH" => has("ALLOW_USER_PASSWORD_AUTH") || has("USER_PASSWORD_AUTH"),
         // AdminInitiateAuth-only flow; gated by its own ALLOW_ entry or the
         // legacy ADMIN_NO_SRP_AUTH name.
-        "ADMIN_USER_PASSWORD_AUTH" => {
+        "ADMIN_USER_PASSWORD_AUTH" | "ADMIN_NO_SRP_AUTH" => {
             has("ALLOW_ADMIN_USER_PASSWORD_AUTH") || has("ADMIN_NO_SRP_AUTH")
         }
         "CUSTOM_AUTH" => has("ALLOW_CUSTOM_AUTH") || has("CUSTOM_AUTH_FLOW_ONLY"),
@@ -1015,67 +1015,77 @@ pub fn initiate_auth(
             Ok(result)
         }
         "REFRESH_TOKEN_AUTH" | "REFRESH_TOKEN" => {
-            let refresh_tok = params["REFRESH_TOKEN"].as_str().ok_or_else(|| {
-                AwsError::bad_request("InvalidParameterException", "REFRESH_TOKEN is required")
-            })?;
-
-            // Extract sub from our opaque refresh token format: "refresh-{sub}-{uuid}"
-            let sub = refresh_tok
-                .strip_prefix("refresh-")
-                .and_then(|s| s.split('.').next())
-                .unwrap_or("unknown");
-            // Cognito accepts SECRET_HASH on REFRESH_TOKEN_AUTH using the
-            // *sub* as the username component (since the original username
-            // may not be on the wire). Skip when public-client.
-            crate::secret_hash::validate_for_client(
-                state,
-                client_id,
-                params["SECRET_HASH"].as_str(),
-                sub,
-            )?;
-
-            // Find user by sub
-            let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
-                AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
-            })?;
-            let user = pool
-                .users
-                .values()
-                .find(|u| u.sub == sub || refresh_tok.contains(&u.sub))
-                .ok_or_else(|| {
-                    AwsError::service_not_found(
-                        "UserNotFoundException",
-                        "User not found for refresh token",
-                    )
-                })?;
-            ensure_refresh_token_active(state, user, refresh_tok)?;
-
-            let pairs = group_role_pairs(&pool, &user.groups);
-            let validity = pool
-                .clients
-                .get(client_id)
-                .map(TokenValidity::from_client)
-                .unwrap_or_else(TokenValidity::defaults);
-            // include_refresh=false: AWS doesn't reissue a RefreshToken
-            // on REFRESH_TOKEN_AUTH; the SPA keeps the original one.
-            Ok(build_auth_result_inner(
-                &user.sub,
-                &user.username,
-                &ctx.region,
-                &pool_id,
-                client_id,
-                &user.attributes,
-                &crate::operations::users::client_read_set(&pool, client_id).unwrap_or_default(),
-                &pairs,
-                &validity,
-                false,
-            ))
+            refresh_token_auth(state, &pool_id, client_id, params, &ctx.region)
         }
         flow => Err(AwsError::bad_request(
             "InvalidParameterException",
             format!("Unsupported AuthFlow: {flow}"),
         )),
     }
+}
+
+/// Shared REFRESH_TOKEN_AUTH handler for both InitiateAuth and
+/// AdminInitiateAuth. Resolves the user from our opaque
+/// `refresh-{sub}.{ts}.{uuid}` token, honours revocation, and reissues
+/// access/id tokens without a new refresh token (matching AWS).
+fn refresh_token_auth(
+    state: &CognitoState,
+    pool_id: &str,
+    client_id: &str,
+    params: &Value,
+    region: &str,
+) -> Result<Value, AwsError> {
+    let refresh_tok = params["REFRESH_TOKEN"].as_str().ok_or_else(|| {
+        AwsError::bad_request("NotAuthorizedException", "Refresh token is missing.")
+    })?;
+
+    let sub = refresh_tok
+        .strip_prefix("refresh-")
+        .and_then(|s| s.split('.').next())
+        .unwrap_or("");
+
+    let pool = state.user_pools.get(pool_id).ok_or_else(|| {
+        AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
+    })?;
+    let user = pool
+        .users
+        .values()
+        .find(|u| u.sub == sub || refresh_tok.contains(&u.sub))
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid Refresh Token."))?;
+
+    // Cognito accepts SECRET_HASH on REFRESH_TOKEN_AUTH computed with either
+    // the original username or the sub. Validate against the resolved client.
+    if let Some(client) = pool.clients.get(client_id) {
+        crate::secret_hash::validate_any_username(
+            client,
+            params["SECRET_HASH"].as_str(),
+            &[user.username.as_str(), user.sub.as_str()],
+            client_id,
+        )?;
+    }
+
+    ensure_refresh_token_active(state, user, refresh_tok)?;
+
+    let pairs = group_role_pairs(&pool, &user.groups);
+    let validity = pool
+        .clients
+        .get(client_id)
+        .map(TokenValidity::from_client)
+        .unwrap_or_else(TokenValidity::defaults);
+    // include_refresh=false: AWS doesn't reissue a RefreshToken on
+    // REFRESH_TOKEN_AUTH; the client keeps the original one.
+    Ok(build_auth_result_inner(
+        &user.sub,
+        &user.username,
+        region,
+        pool_id,
+        client_id,
+        &user.attributes,
+        &crate::operations::users::client_read_set(&pool, client_id).unwrap_or_default(),
+        &pairs,
+        &validity,
+        false,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -1125,7 +1135,22 @@ pub fn admin_initiate_auth(
     }
 
     match auth_flow {
-        "USER_PASSWORD_AUTH" | "ADMIN_USER_PASSWORD_AUTH" | "USER_SRP_AUTH" => {
+        // USER_SRP_AUTH on the admin path returns a PASSWORD_VERIFIER
+        // challenge just like the public path; the caller sends SRP_A, not a
+        // password.
+        "USER_SRP_AUTH" => start_srp_challenge(state, client_id, pool_id, params),
+        "CUSTOM_AUTH" => start_custom_auth_challenge(state, client_id, pool_id, params, ctx),
+        "REFRESH_TOKEN_AUTH" | "REFRESH_TOKEN" => {
+            refresh_token_auth(state, pool_id, client_id, params, &ctx.region)
+        }
+        // Real Cognito rejects the non-admin USER_PASSWORD_AUTH on the admin
+        // API; admins must use ADMIN_USER_PASSWORD_AUTH (or the legacy
+        // ADMIN_NO_SRP_AUTH alias).
+        "USER_PASSWORD_AUTH" => Err(AwsError::bad_request(
+            "InvalidParameterException",
+            "Initiate Auth method not supported",
+        )),
+        "ADMIN_USER_PASSWORD_AUTH" | "ADMIN_NO_SRP_AUTH" => {
             let raw_username = params["USERNAME"].as_str().ok_or_else(|| {
                 AwsError::bad_request("InvalidParameterException", "USERNAME is required")
             })?;
@@ -1665,6 +1690,10 @@ pub fn admin_respond_to_auth_challenge(
             "EMAIL_OTP_CODE",
             EMAIL_OTP_KEY,
         ),
+        "PASSWORD_VERIFIER" => verify_srp_password(state, pool_id, client_id, &ctx.region, input),
+        "CUSTOM_CHALLENGE" => {
+            verify_custom_auth_response(state, pool_id, client_id, &ctx.region, input, ctx)
+        }
         name => Err(AwsError::bad_request(
             "InvalidParameterException",
             format!("Unsupported ChallengeName: {name}"),
@@ -2387,6 +2416,106 @@ mod auth_flow_tests {
         )
         .unwrap();
         assert!(res["AuthenticationResult"]["AccessToken"].is_string());
+    }
+
+    #[test]
+    fn admin_initiate_auth_accepts_admin_no_srp_alias() {
+        let (state, pool_id, client_id) = setup(&["ADMIN_NO_SRP_AUTH"], "OFF", "nora", "Passw0rd!");
+        let res = admin_initiate_auth(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "ClientId": client_id,
+                "AuthFlow": "ADMIN_NO_SRP_AUTH",
+                "AuthParameters": { "USERNAME": "nora", "PASSWORD": "Passw0rd!" }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(res["AuthenticationResult"]["AccessToken"].is_string());
+    }
+
+    #[test]
+    fn admin_initiate_auth_rejects_plain_user_password_auth() {
+        let (state, pool_id, client_id) = setup(
+            &["ALLOW_ADMIN_USER_PASSWORD_AUTH", "ALLOW_USER_PASSWORD_AUTH"],
+            "OFF",
+            "olga",
+            "Passw0rd!",
+        );
+        let err = admin_initiate_auth(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "ClientId": client_id,
+                "AuthFlow": "USER_PASSWORD_AUTH",
+                "AuthParameters": { "USERNAME": "olga", "PASSWORD": "Passw0rd!" }
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn admin_initiate_auth_refresh_token_reissues_tokens() {
+        let (state, pool_id, client_id) = setup(
+            &["ALLOW_ADMIN_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"],
+            "OFF",
+            "pat",
+            "Passw0rd!",
+        );
+        let first = admin_initiate_auth(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "ClientId": client_id,
+                "AuthFlow": "ADMIN_USER_PASSWORD_AUTH",
+                "AuthParameters": { "USERNAME": "pat", "PASSWORD": "Passw0rd!" }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let refresh = first["AuthenticationResult"]["RefreshToken"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let res = admin_initiate_auth(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "ClientId": client_id,
+                "AuthFlow": "REFRESH_TOKEN_AUTH",
+                "AuthParameters": { "REFRESH_TOKEN": refresh }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(res["AuthenticationResult"]["AccessToken"].is_string());
+        // AWS does not reissue a refresh token on this flow.
+        assert!(res["AuthenticationResult"]["RefreshToken"].is_null());
+    }
+
+    #[test]
+    fn refresh_token_auth_rejects_garbage_token() {
+        let (state, _pool, client_id) = setup(
+            &["ALLOW_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"],
+            "OFF",
+            "quinn",
+            "Passw0rd!",
+        );
+        let err = initiate_auth(
+            &state,
+            &json!({
+                "ClientId": client_id,
+                "AuthFlow": "REFRESH_TOKEN_AUTH",
+                "AuthParameters": { "REFRESH_TOKEN": "refresh-nobody.0.deadbeef" }
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "NotAuthorizedException");
+        assert_eq!(err.message, "Invalid Refresh Token.");
     }
 
     #[test]
