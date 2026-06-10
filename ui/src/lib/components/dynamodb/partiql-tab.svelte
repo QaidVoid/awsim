@@ -1,9 +1,10 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
-	import { executeStatement, attributeToString, type Item } from '$lib/api/dynamodb';
+	import { executeStatement, type Item } from '$lib/api/dynamodb';
 	import { Button } from '$lib/components/ui/button';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { EmptyState } from '$lib/components/service';
+	import DataTable from '$lib/components/dynamodb/data-table.svelte';
 	import Loader2 from '@lucide/svelte/icons/loader-2';
 	import Play from '@lucide/svelte/icons/play';
 	import Database from '@lucide/svelte/icons/database';
@@ -31,16 +32,6 @@
 			lastError = null;
 			consumed = null;
 		}
-	});
-
-	// Alphabetical: the wire order of item maps is serialization-dependent
-	// and changes between runs.
-	let columns = $derived.by(() => {
-		const seen = new Set<string>();
-		for (const item of items) {
-			for (const k of Object.keys(item)) seen.add(k);
-		}
-		return [...seen].sort((a, b) => a.localeCompare(b));
 	});
 
 	async function run() {
@@ -112,32 +103,7 @@
 				/>
 			</div>
 		{:else}
-			<div class="h-full overflow-auto">
-				<table class="w-full min-w-max text-xs">
-					<thead
-						class="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur-sm"
-					>
-						<tr>
-							{#each columns as col (col)}
-								<th class="px-3 py-2 text-left font-medium text-muted-foreground">
-									{col}
-								</th>
-							{/each}
-						</tr>
-					</thead>
-					<tbody>
-						{#each items as item, i (i)}
-							<tr class="border-b border-border/40">
-								{#each columns as col (col)}
-									<td class="px-3 py-1.5 font-mono">
-										{item[col] ? attributeToString(item[col]) : '—'}
-									</td>
-								{/each}
-							</tr>
-						{/each}
-					</tbody>
-				</table>
-			</div>
+			<DataTable {items} resetKey={tableName} />
 		{/if}
 	</div>
 
