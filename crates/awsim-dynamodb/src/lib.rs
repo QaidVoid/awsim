@@ -636,9 +636,12 @@ impl ServiceHandler for DynamoDbService {
             "RestoreTableFromBackup" => {
                 operations::backup::restore_table_from_backup(&state, &self.sqlite, &input, ctx)
             }
-            "RestoreTableToPointInTime" => {
-                operations::backup::restore_table_to_point_in_time(&state, &input, ctx)
-            }
+            "RestoreTableToPointInTime" => operations::backup::restore_table_to_point_in_time(
+                &state,
+                &self.sqlite,
+                &input,
+                ctx,
+            ),
 
             // Global Tables
             "CreateGlobalTable" => operations::table::create_global_table(&state, &input, ctx),
