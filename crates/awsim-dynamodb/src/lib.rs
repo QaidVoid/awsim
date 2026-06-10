@@ -711,6 +711,9 @@ impl ServiceHandler for DynamoDbService {
             "DisableKinesisStreamingDestination" => {
                 operations::kinesis_dest::disable_kinesis_streaming_destination(&state, &input, ctx)
             }
+            "UpdateKinesisStreamingDestination" => {
+                operations::kinesis_dest::update_kinesis_streaming_destination(&state, &input, ctx)
+            }
             "DescribeKinesisStreamingDestination" => {
                 operations::kinesis_dest::describe_kinesis_streaming_destination(
                     &state, &input, ctx,
@@ -803,6 +806,7 @@ impl ServiceHandler for DynamoDbService {
             | "ExecuteTransaction"
             | "EnableKinesisStreamingDestination"
             | "DisableKinesisStreamingDestination"
+            | "UpdateKinesisStreamingDestination"
             | "DescribeKinesisStreamingDestination"
             | "PutResourcePolicy"
             | "GetResourcePolicy"
