@@ -522,6 +522,91 @@ fn complete_software_token_mfa(
     Ok(result)
 }
 
+/// Complete a `RespondToAuthChallenge(MFA_SETUP)`. By this point the client
+/// has, within the same session, run AssociateSoftwareToken +
+/// VerifySoftwareToken (which set the user's `totp_verified`). If the software
+/// token is now verified we record the preference, mint tokens, and consume the
+/// session; otherwise the setup is incomplete and we re-issue the MFA_SETUP
+/// challenge so the caller knows to finish enrolling.
+fn complete_mfa_setup(
+    state: &CognitoState,
+    client_id: &str,
+    region: &str,
+    input: &Value,
+) -> Result<Value, AwsError> {
+    let session_id = input["Session"].as_str().unwrap_or("");
+    let session = state
+        .mfa_sessions
+        .get(session_id)
+        .map(|e| e.value().clone())
+        .ok_or_else(|| {
+            AwsError::bad_request("NotAuthorizedException", "Invalid session for the user.")
+        })?;
+    if !session_still_valid(session.issued_at) {
+        state.mfa_sessions.remove(session_id);
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "Invalid session for the user, session is expired.",
+        ));
+    }
+
+    let setup_done = {
+        let mut pool = state.user_pools.get_mut(&session.pool_id).ok_or_else(|| {
+            AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
+        })?;
+        let user = pool.users.get_mut(&session.username).ok_or_else(|| {
+            AwsError::service_not_found("UserNotFoundException", "User does not exist.")
+        })?;
+        if user.totp_verified {
+            user.mfa_enabled = true;
+            if user.mfa_preferred.is_none() {
+                user.mfa_preferred = Some("SOFTWARE_TOKEN_MFA".to_string());
+            }
+            true
+        } else {
+            false
+        }
+    };
+
+    // Software token not yet verified: the caller must associate and verify it
+    // before retrying, so re-issue the same challenge.
+    if !setup_done {
+        return Ok(mfa_setup_challenge(
+            state,
+            &session.pool_id,
+            &session.username,
+        ));
+    }
+
+    let pool = state.user_pools.get(&session.pool_id).ok_or_else(|| {
+        AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
+    })?;
+    let user = pool.users.get(&session.username).ok_or_else(|| {
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
+    })?;
+    let pairs = group_role_pairs(&pool, &user.groups);
+    let validity = pool
+        .clients
+        .get(client_id)
+        .map(TokenValidity::from_client)
+        .unwrap_or_else(TokenValidity::defaults);
+    let result = build_auth_result_validity(
+        &user.sub,
+        &user.username,
+        region,
+        &session.pool_id,
+        client_id,
+        &user.attributes,
+        &crate::operations::users::client_read_set(&pool, client_id).unwrap_or_default(),
+        &pairs,
+        &validity,
+    );
+    drop(pool);
+    state.mfa_sessions.remove(session_id);
+    info!(username = %session.username, "Cognito: MFA_SETUP completed");
+    Ok(result)
+}
+
 /// Reject a refresh token that was explicitly revoked (RevokeToken) or that
 /// predates the user's most recent global sign-out. Shared by REFRESH_TOKEN_AUTH
 /// and GetTokensFromRefreshToken so both honour revocation. A token whose issue
@@ -1566,11 +1651,7 @@ pub fn respond_to_auth_challenge(
             info!(username = %session_meta.username, selection = %answer, "Cognito: SELECT_MFA_TYPE");
             Ok(response)
         }
-        "MFA_SETUP" => Ok(json!({
-            "ChallengeName": "MFA_SETUP",
-            "ChallengeParameters": {},
-            "Session": input["Session"]
-        })),
+        "MFA_SETUP" => complete_mfa_setup(state, client_id, &ctx.region, input),
         "PASSWORD_VERIFIER" => verify_srp_password(state, &pool_id, client_id, &ctx.region, input),
         "CUSTOM_CHALLENGE" => {
             verify_custom_auth_response(state, &pool_id, client_id, &ctx.region, input, ctx)
@@ -1690,6 +1771,7 @@ pub fn admin_respond_to_auth_challenge(
             "EMAIL_OTP_CODE",
             EMAIL_OTP_KEY,
         ),
+        "MFA_SETUP" => complete_mfa_setup(state, client_id, &ctx.region, input),
         "PASSWORD_VERIFIER" => verify_srp_password(state, pool_id, client_id, &ctx.region, input),
         "CUSTOM_CHALLENGE" => {
             verify_custom_auth_response(state, pool_id, client_id, &ctx.region, input, ctx)
@@ -3176,6 +3258,48 @@ mod auth_flow_tests {
             .status
             .clone();
         assert_eq!(still_forced, "FORCE_CHANGE_PASSWORD");
+    }
+
+    #[test]
+    fn mfa_setup_challenge_completes_after_software_token_verified() {
+        use crate::operations::mfa;
+        // Pool with MFA ON; a fresh user has no factor, so InitiateAuth issues
+        // an MFA_SETUP challenge instead of tokens.
+        let (state, _pool, client_id) =
+            setup(&["ALLOW_USER_PASSWORD_AUTH"], "ON", "tina", "Passw0rd!");
+        let challenge = initiate_auth(
+            &state,
+            &json!({ "ClientId": client_id, "AuthFlow": "USER_PASSWORD_AUTH",
+                     "AuthParameters": { "USERNAME": "tina", "PASSWORD": "Passw0rd!" } }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(challenge["ChallengeName"], "MFA_SETUP");
+        let session = challenge["Session"].as_str().unwrap().to_string();
+
+        // Associate + verify a software token using the same session.
+        let assoc =
+            mfa::associate_software_token(&state, &json!({ "Session": session }), &ctx()).unwrap();
+        let secret = assoc["SecretCode"].as_str().unwrap();
+        let bytes = awsim_core::totp::decode_base32(secret).unwrap();
+        let code = format!("{:06}", awsim_core::totp::code_at(&bytes, now_epoch()));
+        mfa::verify_software_token(
+            &state,
+            &json!({ "Session": session, "UserCode": code }),
+            &ctx(),
+        )
+        .unwrap();
+
+        // Completing the MFA_SETUP challenge now issues tokens instead of
+        // echoing the challenge forever.
+        let res = respond_to_auth_challenge(
+            &state,
+            &json!({ "ClientId": client_id, "ChallengeName": "MFA_SETUP",
+                     "Session": session, "ChallengeResponses": {} }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(res["AuthenticationResult"]["AccessToken"].is_string());
     }
 
     #[test]
