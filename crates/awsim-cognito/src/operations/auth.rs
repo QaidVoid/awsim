@@ -703,7 +703,7 @@ pub fn initiate_auth(
     let pool_id = pool_entry.map(|e| e.id.clone()).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("No pool found for client: {client_id}"),
+            format!("User pool client {client_id} does not exist."),
         )
     })?;
 
@@ -1036,14 +1036,14 @@ pub fn admin_initiate_auth(
         let pool = state.user_pools.get(pool_id).ok_or_else(|| {
             AwsError::service_not_found(
                 "ResourceNotFoundException",
-                format!("User pool not found: {pool_id}"),
+                format!("User pool {pool_id} does not exist."),
             )
         })?;
 
         let client = pool.clients.get(client_id).ok_or_else(|| {
             AwsError::service_not_found(
                 "ResourceNotFoundException",
-                format!("Client not found: {client_id}"),
+                format!("User pool client {client_id} does not exist."),
             )
         })?;
 
@@ -1310,7 +1310,7 @@ pub fn respond_to_auth_challenge(
     let pool_id = pool_entry.map(|e| e.id.clone()).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("No pool found for client: {client_id}"),
+            format!("User pool client {client_id} does not exist."),
         )
     })?;
 
@@ -1532,14 +1532,14 @@ pub fn admin_respond_to_auth_challenge(
             let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
                 AwsError::service_not_found(
                     "ResourceNotFoundException",
-                    format!("User pool not found: {pool_id}"),
+                    format!("User pool {pool_id} does not exist."),
                 )
             })?;
 
             if !pool.clients.contains_key(client_id) {
                 return Err(AwsError::service_not_found(
                     "ResourceNotFoundException",
-                    format!("Client not found: {client_id}"),
+                    format!("User pool client {client_id} does not exist."),
                 ));
             }
 
@@ -1629,7 +1629,7 @@ pub fn get_tokens_from_refresh_token(
     let pool_id = pool_entry.map(|e| e.id.clone()).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("No pool found for client: {client_id}"),
+            format!("User pool client {client_id} does not exist."),
         )
     })?;
 
@@ -1642,7 +1642,7 @@ pub fn get_tokens_from_refresh_token(
     let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("Pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
     let user = pool

@@ -308,7 +308,7 @@ fn get_pool<'a>(
     state.pools.get(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("Identity pool not found: {pool_id}"),
+            format!("IdentityPool '{pool_id}' not found."),
         )
     })
 }
@@ -419,7 +419,7 @@ fn delete_identity_pool(state: &IdentityPoolState, input: &Value) -> Result<Valu
     state.pools.remove(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("Identity pool not found: {pool_id}"),
+            format!("IdentityPool '{pool_id}' not found."),
         )
     })?;
 
@@ -445,7 +445,7 @@ fn update_identity_pool(state: &IdentityPoolState, input: &Value) -> Result<Valu
     let mut pool = state.pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("Identity pool not found: {pool_id}"),
+            format!("IdentityPool '{pool_id}' not found."),
         )
     })?;
 
@@ -515,7 +515,7 @@ fn get_id(
     if !is_authenticated && !pool.allow_unauthenticated {
         return Err(AwsError::bad_request(
             "NotAuthorizedException",
-            "Unauthenticated access is not supported for this identity pool",
+            "Unauthenticated access is not supported for this identity pool.",
         ));
     }
 
@@ -593,7 +593,7 @@ fn get_credentials_for_identity(
     let identity = state.identities.get(identity_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("Identity not found: {identity_id}"),
+            format!("Identity '{identity_id}' not found."),
         )
     })?;
 
@@ -946,7 +946,7 @@ fn get_open_id_token(
     if !state.identities.contains_key(identity_id) {
         return Err(AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("Identity not found: {identity_id}"),
+            format!("Identity '{identity_id}' not found."),
         ));
     }
 
@@ -1042,7 +1042,7 @@ fn set_identity_pool_roles(state: &IdentityPoolState, input: &Value) -> Result<V
     let mut pool = state.pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("Identity pool not found: {pool_id}"),
+            format!("IdentityPool '{pool_id}' not found."),
         )
     })?;
 
@@ -1109,7 +1109,7 @@ fn lookup_developer_identity(state: &IdentityPoolState, input: &Value) -> Result
         }
         return Err(AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("Identity not found: {identity_id}"),
+            format!("Identity '{identity_id}' not found."),
         ));
     }
 
@@ -1148,7 +1148,7 @@ fn describe_identity(state: &IdentityPoolState, input: &Value) -> Result<Value, 
     let identity = state.identities.get(identity_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("Identity not found: {identity_id}"),
+            format!("Identity '{identity_id}' not found."),
         )
     })?;
 
@@ -1354,7 +1354,7 @@ fn unlink_developer_identity(state: &IdentityPoolState, input: &Value) -> Result
     let mut identity = state.identities.get_mut(identity_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("Identity not found: {identity_id}"),
+            format!("Identity '{identity_id}' not found."),
         )
     })?;
 
@@ -1378,7 +1378,7 @@ fn unlink_identity(state: &IdentityPoolState, input: &Value) -> Result<Value, Aw
     let mut identity = state.identities.get_mut(identity_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("Identity not found: {identity_id}"),
+            format!("Identity '{identity_id}' not found."),
         )
     })?;
 
@@ -1460,7 +1460,7 @@ fn set_principal_tag_attribute_map(
     let mut pool = state.pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("Identity pool not found: {pool_id}"),
+            format!("IdentityPool '{pool_id}' not found."),
         )
     })?;
 
@@ -1503,7 +1503,7 @@ fn delete_principal_tag_attribute_map(
     let mut pool = state.pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("Identity pool not found: {pool_id}"),
+            format!("IdentityPool '{pool_id}' not found."),
         )
     })?;
 
@@ -1546,7 +1546,7 @@ fn tag_resource(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsEr
     let mut pool = state.pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("Identity pool not found: {pool_id}"),
+            format!("IdentityPool '{pool_id}' not found."),
         )
     })?;
 
@@ -1580,7 +1580,7 @@ fn untag_resource(state: &IdentityPoolState, input: &Value) -> Result<Value, Aws
     let mut pool = state.pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("Identity pool not found: {pool_id}"),
+            format!("IdentityPool '{pool_id}' not found."),
         )
     })?;
 

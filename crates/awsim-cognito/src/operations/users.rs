@@ -534,7 +534,7 @@ pub fn confirm_sign_up(
     let mut pool = state.user_pools.get_mut(&pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 
@@ -632,7 +632,7 @@ pub fn admin_confirm_sign_up(
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 
@@ -679,7 +679,7 @@ pub fn admin_create_user(
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 
@@ -729,7 +729,7 @@ pub fn admin_delete_user(
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 
@@ -766,7 +766,7 @@ pub fn admin_get_user(
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 
@@ -805,7 +805,7 @@ pub fn admin_set_user_password(
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 
@@ -859,7 +859,7 @@ pub fn list_users(
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 
@@ -1000,7 +1000,7 @@ pub fn forgot_password(
     let pool_id = pool_entry.map(|e| e.id.clone()).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("No pool found for client: {client_id}"),
+            format!("User pool client {client_id} does not exist."),
         )
     })?;
 
@@ -1015,7 +1015,7 @@ pub fn forgot_password(
         let mut pool = state.user_pools.get_mut(&pool_id).ok_or_else(|| {
             AwsError::service_not_found(
                 "ResourceNotFoundException",
-                format!("User pool not found: {pool_id}"),
+                format!("User pool {pool_id} does not exist."),
             )
         })?;
         let lambda_arn = pool.lambda_config.get("CustomMessage").cloned();
@@ -1105,14 +1105,14 @@ pub fn confirm_forgot_password(
     let pool_id = pool_entry.map(|e| e.id.clone()).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("No pool found for client: {client_id}"),
+            format!("User pool client {client_id} does not exist."),
         )
     })?;
 
     let mut pool = state.user_pools.get_mut(&pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
     super::auth_policy::validate_password(&pool.policies, password)?;
@@ -1285,7 +1285,7 @@ pub fn admin_enable_user(
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 
@@ -1320,7 +1320,7 @@ pub fn admin_disable_user(
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 
@@ -1355,7 +1355,7 @@ pub fn admin_reset_user_password(
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 
@@ -1390,7 +1390,7 @@ pub fn admin_update_user_attributes(
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 
@@ -1480,7 +1480,7 @@ pub fn admin_delete_user_attributes(
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 
@@ -1688,14 +1688,14 @@ pub fn resend_confirmation_code(
     let pool_id = pool_entry.map(|e| e.id.clone()).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("No pool found for client: {client_id}"),
+            format!("User pool client {client_id} does not exist."),
         )
     })?;
 
     let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
     if !pool.users.contains_key(username) {
@@ -1860,7 +1860,7 @@ pub fn admin_user_global_sign_out(
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 
@@ -1922,7 +1922,7 @@ pub fn admin_list_user_auth_events(
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 

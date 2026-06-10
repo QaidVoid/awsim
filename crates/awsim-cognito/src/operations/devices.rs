@@ -122,10 +122,7 @@ pub fn get_device(
         .iter()
         .find(|d| d.device_key == device_key)
         .ok_or_else(|| {
-            AwsError::service_not_found(
-                "ResourceNotFoundException",
-                format!("Device not found: {device_key}"),
-            )
+            AwsError::service_not_found("ResourceNotFoundException", "Device does not exist.")
         })?;
 
     Ok(json!({ "Device": device_to_value(device) }))
@@ -197,10 +194,7 @@ pub fn update_device_status(
         .iter_mut()
         .find(|d| d.device_key == device_key)
         .ok_or_else(|| {
-            AwsError::service_not_found(
-                "ResourceNotFoundException",
-                format!("Device not found: {device_key}"),
-            )
+            AwsError::service_not_found("ResourceNotFoundException", "Device does not exist.")
         })?;
 
     device.remembered = status == "remembered";
@@ -240,7 +234,7 @@ pub fn forget_device(
     if user.devices.len() == len_before {
         return Err(AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("Device not found: {device_key}"),
+            "Device does not exist.",
         ));
     }
 
@@ -270,7 +264,7 @@ pub fn admin_get_device(
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
     let user = pool.users.get(username).ok_or_else(|| {
@@ -281,10 +275,7 @@ pub fn admin_get_device(
         .iter()
         .find(|d| d.device_key == device_key)
         .ok_or_else(|| {
-            AwsError::service_not_found(
-                "ResourceNotFoundException",
-                format!("Device not found: {device_key}"),
-            )
+            AwsError::service_not_found("ResourceNotFoundException", "Device does not exist.")
         })?;
 
     Ok(json!({ "Device": device_to_value(device) }))
@@ -310,7 +301,7 @@ pub fn admin_list_devices(
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
     let user = pool.users.get(username).ok_or_else(|| {
@@ -352,7 +343,7 @@ pub fn admin_update_device_status(
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
     let user = pool.users.get_mut(username).ok_or_else(|| {
@@ -363,10 +354,7 @@ pub fn admin_update_device_status(
         .iter_mut()
         .find(|d| d.device_key == device_key)
         .ok_or_else(|| {
-            AwsError::service_not_found(
-                "ResourceNotFoundException",
-                format!("Device not found: {device_key}"),
-            )
+            AwsError::service_not_found("ResourceNotFoundException", "Device does not exist.")
         })?;
 
     device.remembered = status == "remembered";
@@ -398,7 +386,7 @@ pub fn admin_forget_device(
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
     let user = pool.users.get_mut(username).ok_or_else(|| {
@@ -410,7 +398,7 @@ pub fn admin_forget_device(
     if user.devices.len() == len_before {
         return Err(AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("Device not found: {device_key}"),
+            "Device does not exist.",
         ));
     }
 

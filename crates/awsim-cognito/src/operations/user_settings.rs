@@ -39,7 +39,7 @@ pub fn admin_set_user_settings(
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
     let user = pool.users.get_mut(username).ok_or_else(|| {
