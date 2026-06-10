@@ -1,7 +1,40 @@
 use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 
+use awsim_core::LambdaInvoker;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
+
+/// Holds the optional synchronous Lambda invoker for user-pool triggers.
+///
+/// Lives on [`CognitoState`] so the trigger-consuming operations can reach it
+/// without threading a parameter through every auth helper. The service sets
+/// it (once) per request from its own invoker handle; it stays unset in unit
+/// tests, where trigger application is simply skipped. A newtype is needed
+/// because `dyn LambdaInvoker` is not `Debug`, so the field can't be part of
+/// `CognitoState`'s derived `Debug`.
+#[derive(Clone, Default)]
+pub struct LambdaInvokerSlot(OnceLock<Arc<dyn LambdaInvoker>>);
+
+impl LambdaInvokerSlot {
+    /// Install the invoker if not already set; a no-op on later calls.
+    pub fn set(&self, invoker: Arc<dyn LambdaInvoker>) {
+        let _ = self.0.set(invoker);
+    }
+
+    /// The installed invoker, or `None` when Lambda is not wired up.
+    pub fn get(&self) -> Option<&Arc<dyn LambdaInvoker>> {
+        self.0.get()
+    }
+}
+
+impl std::fmt::Debug for LambdaInvokerSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LambdaInvokerSlot")
+            .field("set", &self.0.get().is_some())
+            .finish()
+    }
+}
 
 /// Password policy for a user pool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -548,4 +581,34 @@ pub struct CognitoState {
     pub confirmation_codes_issued: DashMap<String, u64>,
     /// In-flight SRP exchanges: session_id → SrpSession.
     pub srp_sessions: DashMap<String, SrpSession>,
+    /// In-flight CUSTOM_AUTH exchanges: session_id → CustomAuthSession.
+    pub custom_auth_sessions: DashMap<String, CustomAuthSession>,
+    /// Synchronous Lambda invoker for user-pool triggers (set per request).
+    pub lambda_invoker: LambdaInvokerSlot,
+}
+
+/// A round in a CUSTOM_AUTH exchange, mirroring an entry in the Lambda
+/// trigger's `request.session` list.
+#[derive(Debug, Clone, Default)]
+pub struct CustomAuthRound {
+    /// The `challengeMetadata` CreateAuthChallenge returned for this round.
+    pub challenge_metadata: Option<String>,
+    /// Whether VerifyAuthChallengeResponse judged the answer correct. `None`
+    /// while the round is still awaiting an answer.
+    pub challenge_result: Option<bool>,
+}
+
+/// Server-side state for an in-flight lambda-driven CUSTOM_AUTH exchange.
+#[derive(Debug, Clone)]
+pub struct CustomAuthSession {
+    pub pool_id: String,
+    pub client_id: String,
+    pub username: String,
+    /// History of challenge rounds, one entry per CUSTOM_CHALLENGE issued.
+    pub rounds: Vec<CustomAuthRound>,
+    /// `privateChallengeParameters` from the most recent CreateAuthChallenge,
+    /// forwarded to VerifyAuthChallengeResponse but never sent to the client.
+    pub private_params: HashMap<String, String>,
+    /// Unix seconds at which this session was issued.
+    pub issued_at: u64,
 }

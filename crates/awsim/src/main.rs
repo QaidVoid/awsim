@@ -2786,7 +2786,8 @@ fn register_services(
     state.register(Arc::clone(&ses_service) as _, ses_routes);
 
     // Cognito — keep an Arc so we can share its state with the OAuth router.
-    let cognito = Arc::new(awsim_cognito::CognitoService::new());
+    let cognito =
+        Arc::new(awsim_cognito::CognitoService::new().with_lambda_invoker(lambda_invoker.clone()));
     let cognito_arc_state = cognito.state_for(default_account_id, default_region);
     state.register(cognito, vec![]);
 

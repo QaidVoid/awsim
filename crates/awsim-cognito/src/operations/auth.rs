@@ -1,10 +1,15 @@
-use awsim_core::{AwsError, InternalEvent, RequestContext};
+use std::collections::HashMap;
+
+use awsim_core::{AwsError, InternalEvent, LambdaInvoker, RequestContext};
 use serde_json::{Value, json};
 use tracing::info;
 use uuid::Uuid;
 
 use crate::jwt::{self, GroupRolePair};
-use crate::state::{CognitoState, CognitoUser, MfaSession, UserPool, UserPoolClient};
+use crate::state::{
+    CognitoState, CognitoUser, CustomAuthRound, CustomAuthSession, MfaSession, UserPool,
+    UserPoolClient,
+};
 
 struct TokenValidity {
     access: u64,
@@ -899,7 +904,14 @@ pub fn initiate_auth(
 
     match auth_flow {
         "USER_SRP_AUTH" => start_srp_challenge(state, client_id, &pool_id, params),
-        "CUSTOM_AUTH" => start_custom_auth_challenge(state, client_id, &pool_id, params, ctx),
+        "CUSTOM_AUTH" => start_custom_auth_challenge(
+            state,
+            client_id,
+            &pool_id,
+            params,
+            &client_metadata(input),
+            ctx,
+        ),
         "USER_PASSWORD_AUTH" => {
             let raw_username = params["USERNAME"].as_str().ok_or_else(|| {
                 AwsError::bad_request("InvalidParameterException", "USERNAME is required")
@@ -1247,7 +1259,14 @@ pub fn admin_initiate_auth(
         // challenge just like the public path; the caller sends SRP_A, not a
         // password.
         "USER_SRP_AUTH" => start_srp_challenge(state, client_id, pool_id, params),
-        "CUSTOM_AUTH" => start_custom_auth_challenge(state, client_id, pool_id, params, ctx),
+        "CUSTOM_AUTH" => start_custom_auth_challenge(
+            state,
+            client_id,
+            pool_id,
+            params,
+            &client_metadata(input),
+            ctx,
+        ),
         "REFRESH_TOKEN_AUTH" | "REFRESH_TOKEN" => {
             refresh_token_auth(state, pool_id, client_id, params, &ctx.region)
         }
@@ -2146,18 +2165,183 @@ fn verify_srp_password(
 // CUSTOM_AUTH flow
 // ---------------------------------------------------------------------------
 
-/// Handle an `InitiateAuth(CUSTOM_AUTH)`. Real Cognito invokes the
-/// DefineAuthChallenge and CreateAuthChallenge Lambda triggers to decide what
-/// challenge to issue and what parameters to expose to the client. awsim has no
-/// synchronous Lambda invocation path, so we publish those triggers as
-/// fire-and-forget events and emit a CUSTOM_CHALLENGE backed by the pool's
-/// `custom_auth_challenge_parameters` fixture. Tests can configure that fixture
-/// or the expected answer directly via UpdateUserPool.
+/// Maximum CUSTOM_AUTH rounds before the flow is abandoned, matching
+/// Cognito's documented three-attempt cap.
+const MAX_CUSTOM_AUTH_ROUNDS: usize = 3;
+
+/// A user's attributes as the `{name: value}` map Cognito puts in trigger
+/// events.
+fn user_attributes_object(user: &CognitoUser) -> Value {
+    Value::Object(
+        user.attributes
+            .iter()
+            .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+            .collect(),
+    )
+}
+
+/// Build the `request.session` list a CUSTOM_AUTH trigger receives: one entry
+/// per completed/pending round.
+fn custom_auth_session_list(rounds: &[CustomAuthRound]) -> Value {
+    Value::Array(
+        rounds
+            .iter()
+            .map(|r| {
+                json!({
+                    "challengeName": "CUSTOM_CHALLENGE",
+                    "challengeMetadata": r.challenge_metadata,
+                    "challengeResult": r.challenge_result.unwrap_or(false),
+                })
+            })
+            .collect(),
+    )
+}
+
+/// Read top-level `ClientMetadata` (a string map) from the request, defaulting
+/// to an empty object. Threaded into Create/Verify trigger events.
+fn client_metadata(input: &Value) -> Value {
+    match input.get("ClientMetadata") {
+        Some(v) if v.is_object() => v.clone(),
+        _ => json!({}),
+    }
+}
+
+/// Invoke a CUSTOM_AUTH trigger synchronously, mapping a missing function or
+/// any transport/shape failure to `InvalidLambdaResponseException` as Cognito
+/// does. `trigger` is the bare trigger name used in messages.
+fn invoke_custom_auth_trigger(
+    invoker: &dyn LambdaInvoker,
+    trigger: &str,
+    arn: &str,
+    account_id: &str,
+    region: &str,
+    event: &Value,
+) -> Result<Value, AwsError> {
+    let resp = invoker
+        .invoke(arn, event, account_id, region)
+        .map_err(|e| {
+            let msg = if e.code == "ResourceNotFoundException" {
+                format!("{trigger} Lambda not found: {arn}")
+            } else {
+                format!("{trigger} invocation failed: {}", e.message)
+            };
+            AwsError::bad_request("InvalidLambdaResponseException", msg)
+        })?;
+    if !resp.is_object() {
+        return Err(AwsError::bad_request(
+            "InvalidLambdaResponseException",
+            format!("{trigger} returned an invalid response"),
+        ));
+    }
+    Ok(resp)
+}
+
+/// Build the standard trigger event envelope shared by the three CUSTOM_AUTH
+/// triggers.
+fn custom_auth_event(
+    trigger_source: &str,
+    region: &str,
+    pool_id: &str,
+    username: &str,
+    client_id: &str,
+    user: &CognitoUser,
+    request_extra: Value,
+) -> Value {
+    let mut request = json!({
+        "userAttributes": user_attributes_object(user),
+        "userNotFound": false,
+    });
+    if let (Some(obj), Some(extra)) = (request.as_object_mut(), request_extra.as_object()) {
+        for (k, v) in extra {
+            obj.insert(k.clone(), v.clone());
+        }
+    }
+    json!({
+        "version": "1",
+        "triggerSource": trigger_source,
+        "region": region,
+        "userPoolId": pool_id,
+        "userName": username,
+        "callerContext": { "awsSdkVersion": "aws-sdk-unknown", "clientId": client_id },
+        "request": request,
+        "response": {},
+    })
+}
+
+/// Run CreateAuthChallenge for the next CUSTOM_CHALLENGE round and return the
+/// `(public_params, private_params, challenge_metadata)` it produced. With no
+/// CreateAuthChallenge Lambda configured, defaults are used (mirroring AWS,
+/// which still issues a CUSTOM_CHALLENGE with a default metadata).
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+fn run_create_auth_challenge(
+    invoker: &dyn LambdaInvoker,
+    pool: &UserPool,
+    account: &str,
+    region: &str,
+    pool_id: &str,
+    username: &str,
+    client_id: &str,
+    user: &CognitoUser,
+    rounds: &[CustomAuthRound],
+    metadata: &Value,
+) -> Result<
+    (
+        serde_json::Map<String, Value>,
+        HashMap<String, String>,
+        Option<String>,
+    ),
+    AwsError,
+> {
+    let Some(arn) = pool.lambda_config.get("CreateAuthChallenge") else {
+        return Ok((serde_json::Map::new(), HashMap::new(), None));
+    };
+    let mut extra = json!({
+        "challengeName": "CUSTOM_CHALLENGE",
+        "session": custom_auth_session_list(rounds),
+        "clientMetadata": metadata,
+    });
+    if let Some(obj) = extra.as_object_mut() {
+        obj.insert("userAttributes".to_string(), user_attributes_object(user));
+    }
+    let event = custom_auth_event(
+        "CreateAuthChallenge_Authentication",
+        region,
+        pool_id,
+        username,
+        client_id,
+        user,
+        extra,
+    );
+    let resp =
+        invoke_custom_auth_trigger(invoker, "CreateAuthChallenge", arn, account, region, &event)?;
+    let response = &resp["response"];
+    let public = response["publicChallengeParameters"]
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    let private = response["privateChallengeParameters"]
+        .as_object()
+        .map(|m| {
+            m.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+    let challenge_metadata = response["challengeMetadata"].as_str().map(String::from);
+    Ok((public, private, challenge_metadata))
+}
+
+/// Handle an `InitiateAuth(CUSTOM_AUTH)`. When a DefineAuthChallenge Lambda is
+/// configured and a synchronous invoker is available, run the real
+/// Define -> Create state machine driven by the Lambda responses. Otherwise
+/// fall back to the fixture-backed single round (used in unit tests and pools
+/// with no triggers), which fails closed unless a fixture is configured.
 fn start_custom_auth_challenge(
     state: &CognitoState,
     client_id: &str,
     pool_id: &str,
     params: &serde_json::Value,
+    client_metadata: &Value,
     ctx: &RequestContext,
 ) -> Result<serde_json::Value, AwsError> {
     let raw_username = params["USERNAME"].as_str().ok_or_else(|| {
@@ -2186,8 +2370,27 @@ fn start_custom_auth_challenge(
         ));
     }
 
-    let challenge_params = pool.custom_auth_challenge_parameters.clone();
+    let define_arn = pool.lambda_config.get("DefineAuthChallenge").cloned();
+    let invoker = state.lambda_invoker.get().cloned();
 
+    // Lambda-driven path: a DefineAuthChallenge trigger plus a real invoker.
+    if let (Some(define_arn), Some(invoker)) = (define_arn, invoker) {
+        return start_custom_auth_lambda(
+            state,
+            &pool,
+            pool_id,
+            client_id,
+            &resolved_username,
+            &define_arn,
+            invoker.as_ref(),
+            client_metadata,
+            ctx,
+        );
+    }
+
+    // Fixture path: emit the CUSTOM_CHALLENGE backed by the pool fixture and
+    // still publish the fire-and-forget triggers for observers.
+    let challenge_params = pool.custom_auth_challenge_parameters.clone();
     if let Some(arn) = pool.lambda_config.get("DefineAuthChallenge") {
         invoke_trigger(
             ctx,
@@ -2242,6 +2445,135 @@ fn start_custom_auth_challenge(
     }))
 }
 
+/// Lambda-driven InitiateAuth(CUSTOM_AUTH): DefineAuthChallenge decides the
+/// next step (issue tokens, fail, or a CUSTOM_CHALLENGE round), then
+/// CreateAuthChallenge supplies the round parameters.
+#[allow(clippy::too_many_arguments)]
+fn start_custom_auth_lambda(
+    state: &CognitoState,
+    pool: &UserPool,
+    pool_id: &str,
+    client_id: &str,
+    username: &str,
+    define_arn: &str,
+    invoker: &dyn LambdaInvoker,
+    client_metadata: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let user = pool
+        .users
+        .get(username)
+        .ok_or_else(|| {
+            AwsError::service_not_found("UserNotFoundException", "User does not exist.")
+        })?
+        .clone();
+    let region = &ctx.region;
+    let account = &ctx.account_id;
+
+    let define_event = custom_auth_event(
+        "DefineAuthChallenge_Authentication",
+        region,
+        pool_id,
+        username,
+        client_id,
+        &user,
+        json!({ "session": custom_auth_session_list(&[]) }),
+    );
+    let define = invoke_custom_auth_trigger(
+        invoker,
+        "DefineAuthChallenge",
+        define_arn,
+        account,
+        region,
+        &define_event,
+    )?;
+    let response = &define["response"];
+
+    if response["failAuthentication"].as_bool() == Some(true) {
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "Authentication failed",
+        ));
+    }
+    if response["issueTokens"].as_bool() == Some(true) {
+        // Zero-round bypass: tokens issued without any challenge.
+        return build_custom_auth_tokens(pool, region, pool_id, client_id, &user);
+    }
+    if response["challengeName"].as_str() != Some("CUSTOM_CHALLENGE") {
+        return Err(AwsError::bad_request(
+            "InvalidLambdaResponseException",
+            "DefineAuthChallenge response invalid",
+        ));
+    }
+
+    let (public, private, metadata) = run_create_auth_challenge(
+        invoker,
+        pool,
+        account,
+        region,
+        pool_id,
+        username,
+        client_id,
+        &user,
+        &[],
+        client_metadata,
+    )?;
+
+    let session_id = uuid::Uuid::new_v4().to_string();
+    state.custom_auth_sessions.insert(
+        session_id.clone(),
+        CustomAuthSession {
+            pool_id: pool_id.to_string(),
+            client_id: client_id.to_string(),
+            username: username.to_string(),
+            rounds: vec![CustomAuthRound {
+                challenge_metadata: metadata,
+                challenge_result: None,
+            }],
+            private_params: private,
+            issued_at: now_epoch(),
+        },
+    );
+
+    let mut params_json = public;
+    params_json
+        .entry("USERNAME".to_string())
+        .or_insert_with(|| Value::String(username.to_string()));
+    info!(username = %username, "Cognito: CUSTOM_AUTH (lambda) -> CUSTOM_CHALLENGE");
+    Ok(json!({
+        "ChallengeName": "CUSTOM_CHALLENGE",
+        "Session": session_id,
+        "ChallengeParameters": params_json,
+    }))
+}
+
+/// Mint the final AuthenticationResult for a completed CUSTOM_AUTH flow.
+fn build_custom_auth_tokens(
+    pool: &UserPool,
+    region: &str,
+    pool_id: &str,
+    client_id: &str,
+    user: &CognitoUser,
+) -> Result<Value, AwsError> {
+    let pairs = group_role_pairs(pool, &user.groups);
+    let validity = pool
+        .clients
+        .get(client_id)
+        .map(TokenValidity::from_client)
+        .unwrap_or_else(TokenValidity::defaults);
+    Ok(build_auth_result_validity(
+        &user.sub,
+        &user.username,
+        region,
+        pool_id,
+        client_id,
+        &user.attributes,
+        &crate::operations::users::client_read_set(pool, client_id).unwrap_or_default(),
+        &pairs,
+        &validity,
+    ))
+}
+
 /// Handle a `RespondToAuthChallenge(CUSTOM_CHALLENGE)`. Real Cognito calls the
 /// VerifyAuthChallengeResponse Lambda to decide if `ANSWER` is correct. awsim
 /// approximates this: it compares against the pool's
@@ -2261,6 +2593,12 @@ fn verify_custom_auth_response(
     ctx: &RequestContext,
 ) -> Result<serde_json::Value, AwsError> {
     let session_id = input["Session"].as_str().unwrap_or("");
+
+    // Lambda-driven path: the session was created by start_custom_auth_lambda.
+    if state.custom_auth_sessions.contains_key(session_id) {
+        return verify_custom_auth_lambda(state, pool_id, client_id, session_id, input, ctx);
+    }
+
     let session = state
         .mfa_sessions
         .get(session_id)
@@ -2352,6 +2690,200 @@ fn verify_custom_auth_response(
     state.mfa_sessions.remove(session_id);
     info!(username = %session.username, "Cognito: CUSTOM_CHALLENGE success");
     Ok(result)
+}
+
+/// Lambda-driven `RespondToAuthChallenge(CUSTOM_CHALLENGE)`:
+/// VerifyAuthChallengeResponse judges the answer, then DefineAuthChallenge
+/// decides whether to issue tokens, fail, or start another round.
+fn verify_custom_auth_lambda(
+    state: &CognitoState,
+    pool_id: &str,
+    client_id: &str,
+    session_id: &str,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let region = &ctx.region;
+    let account = &ctx.account_id;
+    let mut session = state
+        .custom_auth_sessions
+        .get(session_id)
+        .map(|e| e.value().clone())
+        .ok_or_else(|| {
+            AwsError::bad_request("NotAuthorizedException", "Invalid session for the user.")
+        })?;
+    if !session_still_valid(session.issued_at) {
+        state.custom_auth_sessions.remove(session_id);
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "Invalid session for the user, session is expired.",
+        ));
+    }
+    if session.pool_id != pool_id {
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "Invalid session for the user.",
+        ));
+    }
+
+    let invoker = state.lambda_invoker.get().cloned().ok_or_else(|| {
+        AwsError::bad_request(
+            "InvalidLambdaResponseException",
+            "Custom auth requires a configured Lambda invoker",
+        )
+    })?;
+    let invoker = invoker.as_ref();
+
+    let pool = state.user_pools.get(pool_id).ok_or_else(|| {
+        AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
+    })?;
+    let user = pool
+        .users
+        .get(&session.username)
+        .ok_or_else(|| {
+            AwsError::service_not_found("UserNotFoundException", "User does not exist.")
+        })?
+        .clone();
+
+    let metadata = client_metadata(input);
+    // Empty answers are forwarded to the Lambda (Cognito does not pre-reject
+    // them); the trigger decides correctness.
+    let answer = input["ChallengeResponses"]["ANSWER"].as_str().unwrap_or("");
+
+    // VerifyAuthChallengeResponse.
+    let answer_correct = match pool.lambda_config.get("VerifyAuthChallengeResponse") {
+        Some(arn) => {
+            let mut extra = json!({
+                "challengeAnswer": answer,
+                "privateChallengeParameters": session.private_params,
+                "session": custom_auth_session_list(&session.rounds),
+                "clientMetadata": metadata,
+            });
+            if let Some(obj) = extra.as_object_mut() {
+                obj.insert("userAttributes".to_string(), user_attributes_object(&user));
+            }
+            let event = custom_auth_event(
+                "VerifyAuthChallengeResponse_Authentication",
+                region,
+                pool_id,
+                &session.username,
+                client_id,
+                &user,
+                extra,
+            );
+            let resp = invoke_custom_auth_trigger(
+                invoker,
+                "VerifyAuthChallengeResponse",
+                arn,
+                account,
+                region,
+                &event,
+            )?;
+            resp["response"]["answerCorrect"].as_bool().unwrap_or(false)
+        }
+        // No verify trigger: the answer cannot be judged correct.
+        None => false,
+    };
+
+    // Record the result on the pending round.
+    if let Some(last) = session.rounds.last_mut() {
+        last.challenge_result = Some(answer_correct);
+    }
+
+    // DefineAuthChallenge with the full history.
+    let Some(define_arn) = pool.lambda_config.get("DefineAuthChallenge") else {
+        state.custom_auth_sessions.remove(session_id);
+        return Err(AwsError::bad_request(
+            "InvalidLambdaResponseException",
+            "DefineAuthChallenge Lambda not found",
+        ));
+    };
+    let define_event = custom_auth_event(
+        "DefineAuthChallenge_Authentication",
+        region,
+        pool_id,
+        &session.username,
+        client_id,
+        &user,
+        json!({ "session": custom_auth_session_list(&session.rounds) }),
+    );
+    let define = invoke_custom_auth_trigger(
+        invoker,
+        "DefineAuthChallenge",
+        define_arn,
+        account,
+        region,
+        &define_event,
+    )?;
+    let response = &define["response"];
+
+    if response["failAuthentication"].as_bool() == Some(true) {
+        state.custom_auth_sessions.remove(session_id);
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "Incorrect username or password.",
+        ));
+    }
+    // issueTokens is honoured before the attempt cap, so a success on the
+    // final permitted round still wins.
+    if response["issueTokens"].as_bool() == Some(true) {
+        let result = build_custom_auth_tokens(&pool, region, pool_id, client_id, &user)?;
+        drop(pool);
+        state.custom_auth_sessions.remove(session_id);
+        info!(username = %session.username, "Cognito: CUSTOM_AUTH (lambda) success");
+        return Ok(result);
+    }
+    if session.rounds.len() >= MAX_CUSTOM_AUTH_ROUNDS {
+        state.custom_auth_sessions.remove(session_id);
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "Max authentication attempts exceeded",
+        ));
+    }
+    if response["challengeName"].as_str() != Some("CUSTOM_CHALLENGE") {
+        state.custom_auth_sessions.remove(session_id);
+        return Err(AwsError::bad_request(
+            "InvalidLambdaResponseException",
+            "DefineAuthChallenge response invalid",
+        ));
+    }
+
+    // Next round: CreateAuthChallenge, append the round, return the same
+    // Session token.
+    let (public, private, metadata_out) = run_create_auth_challenge(
+        invoker,
+        &pool,
+        account,
+        region,
+        pool_id,
+        &session.username,
+        client_id,
+        &user,
+        &session.rounds,
+        &metadata,
+    )?;
+    drop(pool);
+
+    session.rounds.push(CustomAuthRound {
+        challenge_metadata: metadata_out,
+        challenge_result: None,
+    });
+    session.private_params = private;
+    let username = session.username.clone();
+    state
+        .custom_auth_sessions
+        .insert(session_id.to_string(), session);
+
+    let mut params_json = public;
+    params_json
+        .entry("USERNAME".to_string())
+        .or_insert_with(|| Value::String(username.clone()));
+    info!(username = %username, "Cognito: CUSTOM_AUTH (lambda) -> next CUSTOM_CHALLENGE");
+    Ok(json!({
+        "ChallengeName": "CUSTOM_CHALLENGE",
+        "Session": session_id,
+        "ChallengeParameters": params_json,
+    }))
 }
 
 #[cfg(test)]
@@ -3408,6 +3940,158 @@ mod auth_flow_tests {
         )
         .unwrap();
         assert!(res["AuthenticationResult"]["AccessToken"].is_string());
+    }
+
+    /// Mock invoker implementing an OTP-style custom-auth flow: the answer
+    /// "1234" is correct; up to three rounds before failing.
+    struct CustomAuthMock;
+    impl awsim_core::LambdaInvoker for CustomAuthMock {
+        fn invoke(
+            &self,
+            _function: &str,
+            payload: &Value,
+            _account: &str,
+            _region: &str,
+        ) -> Result<Value, AwsError> {
+            let src = payload["triggerSource"].as_str().unwrap_or("");
+            let req = &payload["request"];
+            let resp = if src.starts_with("DefineAuthChallenge") {
+                let session = req["session"].as_array().cloned().unwrap_or_default();
+                let last_correct =
+                    session.last().and_then(|s| s["challengeResult"].as_bool()) == Some(true);
+                if last_correct {
+                    json!({ "issueTokens": true })
+                } else if session.len() >= 3 {
+                    json!({ "failAuthentication": true })
+                } else {
+                    json!({ "challengeName": "CUSTOM_CHALLENGE" })
+                }
+            } else if src.starts_with("CreateAuthChallenge") {
+                json!({
+                    "publicChallengeParameters": { "type": "otp" },
+                    "privateChallengeParameters": { "answer": "1234" },
+                    "challengeMetadata": "otp-round"
+                })
+            } else {
+                json!({ "answerCorrect": req["challengeAnswer"].as_str() == Some("1234") })
+            };
+            Ok(json!({ "response": resp }))
+        }
+    }
+
+    /// Pool + client + user wired for the lambda-driven CUSTOM_AUTH path.
+    fn lambda_custom_auth_setup(username: &str) -> (CognitoState, String, String) {
+        let (state, pool_id, client_id) =
+            setup(&["ALLOW_CUSTOM_AUTH"], "OFF", username, "Passw0rd!");
+        {
+            let mut pool = state.user_pools.get_mut(&pool_id).unwrap();
+            for trigger in [
+                "DefineAuthChallenge",
+                "CreateAuthChallenge",
+                "VerifyAuthChallengeResponse",
+            ] {
+                pool.lambda_config
+                    .insert(trigger.to_string(), format!("arn:fn:{trigger}"));
+            }
+        }
+        state
+            .lambda_invoker
+            .set(std::sync::Arc::new(CustomAuthMock));
+        (state, pool_id, client_id)
+    }
+
+    #[test]
+    fn lambda_custom_auth_succeeds_on_correct_answer() {
+        let (state, _pool, client_id) = lambda_custom_auth_setup("lex");
+        let challenge = initiate_auth(
+            &state,
+            &json!({ "ClientId": client_id, "AuthFlow": "CUSTOM_AUTH",
+                     "AuthParameters": { "USERNAME": "lex" } }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(challenge["ChallengeName"], "CUSTOM_CHALLENGE");
+        // The public challenge parameter from CreateAuthChallenge is surfaced.
+        assert_eq!(challenge["ChallengeParameters"]["type"], "otp");
+        let session = challenge["Session"].as_str().unwrap().to_string();
+        let res = respond_to_auth_challenge(
+            &state,
+            &json!({ "ClientId": client_id, "ChallengeName": "CUSTOM_CHALLENGE",
+                     "Session": session,
+                     "ChallengeResponses": { "USERNAME": "lex", "ANSWER": "1234" } }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(res["AuthenticationResult"]["AccessToken"].is_string());
+    }
+
+    #[test]
+    fn lambda_custom_auth_retries_then_succeeds() {
+        let (state, _pool, client_id) = lambda_custom_auth_setup("max");
+        let challenge = initiate_auth(
+            &state,
+            &json!({ "ClientId": client_id, "AuthFlow": "CUSTOM_AUTH",
+                     "AuthParameters": { "USERNAME": "max" } }),
+            &ctx(),
+        )
+        .unwrap();
+        let session = challenge["Session"].as_str().unwrap().to_string();
+        // Wrong answer -> another CUSTOM_CHALLENGE on the same session.
+        let again = respond_to_auth_challenge(
+            &state,
+            &json!({ "ClientId": client_id, "ChallengeName": "CUSTOM_CHALLENGE",
+                     "Session": session,
+                     "ChallengeResponses": { "USERNAME": "max", "ANSWER": "nope" } }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(again["ChallengeName"], "CUSTOM_CHALLENGE");
+        assert_eq!(again["Session"], session);
+        // Correct answer on the retry -> tokens.
+        let res = respond_to_auth_challenge(
+            &state,
+            &json!({ "ClientId": client_id, "ChallengeName": "CUSTOM_CHALLENGE",
+                     "Session": session,
+                     "ChallengeResponses": { "USERNAME": "max", "ANSWER": "1234" } }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(res["AuthenticationResult"]["AccessToken"].is_string());
+    }
+
+    #[test]
+    fn lambda_custom_auth_fails_after_max_attempts() {
+        let (state, _pool, client_id) = lambda_custom_auth_setup("rey");
+        let challenge = initiate_auth(
+            &state,
+            &json!({ "ClientId": client_id, "AuthFlow": "CUSTOM_AUTH",
+                     "AuthParameters": { "USERNAME": "rey" } }),
+            &ctx(),
+        )
+        .unwrap();
+        let session = challenge["Session"].as_str().unwrap().to_string();
+        // Two wrong answers keep the flow going.
+        for _ in 0..2 {
+            let r = respond_to_auth_challenge(
+                &state,
+                &json!({ "ClientId": client_id, "ChallengeName": "CUSTOM_CHALLENGE",
+                         "Session": session,
+                         "ChallengeResponses": { "USERNAME": "rey", "ANSWER": "nope" } }),
+                &ctx(),
+            )
+            .unwrap();
+            assert_eq!(r["ChallengeName"], "CUSTOM_CHALLENGE");
+        }
+        // Third wrong answer hits the attempt cap / failAuthentication.
+        let err = respond_to_auth_challenge(
+            &state,
+            &json!({ "ClientId": client_id, "ChallengeName": "CUSTOM_CHALLENGE",
+                     "Session": session,
+                     "ChallengeResponses": { "USERNAME": "rey", "ANSWER": "nope" } }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "NotAuthorizedException");
     }
 
     #[test]

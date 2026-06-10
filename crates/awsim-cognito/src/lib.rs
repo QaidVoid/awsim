@@ -21,20 +21,34 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler, arn};
+use awsim_core::{
+    AccountRegionStore, AwsError, LambdaInvoker, Protocol, RequestContext, ServiceHandler, arn,
+};
 use serde_json::Value;
 use state::UserPool;
 use tracing::debug;
 
 pub struct CognitoService {
     store: AccountRegionStore<CognitoState>,
+    /// Synchronous Lambda invoker for the user-pool triggers that consume a
+    /// response (PreTokenGeneration today; the custom-auth triggers later).
+    /// `None` in unit tests and any context without Lambda wired up, in which
+    /// case trigger application is skipped.
+    lambda_invoker: Option<Arc<dyn LambdaInvoker>>,
 }
 
 impl CognitoService {
     pub fn new() -> Self {
         Self {
             store: AccountRegionStore::new(),
+            lambda_invoker: None,
         }
+    }
+
+    /// Attach the synchronous Lambda invoker used to run user-pool triggers.
+    pub fn with_lambda_invoker(mut self, invoker: Arc<dyn LambdaInvoker>) -> Self {
+        self.lambda_invoker = Some(invoker);
+        self
     }
 
     fn get_state(&self, ctx: &RequestContext) -> Arc<CognitoState> {
@@ -76,6 +90,11 @@ impl ServiceHandler for CognitoService {
     ) -> Result<Value, AwsError> {
         debug!(operation, "Cognito request");
         let state = self.get_state(ctx);
+        // Make the synchronous Lambda invoker reachable from the trigger-
+        // consuming operations without threading it through every helper.
+        if let Some(invoker) = &self.lambda_invoker {
+            state.lambda_invoker.set(invoker.clone());
+        }
 
         match operation {
             // User Pools
