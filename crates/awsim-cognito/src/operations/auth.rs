@@ -815,10 +815,20 @@ fn invoke_trigger(ctx: &RequestContext, trigger_source: &str, lambda_arn: &str, 
 /// the modern `ALLOW_`-prefixed names are honoured.
 fn auth_flow_allowed(client: &UserPoolClient, auth_flow: &str) -> bool {
     let flows = &client.explicit_auth_flows;
-    if flows.is_empty() {
-        return true;
-    }
-    let has = |name: &str| flows.iter().any(|f| f == name);
+    // An unset ExplicitAuthFlows defaults to ALLOW_USER_SRP_AUTH +
+    // ALLOW_CUSTOM_AUTH + ALLOW_REFRESH_TOKEN_AUTH, matching real Cognito. The
+    // password flows must be opted into explicitly, so an empty list does not
+    // enable them.
+    let has = |name: &str| {
+        if flows.is_empty() {
+            matches!(
+                name,
+                "ALLOW_USER_SRP_AUTH" | "ALLOW_CUSTOM_AUTH" | "ALLOW_REFRESH_TOKEN_AUTH"
+            )
+        } else {
+            flows.iter().any(|f| f == name)
+        }
+    };
     match auth_flow {
         "USER_SRP_AUTH" => has("ALLOW_USER_SRP_AUTH"),
         "USER_PASSWORD_AUTH" => has("ALLOW_USER_PASSWORD_AUTH") || has("USER_PASSWORD_AUTH"),
@@ -2460,6 +2470,34 @@ mod auth_flow_tests {
     }
 
     #[test]
+    fn empty_explicit_flows_denies_password_but_allows_srp() {
+        let (state, _pool, client_id) = setup(&[], "OFF", "wes", "Passw0rd!");
+        // USER_PASSWORD_AUTH is not in the default flow set.
+        let err = initiate_auth(
+            &state,
+            &json!({ "ClientId": client_id, "AuthFlow": "USER_PASSWORD_AUTH",
+                     "AuthParameters": { "USERNAME": "wes", "PASSWORD": "Passw0rd!" } }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+        // USER_SRP_AUTH is part of the default set and gets past the gate to
+        // the SRP challenge (which needs SRP_A, absent here, so it fails for a
+        // different reason).
+        let err = initiate_auth(
+            &state,
+            &json!({ "ClientId": client_id, "AuthFlow": "USER_SRP_AUTH",
+                     "AuthParameters": { "USERNAME": "wes" } }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_ne!(
+            err.message,
+            "Auth flow not enabled for this client: USER_SRP_AUTH"
+        );
+    }
+
+    #[test]
     fn initiate_auth_accepts_listed_flow() {
         let (state, _pool, client_id) =
             setup(&["ALLOW_USER_PASSWORD_AUTH"], "OFF", "bob", "Passw0rd!");
@@ -2618,7 +2656,8 @@ mod auth_flow_tests {
 
     #[test]
     fn sms_mfa_issuance_and_response() {
-        let (state, pool_id, client_id) = setup(&[], "ON", "eve", "Passw0rd!");
+        let (state, pool_id, client_id) =
+            setup(&["ALLOW_USER_PASSWORD_AUTH"], "ON", "eve", "Passw0rd!");
         set_user_mfa(
             &state,
             &pool_id,
@@ -2670,7 +2709,8 @@ mod auth_flow_tests {
 
     #[test]
     fn sms_mfa_response_rejects_wrong_code() {
-        let (state, pool_id, client_id) = setup(&[], "ON", "frank", "Passw0rd!");
+        let (state, pool_id, client_id) =
+            setup(&["ALLOW_USER_PASSWORD_AUTH"], "ON", "frank", "Passw0rd!");
         set_user_mfa(
             &state,
             &pool_id,
@@ -2706,7 +2746,8 @@ mod auth_flow_tests {
 
     #[test]
     fn email_otp_issuance_and_response() {
-        let (state, pool_id, client_id) = setup(&[], "ON", "grace", "Passw0rd!");
+        let (state, pool_id, client_id) =
+            setup(&["ALLOW_USER_PASSWORD_AUTH"], "ON", "grace", "Passw0rd!");
         {
             let mut pool = state.user_pools.get_mut(&pool_id).unwrap();
             let user = pool.users.get_mut("grace").unwrap();
@@ -2755,7 +2796,8 @@ mod auth_flow_tests {
 
     #[test]
     fn select_mfa_type_when_multiple_factors_then_choose_software() {
-        let (state, pool_id, client_id) = setup(&[], "ON", "heidi", "Passw0rd!");
+        let (state, pool_id, client_id) =
+            setup(&["ALLOW_USER_PASSWORD_AUTH"], "ON", "heidi", "Passw0rd!");
         // Both software-token and SMS enabled, no preference => SELECT_MFA_TYPE.
         set_user_mfa(&state, &pool_id, "heidi", None, true, Some("+12345550100"));
 
@@ -2790,7 +2832,8 @@ mod auth_flow_tests {
 
     #[test]
     fn select_mfa_type_choosing_sms_issues_code() {
-        let (state, pool_id, client_id) = setup(&[], "ON", "ivan", "Passw0rd!");
+        let (state, pool_id, client_id) =
+            setup(&["ALLOW_USER_PASSWORD_AUTH"], "ON", "ivan", "Passw0rd!");
         set_user_mfa(&state, &pool_id, "ivan", None, true, Some("+12345550100"));
 
         let challenge = initiate_auth(
@@ -2831,7 +2874,8 @@ mod auth_flow_tests {
 
     #[test]
     fn software_token_remains_default_when_only_factor() {
-        let (state, pool_id, client_id) = setup(&[], "ON", "judy", "Passw0rd!");
+        let (state, pool_id, client_id) =
+            setup(&["ALLOW_USER_PASSWORD_AUTH"], "ON", "judy", "Passw0rd!");
         set_user_mfa(&state, &pool_id, "judy", None, true, None);
         let challenge = initiate_auth(
             &state,
