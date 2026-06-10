@@ -88,22 +88,23 @@
 	);
 
 	let columns = $derived.by(() => {
-		const seen = new Set<string>();
+		const keyCols = new Set<string>();
 		const ordered: string[] = [];
 		for (const k of detail.keySchema) {
-			if (!seen.has(k.attributeName)) {
-				seen.add(k.attributeName);
+			if (!keyCols.has(k.attributeName)) {
+				keyCols.add(k.attributeName);
 				ordered.push(k.attributeName);
 			}
 		}
+		// Non-key attributes sort alphabetically: the wire order of item
+		// maps is serialization-dependent and changes between refreshes.
+		const rest = new Set<string>();
 		for (const item of items) {
 			for (const k of Object.keys(item)) {
-				if (!seen.has(k)) {
-					seen.add(k);
-					ordered.push(k);
-				}
+				if (!keyCols.has(k)) rest.add(k);
 			}
 		}
+		ordered.push(...[...rest].sort((a, b) => a.localeCompare(b)));
 		return ordered;
 	});
 
@@ -196,6 +197,19 @@
 		e.preventDefault();
 		e.stopPropagation();
 		const th = (e.target as HTMLElement).closest('th');
+		// The table switches to fixed layout once any width is set, which
+		// would collapse every unsized column to an even share. Snapshot
+		// all rendered widths on the first resize so only the dragged
+		// column moves.
+		if (th?.parentElement && Object.keys(colWidths).length === 0) {
+			const ths = Array.from(th.parentElement.children) as HTMLElement[];
+			const snapshot: Record<string, number> = {};
+			visibleColumns.forEach((c, i) => {
+				const el = ths[i];
+				if (el) snapshot[c] = Math.round(el.getBoundingClientRect().width);
+			});
+			colWidths = snapshot;
+		}
 		const startWidth = colWidths[col] ?? th?.getBoundingClientRect().width ?? 160;
 		const startX = e.clientX;
 		const onMove = (ev: PointerEvent) => {
@@ -406,14 +420,14 @@
 							</Button>
 						{/snippet}
 					</DropdownMenuTrigger>
-					<DropdownMenuContent align="end" class="max-h-72 overflow-y-auto">
+					<DropdownMenuContent align="end" class="max-h-72 w-auto min-w-44 max-w-80 overflow-y-auto">
 						{#each columns as col (col)}
 							<DropdownMenuCheckboxItem
 								checked={!hiddenCols.has(col)}
 								onCheckedChange={(v) => toggleColumn(col, v)}
 								closeOnSelect={false}
 							>
-								<span class="font-mono text-xs">{col}</span>
+								<span class="block truncate font-mono text-xs" title={col}>{col}</span>
 							</DropdownMenuCheckboxItem>
 						{/each}
 					</DropdownMenuContent>

@@ -33,18 +33,14 @@
 		}
 	});
 
+	// Alphabetical: the wire order of item maps is serialization-dependent
+	// and changes between runs.
 	let columns = $derived.by(() => {
 		const seen = new Set<string>();
-		const ordered: string[] = [];
 		for (const item of items) {
-			for (const k of Object.keys(item)) {
-				if (!seen.has(k)) {
-					seen.add(k);
-					ordered.push(k);
-				}
-			}
+			for (const k of Object.keys(item)) seen.add(k);
 		}
-		return ordered;
+		return [...seen].sort((a, b) => a.localeCompare(b));
 	});
 
 	async function run() {
