@@ -473,6 +473,53 @@ pub fn restore_table_to_point_in_time(
     }))
 }
 
+/// Build the `ContinuousBackupsDescription` for a table from the current PITR
+/// state. When PITR is enabled the restore window spans from the enable time
+/// (`EarliestRestorableDateTime`) to now (`LatestRestorableDateTime`).
+fn continuous_backups_description(state: &DynamoState, table_name: &str) -> Value {
+    let mut pitr_desc = json!({
+        "PointInTimeRecoveryStatus": "DISABLED"
+    });
+    if let Some(enabled_at) = state.pitr_enabled_at.get(table_name) {
+        pitr_desc = json!({
+            "PointInTimeRecoveryStatus": "ENABLED",
+            "EarliestRestorableDateTime": *enabled_at,
+            "LatestRestorableDateTime": now_secs_f64()
+        });
+    }
+
+    json!({
+        "ContinuousBackupsDescription": {
+            "ContinuousBackupsStatus": "ENABLED",
+            "PointInTimeRecoveryDescription": pitr_desc
+        }
+    })
+}
+
+/// DescribeContinuousBackups reports the table's PITR state, including the
+/// restorable window when point-in-time recovery is enabled.
+pub fn describe_continuous_backups(
+    state: &DynamoState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let table_name = require_str(input, "TableName")?;
+
+    if !state.tables.contains_key(table_name) {
+        return Err(AwsError::service_not_found(
+            "TableNotFoundException",
+            format!("Table '{table_name}' not found"),
+        ));
+    }
+
+    Ok(continuous_backups_description(state, table_name))
+}
+
+/// UpdateContinuousBackups enables or disables point-in-time recovery.
+///
+/// Enabling records the enable time, which becomes the
+/// `EarliestRestorableDateTime`; re-enabling an already-enabled table keeps
+/// the original window. Disabling clears the window.
 pub fn update_continuous_backups(
     state: &DynamoState,
     input: &Value,
@@ -491,29 +538,22 @@ pub fn update_continuous_backups(
         .get("PointInTimeRecoverySpecification")
         .and_then(|v| v.get("PointInTimeRecoveryEnabled"))
         .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+        .ok_or_else(|| {
+            AwsError::validation(
+                "PointInTimeRecoverySpecification.PointInTimeRecoveryEnabled is required",
+            )
+        })?;
 
-    state
-        .pitr_enabled
-        .insert(table_name.to_string(), pitr_enabled);
-
-    let pitr_status = if pitr_enabled { "ENABLED" } else { "DISABLED" };
-    let now = now_secs_f64();
-
-    let mut pitr_desc = json!({
-        "PointInTimeRecoveryStatus": pitr_status
-    });
     if pitr_enabled {
-        pitr_desc["EarliestRestorableDateTime"] = json!(now);
-        pitr_desc["LatestRestorableDateTime"] = json!(now);
+        state
+            .pitr_enabled_at
+            .entry(table_name.to_string())
+            .or_insert_with(now_secs_f64);
+    } else {
+        state.pitr_enabled_at.remove(table_name);
     }
 
-    Ok(json!({
-        "ContinuousBackupsDescription": {
-            "ContinuousBackupsStatus": "ENABLED",
-            "PointInTimeRecoveryDescription": pitr_desc
-        }
-    }))
+    Ok(continuous_backups_description(state, table_name))
 }
 
 #[cfg(test)]
@@ -718,5 +758,102 @@ mod tests {
         uniq.sort();
         uniq.dedup();
         assert_eq!(uniq.len(), 5);
+    }
+
+    fn simple_table(state: &DynamoState, sqlite: &SqliteStore, name: &str, c: &RequestContext) {
+        create_table(
+            state,
+            sqlite,
+            &json!({
+                "TableName": name,
+                "KeySchema": [{ "AttributeName": "pk", "KeyType": "HASH" }],
+                "AttributeDefinitions": [{ "AttributeName": "pk", "AttributeType": "S" }],
+                "BillingMode": "PAY_PER_REQUEST"
+            }),
+            c,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn describe_continuous_backups_tracks_pitr_state() {
+        let state = DynamoState::default();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        simple_table(&state, &sqlite, "t", &c);
+
+        let resp = describe_continuous_backups(&state, &json!({ "TableName": "t" }), &c).unwrap();
+        let pitr = &resp["ContinuousBackupsDescription"]["PointInTimeRecoveryDescription"];
+        assert_eq!(pitr["PointInTimeRecoveryStatus"], json!("DISABLED"));
+        assert!(pitr.get("EarliestRestorableDateTime").is_none());
+
+        update_continuous_backups(
+            &state,
+            &json!({
+                "TableName": "t",
+                "PointInTimeRecoverySpecification": { "PointInTimeRecoveryEnabled": true }
+            }),
+            &c,
+        )
+        .unwrap();
+
+        let resp = describe_continuous_backups(&state, &json!({ "TableName": "t" }), &c).unwrap();
+        let pitr = &resp["ContinuousBackupsDescription"]["PointInTimeRecoveryDescription"];
+        assert_eq!(pitr["PointInTimeRecoveryStatus"], json!("ENABLED"));
+        let earliest = pitr["EarliestRestorableDateTime"].as_f64().unwrap();
+        let latest = pitr["LatestRestorableDateTime"].as_f64().unwrap();
+        assert!(earliest > 0.0);
+        assert!(latest >= earliest);
+
+        update_continuous_backups(
+            &state,
+            &json!({
+                "TableName": "t",
+                "PointInTimeRecoverySpecification": { "PointInTimeRecoveryEnabled": false }
+            }),
+            &c,
+        )
+        .unwrap();
+
+        let resp = describe_continuous_backups(&state, &json!({ "TableName": "t" }), &c).unwrap();
+        let pitr = &resp["ContinuousBackupsDescription"]["PointInTimeRecoveryDescription"];
+        assert_eq!(pitr["PointInTimeRecoveryStatus"], json!("DISABLED"));
+        assert!(pitr.get("EarliestRestorableDateTime").is_none());
+    }
+
+    #[test]
+    fn reenabling_pitr_preserves_original_earliest_restorable_time() {
+        let state = DynamoState::default();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        simple_table(&state, &sqlite, "t", &c);
+
+        let enable = json!({
+            "TableName": "t",
+            "PointInTimeRecoverySpecification": { "PointInTimeRecoveryEnabled": true }
+        });
+        let first = update_continuous_backups(&state, &enable, &c).unwrap();
+        let first_earliest = first["ContinuousBackupsDescription"]
+            ["PointInTimeRecoveryDescription"]["EarliestRestorableDateTime"]
+            .as_f64()
+            .unwrap();
+
+        let second = update_continuous_backups(&state, &enable, &c).unwrap();
+        let second_earliest = second["ContinuousBackupsDescription"]
+            ["PointInTimeRecoveryDescription"]["EarliestRestorableDateTime"]
+            .as_f64()
+            .unwrap();
+        assert_eq!(first_earliest, second_earliest);
+    }
+
+    #[test]
+    fn update_continuous_backups_requires_pitr_specification() {
+        let state = DynamoState::default();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        simple_table(&state, &sqlite, "t", &c);
+
+        let err = update_continuous_backups(&state, &json!({ "TableName": "t" }), &c).unwrap_err();
+        assert_eq!(err.code, "ValidationException");
     }
 }
