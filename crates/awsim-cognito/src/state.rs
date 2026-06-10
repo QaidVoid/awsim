@@ -581,7 +581,7 @@ pub struct CognitoState {
     pub confirmation_codes_issued: DashMap<String, u64>,
     /// In-flight SRP exchanges: session_id → SrpSession.
     pub srp_sessions: DashMap<String, SrpSession>,
-    /// In-flight CUSTOM_AUTH exchanges: session_id → CustomAuthSession.
+    /// In-flight CUSTOM_AUTH exchanges: session_id -> CustomAuthSession.
     pub custom_auth_sessions: DashMap<String, CustomAuthSession>,
     /// Synchronous Lambda invoker for user-pool triggers (set per request).
     pub lambda_invoker: LambdaInvokerSlot,
