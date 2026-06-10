@@ -650,16 +650,16 @@ impl ServiceHandler for DynamoDbService {
             "ListGlobalTables" => operations::table::list_global_tables(&state, &input, ctx),
 
             // Exports
-            "DescribeExport" => operations::table::describe_export(&state, &input, ctx),
+            "DescribeExport" => operations::export_import::describe_export(&state, &input, ctx),
             "ExportTableToPointInTime" => {
-                operations::table::export_table_to_point_in_time(&state, &input, ctx)
+                operations::export_import::export_table_to_point_in_time(&state, &input, ctx)
             }
-            "ListExports" => operations::table::list_exports(&state, &input, ctx),
+            "ListExports" => operations::export_import::list_exports(&state, &input, ctx),
 
             // Imports
-            "DescribeImport" => operations::table::describe_import(&state, &input, ctx),
-            "ImportTable" => operations::table::import_table(&state, &input, ctx),
-            "ListImports" => operations::table::list_imports(&state, &input, ctx),
+            "DescribeImport" => operations::export_import::describe_import(&state, &input, ctx),
+            "ImportTable" => operations::export_import::import_table(&state, &input, ctx),
+            "ListImports" => operations::export_import::list_imports(&state, &input, ctx),
 
             // Contributor Insights
             "DescribeContributorInsights" => {
