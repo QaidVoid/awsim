@@ -4,10 +4,7 @@
 		scan,
 		query,
 		deleteItem,
-		attributeToString,
-		attributeType,
 		inferAttribute,
-		type AttributeValue,
 		type Item,
 		type ScalarType,
 		type TableDetail
@@ -18,9 +15,9 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { EmptyState } from '$lib/components/service';
+	import DataTable from '$lib/components/dynamodb/data-table.svelte';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import Plus from '@lucide/svelte/icons/plus';
-	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import Loader2 from '@lucide/svelte/icons/loader-2';
 	import Inbox from '@lucide/svelte/icons/inbox';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
@@ -76,26 +73,6 @@
 	let querySkName = $derived(
 		selectedGsi?.keySchema.find((k) => k.keyType === 'RANGE')?.attributeName
 	);
-
-	let columns = $derived.by(() => {
-		const seen = new Set<string>();
-		const ordered: string[] = [];
-		for (const k of detail.keySchema) {
-			if (!seen.has(k.attributeName)) {
-				seen.add(k.attributeName);
-				ordered.push(k.attributeName);
-			}
-		}
-		for (const item of items) {
-			for (const k of Object.keys(item)) {
-				if (!seen.has(k)) {
-					seen.add(k);
-					ordered.push(k);
-				}
-			}
-		}
-		return ordered;
-	});
 
 	$effect(() => {
 		if (detail.name) {
@@ -205,18 +182,6 @@
 		}
 	}
 
-	function valueDisplay(v: AttributeValue | undefined): string {
-		if (v === undefined) return '—';
-		const s = attributeToString(v);
-		// Hard-cap the cell text so one huge attribute can't blow out the
-		// table; the full value is in the item editor (row click).
-		return s.length > 300 ? s.slice(0, 300) + ' ...' : s;
-	}
-
-	function valueType(v: AttributeValue | undefined): string {
-		if (v === undefined) return '';
-		return attributeType(v);
-	}
 </script>
 
 <div class="flex h-full min-h-0 min-w-0 flex-col">
@@ -442,73 +407,13 @@
 				/>
 			</div>
 		{:else}
-			<div class="h-full overflow-auto">
-				<table class="w-full text-xs">
-					<thead
-						class="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur-sm"
-					>
-						<tr>
-							{#each columns as col (col)}
-								<th class="px-3 py-2 text-left font-medium text-muted-foreground">
-									{col}
-									{#if detail.keySchema.find((k) => k.attributeName === col)}
-										<span class="ml-1 text-[10px] text-primary">
-											{detail.keySchema.find((k) => k.attributeName === col)
-												?.keyType === 'HASH'
-												? 'PK'
-												: 'SK'}
-										</span>
-									{/if}
-								</th>
-							{/each}
-							<th
-								class="sticky right-0 z-20 w-10 border-l border-border bg-background/95 backdrop-blur-sm"
-							></th>
-						</tr>
-					</thead>
-					<tbody>
-						{#each items as item, i (i)}
-							<tr
-								class="group cursor-pointer border-b border-border/40 hover:bg-muted/40"
-								onclick={() => onEdit(item)}
-							>
-								{#each columns as col (col)}
-									<td class="px-3 py-1.5 align-top">
-										<div class="flex items-baseline gap-1">
-											<span class="block max-w-[24rem] truncate font-mono">
-												{valueDisplay(item[col])}
-											</span>
-											{#if item[col]}
-												<Badge
-													variant="outline"
-													class="shrink-0 align-baseline text-[9px]"
-												>
-													{valueType(item[col])}
-												</Badge>
-											{/if}
-										</div>
-									</td>
-								{/each}
-								<td
-									class="sticky right-0 border-l border-border bg-background/95 px-2 align-top backdrop-blur-sm group-hover:bg-muted/95"
-								>
-									<Button
-										variant="ghost"
-										size="icon-xs"
-										aria-label="Delete item"
-										onclick={(e: MouseEvent) => {
-											e.stopPropagation();
-											void handleDelete(item);
-										}}
-									>
-										<Trash2 class="size-3 text-destructive" />
-									</Button>
-								</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
-			</div>
+			<DataTable
+				{items}
+				keySchema={detail.keySchema}
+				resetKey={detail.name}
+				onRowClick={(item) => onEdit(item)}
+				onDelete={(item) => void handleDelete(item)}
+			/>
 		{/if}
 	</div>
 </div>

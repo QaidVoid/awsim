@@ -27,6 +27,7 @@
 	import BackupsTab from '$lib/components/dynamodb/backups-tab.svelte';
 	import ItemEditor from '$lib/components/dynamodb/item-editor.svelte';
 	import CreateTableDialog from '$lib/components/dynamodb/create-table-dialog.svelte';
+	import ImportTableDialog from '$lib/components/dynamodb/import-table-dialog.svelte';
 	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import GlobalTablesDialog from '$lib/components/dynamodb/global-tables-dialog.svelte';
 	import Plus from '@lucide/svelte/icons/plus';
@@ -34,6 +35,7 @@
 	import Eraser from '@lucide/svelte/icons/eraser';
 	import Globe from '@lucide/svelte/icons/globe';
 	import ShieldCheck from '@lucide/svelte/icons/shield-check';
+	import Download from '@lucide/svelte/icons/download';
 
 	let tables = $state<TableSummary[]>([]);
 	let tablesLoading = $state(true);
@@ -44,6 +46,7 @@
 	let detailLoading = $state(false);
 
 	let createOpen = $state(false);
+	let importOpen = $state(false);
 
 	onMount(() => {
 		if (pendingAction.consume('new-table')) createOpen = true;
@@ -222,6 +225,10 @@
 			<Globe class="size-3.5" />
 			Global tables
 		</Button>
+		<Button variant="outline" size="sm" onclick={() => (importOpen = true)}>
+			<Download class="size-3.5" />
+			Import from S3
+		</Button>
 		<Button size="sm" onclick={() => (createOpen = true)}>
 			<Plus class="size-3.5" />
 			Create table
@@ -325,6 +332,12 @@
 	bind:open={createOpen}
 	onClose={() => (createOpen = false)}
 	onCreated={onTableCreated}
+/>
+
+<ImportTableDialog
+	bind:open={importOpen}
+	onClose={() => (importOpen = false)}
+	onImported={onTableCreated}
 />
 
 <GlobalTablesDialog

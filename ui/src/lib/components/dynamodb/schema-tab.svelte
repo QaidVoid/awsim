@@ -3,6 +3,7 @@
 		setDeletionProtection,
 		setBillingMode,
 		setProvisionedThroughput,
+		setStreamSpecification,
 		describeTtl,
 		updateTtl,
 		listTags,
@@ -10,6 +11,7 @@
 		untagResource,
 		setSse,
 		type ResourceTag,
+		type StreamViewType,
 		type TableDetail,
 		type TtlState,
 	} from '$lib/api/dynamodb';
@@ -86,6 +88,35 @@
 			toast.error(e instanceof Error ? e.message : 'Update failed');
 		} finally {
 			togglingDeletionProtection = false;
+		}
+	}
+
+	let savingStream = $state(false);
+
+	async function toggleStream(next: boolean) {
+		savingStream = true;
+		try {
+			await setStreamSpecification(detail.name, next, detail.streamViewType as StreamViewType);
+			toast.success(next ? 'Stream enabled' : 'Stream disabled');
+			onUpdated?.();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Update failed');
+		} finally {
+			savingStream = false;
+		}
+	}
+
+	async function changeStreamViewType(next: StreamViewType) {
+		if (next === detail.streamViewType) return;
+		savingStream = true;
+		try {
+			await setStreamSpecification(detail.name, true, next);
+			toast.success(`Stream view type set to ${next}`);
+			onUpdated?.();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Update failed');
+		} finally {
+			savingStream = false;
 		}
 	}
 
@@ -402,6 +433,53 @@
 						</Button>
 					{/if}
 				</div>
+			</div>
+
+			<!-- Streams -->
+			<div class="rounded-md border border-border p-3">
+				<div class="flex items-start justify-between gap-4">
+					<div class="min-w-0">
+						<Label for="ddb-schema-stream" class="text-sm">DynamoDB Stream</Label>
+						<p class="mt-0.5 text-xs text-muted-foreground">
+							Captures item-level changes for consumers like Lambda event source mappings. The
+							view type controls which images each record carries.
+						</p>
+					</div>
+					<Switch
+						id="ddb-schema-stream"
+						checked={detail.streamEnabled}
+						onCheckedChange={(v) => toggleStream(v)}
+						disabled={savingStream}
+					/>
+				</div>
+				{#if detail.streamEnabled}
+					<div class="mt-3 flex items-center justify-between gap-4">
+						<Label class="text-xs text-muted-foreground">View type</Label>
+						<Select
+							type="single"
+							value={detail.streamViewType}
+							onValueChange={(v) => changeStreamViewType(v as StreamViewType)}
+							disabled={savingStream}
+						>
+							<SelectTrigger class="w-[200px] text-xs">
+								{detail.streamViewType}
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="NEW_AND_OLD_IMAGES" label="NEW_AND_OLD_IMAGES">
+									NEW_AND_OLD_IMAGES
+								</SelectItem>
+								<SelectItem value="NEW_IMAGE" label="NEW_IMAGE">NEW_IMAGE</SelectItem>
+								<SelectItem value="OLD_IMAGE" label="OLD_IMAGE">OLD_IMAGE</SelectItem>
+								<SelectItem value="KEYS_ONLY" label="KEYS_ONLY">KEYS_ONLY</SelectItem>
+							</SelectContent>
+						</Select>
+					</div>
+					{#if detail.streamArn}
+						<p class="mt-2 truncate font-mono text-[11px] text-muted-foreground" title={detail.streamArn}>
+							{detail.streamArn}
+						</p>
+					{/if}
+				{/if}
 			</div>
 
 			<!-- Tags -->

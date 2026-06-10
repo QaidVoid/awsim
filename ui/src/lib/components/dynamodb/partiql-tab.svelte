@@ -1,9 +1,10 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
-	import { executeStatement, attributeToString, type Item } from '$lib/api/dynamodb';
+	import { executeStatement, type Item } from '$lib/api/dynamodb';
 	import { Button } from '$lib/components/ui/button';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { EmptyState } from '$lib/components/service';
+	import DataTable from '$lib/components/dynamodb/data-table.svelte';
 	import Loader2 from '@lucide/svelte/icons/loader-2';
 	import Play from '@lucide/svelte/icons/play';
 	import Database from '@lucide/svelte/icons/database';
@@ -19,6 +20,9 @@
 	let items = $state<Item[]>([]);
 	let nextToken = $state<string | undefined>(undefined);
 	let lastError = $state<string | null>(null);
+	let consumed = $state<{ capacityUnits: number; readUnits: number; writeUnits: number } | null>(
+		null
+	);
 
 	$effect(() => {
 		if (tableName) {
@@ -26,21 +30,8 @@
 			items = [];
 			nextToken = undefined;
 			lastError = null;
+			consumed = null;
 		}
-	});
-
-	let columns = $derived.by(() => {
-		const seen = new Set<string>();
-		const ordered: string[] = [];
-		for (const item of items) {
-			for (const k of Object.keys(item)) {
-				if (!seen.has(k)) {
-					seen.add(k);
-					ordered.push(k);
-				}
-			}
-		}
-		return ordered;
 	});
 
 	async function run() {
@@ -50,6 +41,7 @@
 			const res = await executeStatement(statement);
 			items = res.items;
 			nextToken = res.nextToken;
+			consumed = res.consumedCapacity ?? null;
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : 'Statement failed';
 			lastError = msg;
@@ -79,6 +71,11 @@
 		<div class="mt-2 flex items-center justify-between">
 			<span class="text-[11px] text-muted-foreground">
 				PartiQL · Cmd/Ctrl+Enter to run
+				{#if consumed}
+					· consumed {consumed.capacityUnits} CU{consumed.readUnits
+						? ` (${consumed.readUnits} read)`
+						: ''}{consumed.writeUnits ? ` (${consumed.writeUnits} write)` : ''}
+				{/if}
 			</span>
 			<Button size="sm" onclick={run} disabled={running}>
 				{#if running}
@@ -106,32 +103,7 @@
 				/>
 			</div>
 		{:else}
-			<div class="h-full overflow-auto">
-				<table class="w-full min-w-max text-xs">
-					<thead
-						class="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur-sm"
-					>
-						<tr>
-							{#each columns as col (col)}
-								<th class="px-3 py-2 text-left font-medium text-muted-foreground">
-									{col}
-								</th>
-							{/each}
-						</tr>
-					</thead>
-					<tbody>
-						{#each items as item, i (i)}
-							<tr class="border-b border-border/40">
-								{#each columns as col (col)}
-									<td class="px-3 py-1.5 font-mono">
-										{item[col] ? attributeToString(item[col]) : '—'}
-									</td>
-								{/each}
-							</tr>
-						{/each}
-					</tbody>
-				</table>
-			</div>
+			<DataTable {items} resetKey={tableName} />
 		{/if}
 	</div>
 

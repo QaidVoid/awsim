@@ -67,6 +67,9 @@ export interface TableDetail {
   sse: SseDescription;
   readCapacityUnits: number;
   writeCapacityUnits: number;
+  streamEnabled: boolean;
+  streamViewType: string;
+  streamArn: string | null;
 }
 
 export interface TtlState {
@@ -114,6 +117,8 @@ export interface QueryParams {
 export interface PartiQLResult {
   items: Item[];
   nextToken?: string;
+  /** Capacity units charged for the statement, when reported. */
+  consumedCapacity?: { capacityUnits: number; readUnits: number; writeUnits: number };
 }
 
 async function request<T>(action: string, body: unknown): Promise<T> {
@@ -152,6 +157,11 @@ interface RawTableDescription {
     ReadCapacityUnits?: number;
     WriteCapacityUnits?: number;
   };
+  StreamSpecification?: {
+    StreamEnabled?: boolean;
+    StreamViewType?: string;
+  };
+  LatestStreamArn?: string;
   KeySchema?: { AttributeName: string; KeyType: string }[];
   AttributeDefinitions?: { AttributeName: string; AttributeType: string }[];
   GlobalSecondaryIndexes?: {
@@ -215,6 +225,10 @@ function mapTable(raw: RawTableDescription, fallbackName = ""): TableDetail {
     },
     readCapacityUnits: raw.ProvisionedThroughput?.ReadCapacityUnits ?? 0,
     writeCapacityUnits: raw.ProvisionedThroughput?.WriteCapacityUnits ?? 0,
+    streamEnabled: raw.StreamSpecification?.StreamEnabled ?? false,
+    streamViewType:
+      raw.StreamSpecification?.StreamViewType ?? "NEW_AND_OLD_IMAGES",
+    streamArn: raw.LatestStreamArn ?? null,
   };
 }
 
@@ -623,6 +637,252 @@ export async function restoreFromBackup(
   });
 }
 
+// ---- Point-in-time recovery ----
+
+export interface PitrState {
+  enabled: boolean;
+  /** Unix epoch seconds; present only while PITR is enabled. */
+  earliestRestorable: number | null;
+  latestRestorable: number | null;
+}
+
+export async function describePitr(tableName: string): Promise<PitrState> {
+  const data = await request<{
+    ContinuousBackupsDescription?: {
+      PointInTimeRecoveryDescription?: {
+        PointInTimeRecoveryStatus?: string;
+        EarliestRestorableDateTime?: number;
+        LatestRestorableDateTime?: number;
+      };
+    };
+  }>("DescribeContinuousBackups", { TableName: tableName });
+  const pitr =
+    data.ContinuousBackupsDescription?.PointInTimeRecoveryDescription;
+  return {
+    enabled: pitr?.PointInTimeRecoveryStatus === "ENABLED",
+    earliestRestorable: pitr?.EarliestRestorableDateTime ?? null,
+    latestRestorable: pitr?.LatestRestorableDateTime ?? null,
+  };
+}
+
+export async function setPitr(
+  tableName: string,
+  enabled: boolean,
+): Promise<void> {
+  await request("UpdateContinuousBackups", {
+    TableName: tableName,
+    PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: enabled },
+  });
+}
+
+// ---- Streams ----
+
+export type StreamViewType =
+  | "KEYS_ONLY"
+  | "NEW_IMAGE"
+  | "OLD_IMAGE"
+  | "NEW_AND_OLD_IMAGES";
+
+export async function setStreamSpecification(
+  tableName: string,
+  enabled: boolean,
+  viewType?: StreamViewType,
+): Promise<void> {
+  const spec: Record<string, unknown> = { StreamEnabled: enabled };
+  if (enabled) spec.StreamViewType = viewType ?? "NEW_AND_OLD_IMAGES";
+  await request("UpdateTable", {
+    TableName: tableName,
+    StreamSpecification: spec,
+  });
+}
+
+// ---- Exports to S3 ----
+
+export interface ExportSummary {
+  arn: string;
+  status: string;
+  format: string;
+  bucket: string;
+  prefix: string | null;
+  startTime: string;
+  itemCount: number | null;
+  billedSizeBytes: number | null;
+  manifestKey: string | null;
+  failureCode: string | null;
+  failureMessage: string | null;
+}
+
+interface RawExportDescription {
+  ExportArn?: string;
+  ExportStatus?: string;
+  ExportFormat?: string;
+  S3Bucket?: string;
+  S3Prefix?: string | null;
+  StartTime?: number;
+  ItemCount?: number;
+  BilledSizeBytes?: number;
+  ExportManifest?: string;
+  FailureCode?: string;
+  FailureMessage?: string;
+}
+
+function mapExport(raw: RawExportDescription): ExportSummary {
+  return {
+    arn: raw.ExportArn ?? "",
+    status: raw.ExportStatus ?? "",
+    format: raw.ExportFormat ?? "DYNAMODB_JSON",
+    bucket: raw.S3Bucket ?? "",
+    prefix: raw.S3Prefix ?? null,
+    startTime: raw.StartTime
+      ? new Date(raw.StartTime * 1000).toISOString()
+      : "",
+    itemCount: raw.ItemCount ?? null,
+    billedSizeBytes: raw.BilledSizeBytes ?? null,
+    manifestKey: raw.ExportManifest ?? null,
+    failureCode: raw.FailureCode ?? null,
+    failureMessage: raw.FailureMessage ?? null,
+  };
+}
+
+/**
+ * Run a full export of the table into S3. The export completes
+ * synchronously in awsim; fetch the settled status (and item counts or
+ * failure detail) with `describeExport`.
+ */
+export async function exportTableToS3(
+  tableArn: string,
+  bucket: string,
+  prefix?: string,
+): Promise<ExportSummary> {
+  const body: Record<string, unknown> = {
+    TableArn: tableArn,
+    S3Bucket: bucket,
+  };
+  if (prefix) body.S3Prefix = prefix;
+  const data = await request<{ ExportDescription?: RawExportDescription }>(
+    "ExportTableToPointInTime",
+    body,
+  );
+  return mapExport(data.ExportDescription ?? {});
+}
+
+export async function describeExport(arn: string): Promise<ExportSummary> {
+  const data = await request<{ ExportDescription?: RawExportDescription }>(
+    "DescribeExport",
+    { ExportArn: arn },
+  );
+  return mapExport(data.ExportDescription ?? {});
+}
+
+/** List exports for one table, settled status included per entry. */
+export async function listExports(tableArn: string): Promise<ExportSummary[]> {
+  const data = await request<{
+    ExportSummaries?: { ExportArn?: string }[];
+  }>("ListExports", { TableArn: tableArn });
+  const arns = (data.ExportSummaries ?? [])
+    .map((s) => s.ExportArn)
+    .filter((a): a is string => !!a);
+  return Promise.all(arns.map(describeExport));
+}
+
+// ---- Imports from S3 ----
+
+export interface ImportParams {
+  tableName: string;
+  partitionKey: string;
+  partitionKeyType: ScalarType;
+  sortKey?: string;
+  sortKeyType?: ScalarType;
+  bucket: string;
+  keyPrefix?: string;
+  inputFormat: "DYNAMODB_JSON" | "CSV";
+  compression: "NONE" | "GZIP";
+}
+
+export interface ImportSummary {
+  arn: string;
+  status: string;
+  tableName: string;
+  importedCount: number;
+  processedCount: number;
+  errorCount: number;
+  failureCode: string | null;
+  failureMessage: string | null;
+}
+
+interface RawImportDescription {
+  ImportArn?: string;
+  ImportStatus?: string;
+  TableArn?: string;
+  ImportedItemCount?: number;
+  ProcessedItemCount?: number;
+  ErrorCount?: number;
+  FailureCode?: string;
+  FailureMessage?: string;
+}
+
+function mapImport(raw: RawImportDescription): ImportSummary {
+  return {
+    arn: raw.ImportArn ?? "",
+    status: raw.ImportStatus ?? "",
+    tableName: raw.TableArn?.split("/")[1] ?? "",
+    importedCount: raw.ImportedItemCount ?? 0,
+    processedCount: raw.ProcessedItemCount ?? 0,
+    errorCount: raw.ErrorCount ?? 0,
+    failureCode: raw.FailureCode ?? null,
+    failureMessage: raw.FailureMessage ?? null,
+  };
+}
+
+/**
+ * Create a table from S3 source data. The import completes
+ * synchronously in awsim; the returned description carries the import
+ * ARN, and `describeImport` reports the settled status with counts.
+ */
+export async function importTableFromS3(
+  params: ImportParams,
+): Promise<ImportSummary> {
+  const attributeDefinitions = [
+    {
+      AttributeName: params.partitionKey,
+      AttributeType: params.partitionKeyType,
+    },
+  ];
+  const keySchema = [
+    { AttributeName: params.partitionKey, KeyType: "HASH" },
+  ];
+  if (params.sortKey) {
+    attributeDefinitions.push({
+      AttributeName: params.sortKey,
+      AttributeType: params.sortKeyType ?? "S",
+    });
+    keySchema.push({ AttributeName: params.sortKey, KeyType: "RANGE" });
+  }
+  const source: Record<string, unknown> = { S3Bucket: params.bucket };
+  if (params.keyPrefix) source.S3KeyPrefix = params.keyPrefix;
+  const data = await request<{
+    ImportTableDescription?: RawImportDescription;
+  }>("ImportTable", {
+    TableCreationParameters: {
+      TableName: params.tableName,
+      KeySchema: keySchema,
+      AttributeDefinitions: attributeDefinitions,
+      BillingMode: "PAY_PER_REQUEST",
+    },
+    S3BucketSource: source,
+    InputFormat: params.inputFormat,
+    InputCompressionType: params.compression,
+  });
+  return mapImport(data.ImportTableDescription ?? {});
+}
+
+export async function describeImport(arn: string): Promise<ImportSummary> {
+  const data = await request<{
+    ImportTableDescription?: RawImportDescription;
+  }>("DescribeImport", { ImportArn: arn });
+  return mapImport(data.ImportTableDescription ?? {});
+}
+
 /**
  * Update the table's server-side-encryption spec. AWS only allows
  * enabling via UpdateTable; awsim accepts both directions. When
@@ -760,14 +1020,33 @@ export async function executeStatement(
   parameters?: AttributeValue[],
   nextToken?: string,
 ): Promise<PartiQLResult> {
-  const body: Record<string, unknown> = { Statement: statement };
+  const body: Record<string, unknown> = {
+    Statement: statement,
+    ReturnConsumedCapacity: "TOTAL",
+  };
   if (parameters && parameters.length > 0) body.Parameters = parameters;
   if (nextToken) body.NextToken = nextToken;
-  const data = await request<{ Items?: Item[]; NextToken?: string }>(
-    "ExecuteStatement",
-    body,
-  );
-  return { items: data.Items ?? [], nextToken: data.NextToken };
+  const data = await request<{
+    Items?: Item[];
+    NextToken?: string;
+    ConsumedCapacity?: {
+      CapacityUnits?: number;
+      ReadCapacityUnits?: number;
+      WriteCapacityUnits?: number;
+    };
+  }>("ExecuteStatement", body);
+  const cc = data.ConsumedCapacity;
+  return {
+    items: data.Items ?? [],
+    nextToken: data.NextToken,
+    consumedCapacity: cc
+      ? {
+          capacityUnits: cc.CapacityUnits ?? 0,
+          readUnits: cc.ReadCapacityUnits ?? 0,
+          writeUnits: cc.WriteCapacityUnits ?? 0,
+        }
+      : undefined,
+  };
 }
 
 // ---- Helpers for working with AttributeValue ----
