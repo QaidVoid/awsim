@@ -23,7 +23,7 @@ pub fn create_user_pool_domain(
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 
@@ -106,7 +106,7 @@ pub fn delete_user_pool_domain(
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 
@@ -137,7 +137,7 @@ pub fn update_user_pool_domain(
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
     drop(pool);
@@ -153,7 +153,7 @@ pub fn update_user_pool_domain(
     let mut pool_mut = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
     pool_mut.domain = Some(domain.to_string());

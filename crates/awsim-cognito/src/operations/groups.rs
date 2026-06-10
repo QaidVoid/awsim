@@ -63,7 +63,7 @@ pub fn create_group(
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 
@@ -123,15 +123,12 @@ pub fn get_group(
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 
     let group = pool.groups.get(group_name).ok_or_else(|| {
-        AwsError::service_not_found(
-            "ResourceNotFoundException",
-            format!("Group not found: {group_name}"),
-        )
+        AwsError::service_not_found("ResourceNotFoundException", "Group not found.")
     })?;
 
     Ok(json!({ "Group": group_to_value(group) }))
@@ -156,15 +153,12 @@ pub fn update_group(
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 
     let group = pool.groups.get_mut(group_name).ok_or_else(|| {
-        AwsError::service_not_found(
-            "ResourceNotFoundException",
-            format!("Group not found: {group_name}"),
-        )
+        AwsError::service_not_found("ResourceNotFoundException", "Group not found.")
     })?;
 
     // Empty string clears, present value sets, absent leaves
@@ -211,14 +205,14 @@ pub fn delete_group(
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 
     if pool.groups.remove(group_name).is_none() {
         return Err(AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("Group not found: {group_name}"),
+            "Group not found.",
         ));
     }
 
@@ -251,7 +245,7 @@ pub fn list_groups(
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 
@@ -291,28 +285,22 @@ pub fn admin_add_user_to_group(
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 
     if !pool.groups.contains_key(group_name) {
         return Err(AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("Group not found: {group_name}"),
+            "Group not found.",
         ));
     }
 
     let username = super::users::resolve_username(&pool, username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
     if !user.groups.contains(&group_name.to_string()) {
@@ -345,21 +333,15 @@ pub fn admin_remove_user_from_group(
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 
     let username = super::users::resolve_username(&pool, username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
     user.groups.retain(|g| g != group_name);
@@ -387,21 +369,15 @@ pub fn admin_list_groups_for_user(
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 
     let username = super::users::resolve_username(&pool, username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
     let user = pool.users.get(&username).ok_or_else(|| {
-        AwsError::service_not_found(
-            "UserNotFoundException",
-            format!("User not found: {username}"),
-        )
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
     let groups: Vec<Value> = user
@@ -435,14 +411,14 @@ pub fn list_users_in_group(
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 
     if !pool.groups.contains_key(group_name) {
         return Err(AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("Group not found: {group_name}"),
+            "Group not found.",
         ));
     }
 

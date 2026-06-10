@@ -66,7 +66,7 @@ pub fn create_terms(
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 
@@ -103,7 +103,7 @@ pub fn update_terms(
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 
@@ -152,7 +152,7 @@ pub fn delete_terms(
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 
@@ -184,7 +184,7 @@ pub fn describe_terms(
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 
@@ -215,7 +215,7 @@ pub fn list_terms(
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
     })?;
 

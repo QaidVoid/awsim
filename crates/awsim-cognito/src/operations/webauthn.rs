@@ -29,11 +29,11 @@ fn username_for_token(state: &CognitoState, access_token: &str) -> Result<String
     if state.revoked_tokens.revoked.contains_key(access_token) {
         return Err(AwsError::bad_request(
             "NotAuthorizedException",
-            "Token has been revoked",
+            "Access Token has been revoked",
         ));
     }
     crate::jwt::extract_username_from_access_token(access_token)
-        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid Access Token"))
 }
 
 pub fn start_webauthn_registration(
@@ -70,7 +70,7 @@ pub fn start_webauthn_registration(
     }
     Err(AwsError::service_not_found(
         "UserNotFoundException",
-        format!("User not found: {username}"),
+        "User does not exist.",
     ))
 }
 
@@ -114,7 +114,7 @@ pub fn complete_webauthn_registration(
     }
     Err(AwsError::service_not_found(
         "UserNotFoundException",
-        format!("User not found: {username}"),
+        "User does not exist.",
     ))
 }
 
@@ -148,7 +148,7 @@ pub fn delete_webauthn_credential(
     }
     Err(AwsError::service_not_found(
         "UserNotFoundException",
-        format!("User not found: {username}"),
+        "User does not exist.",
     ))
 }
 
@@ -176,6 +176,6 @@ pub fn list_webauthn_credentials(
     }
     Err(AwsError::service_not_found(
         "UserNotFoundException",
-        format!("User not found: {username}"),
+        "User does not exist.",
     ))
 }

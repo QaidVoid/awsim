@@ -61,29 +61,28 @@ fn now_epoch() -> u64 {
 /// violated rule.
 pub fn validate_password(policy: &PasswordPolicy, password: &str) -> Result<(), AwsError> {
     if (password.chars().count() as u32) < policy.minimum_length {
-        return Err(invalid_password(format!(
-            "Password did not conform with policy: Password must have at least {} character(s)",
-            policy.minimum_length
-        )));
+        return Err(invalid_password(
+            "Password did not conform with policy: Password not long enough",
+        ));
     }
     if policy.require_lowercase && !password.chars().any(|c| c.is_lowercase()) {
         return Err(invalid_password(
-            "Password did not conform with policy: Password must have a lowercase character",
+            "Password did not conform with policy: Password must have lowercase characters",
         ));
     }
     if policy.require_uppercase && !password.chars().any(|c| c.is_uppercase()) {
         return Err(invalid_password(
-            "Password did not conform with policy: Password must have an uppercase character",
+            "Password did not conform with policy: Password must have uppercase characters",
         ));
     }
     if policy.require_numbers && !password.chars().any(|c| c.is_ascii_digit()) {
         return Err(invalid_password(
-            "Password did not conform with policy: Password must have a numeric character",
+            "Password did not conform with policy: Password must have numeric characters",
         ));
     }
     if policy.require_symbols && !password.chars().any(is_symbol) {
         return Err(invalid_password(
-            "Password did not conform with policy: Password must have a symbol character",
+            "Password did not conform with policy: Password must have symbol characters",
         ));
     }
     Ok(())
@@ -264,7 +263,7 @@ mod tests {
 
         // Each individual rule fires.
         let cases = [
-            ("Short1!", "at least"),
+            ("Short1!", "not long enough"),
             ("ALLCAPS1!", "lowercase"),
             ("alllower1!", "uppercase"),
             ("NoDigits!", "numeric"),

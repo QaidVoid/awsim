@@ -82,7 +82,7 @@ pub fn validate(
     let supplied = provided.ok_or_else(|| {
         AwsError::bad_request(
             "NotAuthorizedException",
-            "Client is configured with secret but SecretHash was not provided",
+            format!("Unable to verify secret hash for client {client_id}."),
         )
     })?;
 
@@ -92,7 +92,7 @@ pub fn validate(
     } else {
         Err(AwsError::bad_request(
             "NotAuthorizedException",
-            "SecretHash does not match",
+            format!("Unable to verify secret hash for client {client_id}."),
         ))
     }
 }

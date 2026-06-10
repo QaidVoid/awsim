@@ -717,7 +717,7 @@ async fn authorize_get(
     if !oauth_state.cognito.user_pools.contains_key(&pool_id) {
         return (
             StatusCode::BAD_REQUEST,
-            format!("User pool not found: {pool_id}"),
+            format!("User pool {pool_id} does not exist."),
         )
             .into_response();
     }
@@ -926,7 +926,7 @@ async fn authorize_post(
         None => {
             return (
                 StatusCode::BAD_REQUEST,
-                format!("User pool not found: {pool_id}"),
+                format!("User pool {pool_id} does not exist."),
             )
                 .into_response();
         }
@@ -1149,7 +1149,7 @@ async fn authorize_post(
         None => {
             return (
                 StatusCode::BAD_REQUEST,
-                format!("User pool not found: {pool_id}"),
+                format!("User pool {pool_id} does not exist."),
             )
                 .into_response();
         }
@@ -1952,7 +1952,7 @@ async fn userinfo(
         None => {
             return (
                 StatusCode::BAD_REQUEST,
-                format!("User pool not found: {pool_id}"),
+                format!("User pool {pool_id} does not exist."),
             )
                 .into_response();
         }
@@ -1965,11 +1965,7 @@ async fn userinfo(
             match found {
                 Some(u) => u,
                 None => {
-                    return (
-                        StatusCode::UNAUTHORIZED,
-                        format!("User not found: {username}"),
-                    )
-                        .into_response();
+                    return (StatusCode::UNAUTHORIZED, "User does not exist.").into_response();
                 }
             }
         }
@@ -2060,7 +2056,7 @@ async fn logout(
         None => {
             return (
                 StatusCode::BAD_REQUEST,
-                format!("User pool not found: {pool_id}"),
+                format!("User pool {pool_id} does not exist."),
             )
                 .into_response();
         }
