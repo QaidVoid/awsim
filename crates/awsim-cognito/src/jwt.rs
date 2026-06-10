@@ -83,21 +83,24 @@ pub fn id_token(
             .collect::<HashMap<String, String>>();
         &filtered_attrs
     };
-    let scope_str = scopes.join(" ");
     let issuer = issuer_override
         .map(|s| s.to_string())
         .unwrap_or_else(|| format!("https://cognito-idp.{region}.amazonaws.com/{pool_id}"));
 
+    // Cognito ID tokens carry no `scope` claim; `origin_jti` ties the token to
+    // its auth event and `jti` uniquely identifies it (both used for
+    // revocation).
     let mut payload = json!({
         "sub": sub,
         "iss": issuer,
         "aud": client_id,
         "token_use": "id",
         "cognito:username": username,
+        "origin_jti": uuid::Uuid::new_v4().to_string(),
+        "jti": uuid::Uuid::new_v4().to_string(),
         "auth_time": now,
         "iat": now,
         "exp": now + expires_in,
-        "scope": scope_str
     });
 
     if let Some(n) = nonce
@@ -153,6 +156,11 @@ pub fn id_token(
             if let Some(v) = attributes.get(*attr) {
                 obj.insert(attr.to_string(), Value::String(v.clone()));
             }
+        }
+        // When an email is present but its verified flag was never recorded,
+        // Cognito reports email_verified=true in the ID token.
+        if obj.contains_key("email") && !obj.contains_key("email_verified") {
+            obj.insert("email_verified".to_string(), Value::Bool(true));
         }
     }
 
@@ -235,6 +243,7 @@ pub fn access_token(
         "auth_time": now,
         "iat": now,
         "exp": now + expires_in,
+        "origin_jti": uuid::Uuid::new_v4().to_string(),
         "jti": uuid::Uuid::new_v4().to_string()
     });
 
@@ -392,6 +401,41 @@ mod tests {
             .decode(payload)
             .expect("payload is base64url");
         serde_json::from_slice(&bytes).expect("payload is JSON")
+    }
+
+    #[test]
+    fn token_claims_match_cognito_shape() {
+        let mut attrs = HashMap::new();
+        attrs.insert("email".to_string(), "e@x.com".to_string());
+        let scopes = vec!["openid".to_string(), "email".to_string()];
+        let id = id_token(
+            "s",
+            "us-east-1",
+            "p",
+            "c",
+            "alice",
+            &attrs,
+            &[],
+            &scopes,
+            None,
+            &[],
+            None,
+            3600,
+        );
+        let c = decode_claims(&id);
+        // ID tokens carry no scope claim, but do carry origin_jti + jti.
+        assert!(c.get("scope").is_none(), "id token must not carry scope");
+        assert!(c["origin_jti"].is_string());
+        assert!(c["jti"].is_string());
+        // email present without an explicit verified flag defaults to true.
+        assert_eq!(c["email_verified"], serde_json::json!(true));
+
+        // SDK-flow access tokens use the fixed admin scope and carry origin_jti.
+        let access = access_token("s", "us-east-1", "p", "c", "alice", &[], &[], None, 3600);
+        let ac = decode_claims(&access);
+        assert_eq!(ac["scope"], "aws.cognito.signin.user.admin");
+        assert!(ac["origin_jti"].is_string());
+        assert!(ac["jti"].is_string());
     }
 
     #[test]
