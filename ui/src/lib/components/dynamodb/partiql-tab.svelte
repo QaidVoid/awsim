@@ -19,6 +19,9 @@
 	let items = $state<Item[]>([]);
 	let nextToken = $state<string | undefined>(undefined);
 	let lastError = $state<string | null>(null);
+	let consumed = $state<{ capacityUnits: number; readUnits: number; writeUnits: number } | null>(
+		null
+	);
 
 	$effect(() => {
 		if (tableName) {
@@ -26,6 +29,7 @@
 			items = [];
 			nextToken = undefined;
 			lastError = null;
+			consumed = null;
 		}
 	});
 
@@ -50,6 +54,7 @@
 			const res = await executeStatement(statement);
 			items = res.items;
 			nextToken = res.nextToken;
+			consumed = res.consumedCapacity ?? null;
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : 'Statement failed';
 			lastError = msg;
@@ -79,6 +84,11 @@
 		<div class="mt-2 flex items-center justify-between">
 			<span class="text-[11px] text-muted-foreground">
 				PartiQL · Cmd/Ctrl+Enter to run
+				{#if consumed}
+					· consumed {consumed.capacityUnits} CU{consumed.readUnits
+						? ` (${consumed.readUnits} read)`
+						: ''}{consumed.writeUnits ? ` (${consumed.writeUnits} write)` : ''}
+				{/if}
 			</span>
 			<Button size="sm" onclick={run} disabled={running}>
 				{#if running}
