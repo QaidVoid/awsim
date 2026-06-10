@@ -733,13 +733,17 @@ fn build_auth_result_inner(
         None,
         validity.id,
     );
+    // The ID token uses `default_scopes` only to gate which attribute claims
+    // appear. Access tokens minted by the SDK auth flows carry the fixed scope
+    // `aws.cognito.signin.user.admin` (passing an empty slice selects that
+    // default), not the hosted-UI OAuth scopes.
     let access_tok = jwt::access_token(
         user_sub,
         region,
         pool_id,
         client_id,
         username,
-        &default_scopes,
+        &[],
         groups,
         None,
         validity.access,
