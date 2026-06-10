@@ -32,3 +32,10 @@ pub fn code_mismatch(message: impl Into<String>) -> AwsError {
 pub fn username_exists(message: impl Into<String>) -> AwsError {
     AwsError::bad_request("UsernameExistsException", message)
 }
+
+/// Cognito's only server fault; HTTP 500 with code `InternalErrorException`.
+pub fn internal_error(message: impl Into<String>) -> AwsError {
+    let mut err = AwsError::internal(message);
+    err.code = "InternalErrorException".to_string();
+    err
+}

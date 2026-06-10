@@ -1804,7 +1804,7 @@ fn start_srp_challenge(
         AwsError::bad_request("NotAuthorizedException", "User has no SRP verifier")
     })?;
     let verifier_big = BigUint::from_str_radix(&verifier_hex, 16)
-        .map_err(|_| AwsError::internal("Stored SRP verifier is not valid hex"))?;
+        .map_err(|_| crate::error::internal_error("Stored SRP verifier is not valid hex"))?;
 
     let (b_priv, b_pub) = crate::srp::server_keys(&verifier_big);
     let b_priv_hex = b_priv.to_str_radix(16);
@@ -1915,14 +1915,14 @@ fn verify_srp_password(
         .get(&session.username)
         .ok_or_else(|| AwsError::service_not_found("UserNotFoundException", "User not found"))?;
     let verifier_hex = user.srp_verifier.clone().ok_or_else(|| {
-        AwsError::internal("User has no SRP verifier; cannot complete PASSWORD_VERIFIER")
+        crate::error::internal_error("User has no SRP verifier; cannot complete PASSWORD_VERIFIER")
     })?;
     let verifier_big = BigUint::from_str_radix(&verifier_hex, 16)
-        .map_err(|_| AwsError::internal("Stored SRP verifier is not valid hex"))?;
+        .map_err(|_| crate::error::internal_error("Stored SRP verifier is not valid hex"))?;
     let b_priv = BigUint::from_str_radix(&session.b_priv_hex, 16)
-        .map_err(|_| AwsError::internal("Stored SRP b is not valid hex"))?;
+        .map_err(|_| crate::error::internal_error("Stored SRP b is not valid hex"))?;
     let b_pub = BigUint::from_str_radix(&session.b_pub_hex, 16)
-        .map_err(|_| AwsError::internal("Stored SRP B is not valid hex"))?;
+        .map_err(|_| crate::error::internal_error("Stored SRP B is not valid hex"))?;
 
     // The client sends SRP_A (its public ephemeral) inside the challenge
     // responses on the second leg too, since the server needs both A and B

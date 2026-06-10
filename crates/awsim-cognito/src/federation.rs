@@ -272,12 +272,7 @@ fn http_client() -> Result<reqwest::Client, AwsError> {
         // CAs the team might wire up via the bundled cert path.
         .danger_accept_invalid_certs(true)
         .build()
-        .map_err(|e| {
-            AwsError::bad_request(
-                "InternalError",
-                format!("failed to build reqwest client: {e}"),
-            )
-        })
+        .map_err(|e| crate::error::internal_error(format!("failed to build reqwest client: {e}")))
 }
 
 // -------------------------------------------------------------------
