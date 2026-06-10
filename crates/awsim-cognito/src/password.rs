@@ -24,7 +24,7 @@ const COST: u32 = 6;
 /// Hash a plaintext password with bcrypt.
 pub fn hash(plain: &str) -> Result<String, AwsError> {
     bcrypt::hash(plain, COST)
-        .map_err(|e| AwsError::internal(format!("password hashing failed: {e}")))
+        .map_err(|e| crate::error::internal_error(format!("password hashing failed: {e}")))
 }
 
 /// Verify a plaintext password against a stored bcrypt hash.

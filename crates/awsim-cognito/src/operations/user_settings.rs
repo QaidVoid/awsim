@@ -28,22 +28,22 @@ pub fn admin_set_user_settings(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let username = input["Username"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Username is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let username = input["Username"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "Username is required")
+    })?;
     let mfa_options = parse_mfa_options(&input["MFAOptions"]);
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
     })?;
     let user = pool.users.get_mut(username).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         )
@@ -58,17 +58,17 @@ pub fn set_user_settings(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let access_token = input["AccessToken"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
+    let access_token = input["AccessToken"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "AccessToken is required")
+    })?;
     if state.revoked_tokens.revoked.contains_key(access_token) {
-        return Err(AwsError::forbidden(
+        return Err(AwsError::bad_request(
             "NotAuthorizedException",
             "Token has been revoked",
         ));
     }
     let username = crate::jwt::extract_username_from_access_token(access_token)
-        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
     let mfa_options = parse_mfa_options(&input["MFAOptions"]);
 
     for mut pool_entry in state.user_pools.iter_mut() {
@@ -77,7 +77,7 @@ pub fn set_user_settings(
             return Ok(json!({}));
         }
     }
-    Err(AwsError::not_found(
+    Err(AwsError::service_not_found(
         "UserNotFoundException",
         format!("User not found: {username}"),
     ))

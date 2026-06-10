@@ -27,22 +27,22 @@ pub fn add_user_pool_client_secret(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let client_id = input["ClientId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ClientId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let client_id = input["ClientId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ClientId is required")
+    })?;
     let provided_secret = input["ClientSecret"].as_str().map(String::from);
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
     })?;
     let app_client = pool.clients.get_mut(client_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("Client not found: {client_id}"),
         )
@@ -66,24 +66,24 @@ pub fn delete_user_pool_client_secret(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let client_id = input["ClientId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ClientId is required"))?;
-    let secret_id = input["ClientSecretId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ClientSecretId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let client_id = input["ClientId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ClientId is required")
+    })?;
+    let secret_id = input["ClientSecretId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ClientSecretId is required")
+    })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
     })?;
     let app_client = pool.clients.get_mut(client_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("Client not found: {client_id}"),
         )
@@ -94,7 +94,7 @@ pub fn delete_user_pool_client_secret(
         .additional_client_secrets
         .retain(|s| s.client_secret_id != secret_id);
     if app_client.additional_client_secrets.len() == len_before {
-        return Err(AwsError::not_found(
+        return Err(AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("Client secret not found: {secret_id}"),
         ));
@@ -109,21 +109,21 @@ pub fn list_user_pool_client_secrets(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let client_id = input["ClientId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ClientId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let client_id = input["ClientId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ClientId is required")
+    })?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
     })?;
     let app_client = pool.clients.get(client_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("Client not found: {client_id}"),
         )

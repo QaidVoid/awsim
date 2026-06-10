@@ -66,12 +66,12 @@ pub fn create_user_import_job(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
     let job_name = input["JobName"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "JobName is required"))?;
+        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "JobName is required"))?;
     let cloud_watch_logs_role_arn = input["CloudWatchLogsRoleArn"].as_str().map(String::from);
 
     let now = now_epoch();
@@ -95,7 +95,7 @@ pub fn create_user_import_job(
     };
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -117,15 +117,15 @@ pub fn describe_user_import_job(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
     let job_id = input["JobId"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "JobId is required"))?;
+        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "JobId is required"))?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -136,7 +136,7 @@ pub fn describe_user_import_job(
         .iter()
         .find(|j| j.job_id == job_id)
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Import job not found: {job_id}"),
             )
@@ -154,16 +154,16 @@ pub fn start_user_import_job(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
     let job_id = input["JobId"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "JobId is required"))?;
+        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "JobId is required"))?;
 
     let now = now_epoch();
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -174,7 +174,7 @@ pub fn start_user_import_job(
         .iter_mut()
         .find(|j| j.job_id == job_id)
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Import job not found: {job_id}"),
             )
@@ -205,16 +205,16 @@ pub fn stop_user_import_job(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
     let job_id = input["JobId"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "JobId is required"))?;
+        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "JobId is required"))?;
 
     let now = now_epoch();
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -225,7 +225,7 @@ pub fn stop_user_import_job(
         .iter_mut()
         .find(|j| j.job_id == job_id)
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Import job not found: {job_id}"),
             )
@@ -248,13 +248,13 @@ pub fn list_user_import_jobs(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
     let max_results = input["MaxResults"].as_u64().unwrap_or(60) as usize;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -278,13 +278,13 @@ pub fn get_csv_header(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
 
     // Verify pool exists
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )

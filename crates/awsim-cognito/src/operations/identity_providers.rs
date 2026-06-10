@@ -48,18 +48,18 @@ pub fn create_identity_provider(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let provider_name = input["ProviderName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ProviderName is required"))?;
-    let provider_type = input["ProviderType"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ProviderType is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let provider_name = input["ProviderName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ProviderName is required")
+    })?;
+    let provider_type = input["ProviderType"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ProviderType is required")
+    })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -70,7 +70,7 @@ pub fn create_identity_provider(
         .iter()
         .any(|idp| idp.provider_name == provider_name)
     {
-        return Err(AwsError::conflict(
+        return Err(AwsError::bad_request(
             "DuplicateProviderException",
             format!("Identity provider already exists: {provider_name}"),
         ));
@@ -113,15 +113,15 @@ pub fn describe_identity_provider(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let provider_name = input["ProviderName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ProviderName is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let provider_name = input["ProviderName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ProviderName is required")
+    })?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -132,7 +132,7 @@ pub fn describe_identity_provider(
         .iter()
         .find(|idp| idp.provider_name == provider_name)
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Identity provider not found: {provider_name}"),
             )
@@ -150,15 +150,15 @@ pub fn update_identity_provider(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let provider_name = input["ProviderName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ProviderName is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let provider_name = input["ProviderName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ProviderName is required")
+    })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -170,7 +170,7 @@ pub fn update_identity_provider(
         .iter_mut()
         .find(|idp| idp.provider_name == provider_name)
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Identity provider not found: {provider_name}"),
             )
@@ -205,15 +205,15 @@ pub fn delete_identity_provider(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let provider_name = input["ProviderName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ProviderName is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let provider_name = input["ProviderName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ProviderName is required")
+    })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -224,7 +224,7 @@ pub fn delete_identity_provider(
         .retain(|idp| idp.provider_name != provider_name);
 
     if pool.identity_providers.len() == len_before {
-        return Err(AwsError::not_found(
+        return Err(AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("Identity provider not found: {provider_name}"),
         ));
@@ -245,14 +245,14 @@ pub fn list_identity_providers(
 ) -> Result<Value, AwsError> {
     use awsim_core::pagination::{cap_max_results, paginate};
 
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
 
     let limit = cap_max_results(input["MaxResults"].as_i64(), 60, 60);
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -292,15 +292,15 @@ pub fn get_identity_provider_by_identifier(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let idp_identifier = input["IdpIdentifier"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "IdpIdentifier is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let idp_identifier = input["IdpIdentifier"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "IdpIdentifier is required")
+    })?;
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -314,7 +314,7 @@ pub fn get_identity_provider_by_identifier(
                 || idp.provider_name == idp_identifier
         })
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Identity provider not found for identifier: {idp_identifier}"),
             )
@@ -332,33 +332,36 @@ pub fn admin_link_provider_for_user(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
     let dest = &input["DestinationUser"];
     let src = &input["SourceUser"];
 
     let dest_value = dest["ProviderAttributeValue"].as_str().ok_or_else(|| {
         AwsError::bad_request(
-            "InvalidParameter",
+            "InvalidParameterException",
             "DestinationUser.ProviderAttributeValue is required",
         )
     })?;
     let src_provider = src["ProviderName"].as_str().ok_or_else(|| {
-        AwsError::bad_request("InvalidParameter", "SourceUser.ProviderName is required")
+        AwsError::bad_request(
+            "InvalidParameterException",
+            "SourceUser.ProviderName is required",
+        )
     })?;
     let src_attr_name = src["ProviderAttributeName"]
         .as_str()
         .unwrap_or("Cognito_Subject");
     let src_attr_value = src["ProviderAttributeValue"].as_str().ok_or_else(|| {
         AwsError::bad_request(
-            "InvalidParameter",
+            "InvalidParameterException",
             "SourceUser.ProviderAttributeValue is required",
         )
     })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -373,14 +376,14 @@ pub fn admin_link_provider_for_user(
         })
         .cloned()
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "UserNotFoundException",
                 format!("Destination user not found: {dest_value}"),
             )
         })?;
 
     let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "UserNotFoundException",
             format!("User not found: {username}"),
         )
@@ -408,24 +411,24 @@ pub fn admin_disable_provider_for_user(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
     let user_input = &input["User"];
     let provider_name = user_input["ProviderName"].as_str().ok_or_else(|| {
-        AwsError::bad_request("InvalidParameter", "User.ProviderName is required")
+        AwsError::bad_request("InvalidParameterException", "User.ProviderName is required")
     })?;
     let provider_attr_value = user_input["ProviderAttributeValue"]
         .as_str()
         .ok_or_else(|| {
             AwsError::bad_request(
-                "InvalidParameter",
+                "InvalidParameterException",
                 "User.ProviderAttributeValue is required",
             )
         })?;
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool not found: {pool_id}"),
         )
@@ -446,7 +449,7 @@ pub fn admin_disable_provider_for_user(
     }
 
     if !found {
-        return Err(AwsError::not_found(
+        return Err(AwsError::service_not_found(
             "UserNotFoundException",
             format!("No user found with provider {provider_name} value {provider_attr_value}"),
         ));

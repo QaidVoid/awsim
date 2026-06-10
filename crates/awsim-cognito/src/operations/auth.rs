@@ -310,27 +310,26 @@ fn verify_code_mfa(
         .mfa_sessions
         .get(session_id)
         .map(|e| e.value().clone())
-        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid session"))?;
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid session"))?;
     if !session_still_valid(session_meta.issued_at) {
         state.mfa_sessions.remove(session_id);
-        return Err(AwsError::forbidden(
+        return Err(AwsError::bad_request(
             "NotAuthorizedException",
             "MFA session has expired; restart the auth flow",
         ));
     }
 
-    let pool = state
-        .user_pools
-        .get(&session_meta.pool_id)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", "Pool not found"))?;
+    let pool = state.user_pools.get(&session_meta.pool_id).ok_or_else(|| {
+        AwsError::service_not_found("ResourceNotFoundException", "Pool not found")
+    })?;
     let user = pool
         .users
         .get(&session_meta.username)
-        .ok_or_else(|| AwsError::not_found("UserNotFoundException", "User not found"))?;
+        .ok_or_else(|| AwsError::service_not_found("UserNotFoundException", "User not found"))?;
     let expected = user
         .pending_verifications
         .get(stash_key)
-        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "No MFA code was issued"))?;
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "No MFA code was issued"))?;
     if expected.as_str() != user_code {
         return Err(AwsError::bad_request(
             "CodeMismatchException",
@@ -396,25 +395,24 @@ fn complete_software_token_mfa(
         .mfa_sessions
         .get(session_id)
         .map(|e| e.value().clone())
-        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid session"))?;
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid session"))?;
     if !session_still_valid(session_meta.issued_at) {
         state.mfa_sessions.remove(session_id);
-        return Err(AwsError::forbidden(
+        return Err(AwsError::bad_request(
             "NotAuthorizedException",
             "MFA session has expired; restart the auth flow",
         ));
     }
 
-    let pool = state
-        .user_pools
-        .get(&session_meta.pool_id)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", "Pool not found"))?;
+    let pool = state.user_pools.get(&session_meta.pool_id).ok_or_else(|| {
+        AwsError::service_not_found("ResourceNotFoundException", "Pool not found")
+    })?;
     let user = pool
         .users
         .get(&session_meta.username)
-        .ok_or_else(|| AwsError::not_found("UserNotFoundException", "User not found"))?;
+        .ok_or_else(|| AwsError::service_not_found("UserNotFoundException", "User not found"))?;
     let secret = user.totp_secret.as_deref().ok_or_else(|| {
-        AwsError::forbidden(
+        AwsError::bad_request(
             "NotAuthorizedException",
             "User has no software token configured",
         )
@@ -460,7 +458,7 @@ fn ensure_refresh_token_active(
     refresh_tok: &str,
 ) -> Result<(), AwsError> {
     if state.revoked_tokens.revoked.contains_key(refresh_tok) {
-        return Err(AwsError::forbidden(
+        return Err(AwsError::bad_request(
             "NotAuthorizedException",
             "Refresh Token has been revoked",
         ));
@@ -468,7 +466,7 @@ fn ensure_refresh_token_active(
     if let Some(signed_out_at) = user.signed_out_at
         && jwt::refresh_token_issued_at(refresh_tok).is_none_or(|issued| issued < signed_out_at)
     {
-        return Err(AwsError::forbidden(
+        return Err(AwsError::bad_request(
             "NotAuthorizedException",
             "Refresh Token has been revoked",
         ));
@@ -687,12 +685,12 @@ pub fn initiate_auth(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let client_id = input["ClientId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ClientId is required"))?;
-    let auth_flow = input["AuthFlow"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AuthFlow is required"))?;
+    let client_id = input["ClientId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ClientId is required")
+    })?;
+    let auth_flow = input["AuthFlow"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "AuthFlow is required")
+    })?;
     let params = &input["AuthParameters"];
 
     let pool_entry = state
@@ -701,7 +699,7 @@ pub fn initiate_auth(
         .find(|e| e.clients.contains_key(client_id));
 
     let pool_id = pool_entry.map(|e| e.id.clone()).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("No pool found for client: {client_id}"),
         )
@@ -711,7 +709,7 @@ pub fn initiate_auth(
     // credential work, mirroring Cognito's up-front validation.
     {
         let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
-            AwsError::not_found("ResourceNotFoundException", "User pool not found")
+            AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
         })?;
         if let Some(client) = pool.clients.get(client_id)
             && !auth_flow_allowed(client, auth_flow)
@@ -727,12 +725,12 @@ pub fn initiate_auth(
         "USER_SRP_AUTH" => start_srp_challenge(state, client_id, &pool_id, params),
         "CUSTOM_AUTH" => start_custom_auth_challenge(state, client_id, &pool_id, params, ctx),
         "USER_PASSWORD_AUTH" => {
-            let raw_username = params["USERNAME"]
-                .as_str()
-                .ok_or_else(|| AwsError::bad_request("InvalidParameter", "USERNAME is required"))?;
-            let password = params["PASSWORD"]
-                .as_str()
-                .ok_or_else(|| AwsError::bad_request("InvalidParameter", "PASSWORD is required"))?;
+            let raw_username = params["USERNAME"].as_str().ok_or_else(|| {
+                AwsError::bad_request("InvalidParameterException", "USERNAME is required")
+            })?;
+            let password = params["PASSWORD"].as_str().ok_or_else(|| {
+                AwsError::bad_request("InvalidParameterException", "PASSWORD is required")
+            })?;
             crate::secret_hash::validate_for_client(
                 state,
                 client_id,
@@ -741,10 +739,10 @@ pub fn initiate_auth(
             )?;
             let username = {
                 let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
-                    AwsError::not_found("ResourceNotFoundException", "User pool not found")
+                    AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
                 })?;
                 super::users::resolve_username_for_signin(&pool, raw_username).ok_or_else(|| {
-                    AwsError::not_found(
+                    AwsError::service_not_found(
                         "UserNotFoundException",
                         format!("User not found: {raw_username}"),
                     )
@@ -757,7 +755,7 @@ pub fn initiate_auth(
             // can take a mutable borrow for the lockout bookkeeping below.
             {
                 let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
-                    AwsError::not_found("ResourceNotFoundException", "User pool not found")
+                    AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
                 })?;
                 if let Some(arn) = pool.lambda_config.get("PreAuthentication") {
                     let trigger_event = json!({
@@ -774,7 +772,7 @@ pub fn initiate_auth(
             // immutable borrows.
             {
                 let mut pool = state.user_pools.get_mut(&pool_id).ok_or_else(|| {
-                    AwsError::not_found("ResourceNotFoundException", "User pool not found")
+                    AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
                 })?;
                 let block_action = super::auth_policy::compromised_credentials_action_for(
                     &pool,
@@ -784,13 +782,13 @@ pub fn initiate_auth(
                 let compromised = super::auth_policy::is_compromised_password(password);
 
                 let user = pool.users.get_mut(username).ok_or_else(|| {
-                    AwsError::not_found(
+                    AwsError::service_not_found(
                         "UserNotFoundException",
                         format!("User not found: {username}"),
                     )
                 })?;
                 if !user.enabled {
-                    return Err(AwsError::forbidden(
+                    return Err(AwsError::bad_request(
                         "NotAuthorizedException",
                         "User is disabled.",
                     ));
@@ -803,7 +801,7 @@ pub fn initiate_auth(
                         user,
                         super::auth_policy::build_signin_event(false, compromised),
                     );
-                    return Err(AwsError::forbidden(
+                    return Err(AwsError::bad_request(
                         "NotAuthorizedException",
                         "Incorrect username or password",
                     ));
@@ -814,7 +812,7 @@ pub fn initiate_auth(
                         user,
                         super::auth_policy::build_signin_event(false, true),
                     );
-                    return Err(AwsError::forbidden(
+                    return Err(AwsError::bad_request(
                         "NotAuthorizedException",
                         "Risk-based authentication blocked sign-in: compromised credentials",
                     ));
@@ -828,10 +826,10 @@ pub fn initiate_auth(
             }
 
             let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
-                AwsError::not_found("ResourceNotFoundException", "User pool not found")
+                AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
             })?;
             let user = pool.users.get(username).ok_or_else(|| {
-                AwsError::not_found(
+                AwsError::service_not_found(
                     "UserNotFoundException",
                     format!("User not found: {username}"),
                 )
@@ -893,10 +891,13 @@ pub fn initiate_auth(
             if mfa_eligible {
                 let challenge = {
                     let mut pool = state.user_pools.get_mut(&pool_id).ok_or_else(|| {
-                        AwsError::not_found("ResourceNotFoundException", "User pool not found")
+                        AwsError::service_not_found(
+                            "ResourceNotFoundException",
+                            "User pool not found",
+                        )
                     })?;
                     let user = pool.users.get_mut(username).ok_or_else(|| {
-                        AwsError::not_found(
+                        AwsError::service_not_found(
                             "UserNotFoundException",
                             format!("User not found: {username}"),
                         )
@@ -915,10 +916,10 @@ pub fn initiate_auth(
             }
 
             let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
-                AwsError::not_found("ResourceNotFoundException", "User pool not found")
+                AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
             })?;
             let user = pool.users.get(username).ok_or_else(|| {
-                AwsError::not_found(
+                AwsError::service_not_found(
                     "UserNotFoundException",
                     format!("User not found: {username}"),
                 )
@@ -962,7 +963,7 @@ pub fn initiate_auth(
         }
         "REFRESH_TOKEN_AUTH" | "REFRESH_TOKEN" => {
             let refresh_tok = params["REFRESH_TOKEN"].as_str().ok_or_else(|| {
-                AwsError::bad_request("InvalidParameter", "REFRESH_TOKEN is required")
+                AwsError::bad_request("InvalidParameterException", "REFRESH_TOKEN is required")
             })?;
 
             // Extract sub from our opaque refresh token format: "refresh-{sub}-{uuid}"
@@ -982,14 +983,17 @@ pub fn initiate_auth(
 
             // Find user by sub
             let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
-                AwsError::not_found("ResourceNotFoundException", "User pool not found")
+                AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
             })?;
             let user = pool
                 .users
                 .values()
                 .find(|u| u.sub == sub || refresh_tok.contains(&u.sub))
                 .ok_or_else(|| {
-                    AwsError::not_found("UserNotFoundException", "User not found for refresh token")
+                    AwsError::service_not_found(
+                        "UserNotFoundException",
+                        "User not found for refresh token",
+                    )
                 })?;
             ensure_refresh_token_active(state, user, refresh_tok)?;
 
@@ -1015,7 +1019,7 @@ pub fn initiate_auth(
             ))
         }
         flow => Err(AwsError::bad_request(
-            "InvalidParameter",
+            "InvalidParameterException",
             format!("Unsupported AuthFlow: {flow}"),
         )),
     }
@@ -1030,27 +1034,27 @@ pub fn admin_initiate_auth(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let client_id = input["ClientId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ClientId is required"))?;
-    let auth_flow = input["AuthFlow"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AuthFlow is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let client_id = input["ClientId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ClientId is required")
+    })?;
+    let auth_flow = input["AuthFlow"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "AuthFlow is required")
+    })?;
     let params = &input["AuthParameters"];
 
     {
         let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("User pool not found: {pool_id}"),
             )
         })?;
 
         let client = pool.clients.get(client_id).ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "ResourceNotFoundException",
                 format!("Client not found: {client_id}"),
             )
@@ -1069,12 +1073,12 @@ pub fn admin_initiate_auth(
 
     match auth_flow {
         "USER_PASSWORD_AUTH" | "ADMIN_USER_PASSWORD_AUTH" | "USER_SRP_AUTH" => {
-            let raw_username = params["USERNAME"]
-                .as_str()
-                .ok_or_else(|| AwsError::bad_request("InvalidParameter", "USERNAME is required"))?;
-            let password = params["PASSWORD"]
-                .as_str()
-                .ok_or_else(|| AwsError::bad_request("InvalidParameter", "PASSWORD is required"))?;
+            let raw_username = params["USERNAME"].as_str().ok_or_else(|| {
+                AwsError::bad_request("InvalidParameterException", "USERNAME is required")
+            })?;
+            let password = params["PASSWORD"].as_str().ok_or_else(|| {
+                AwsError::bad_request("InvalidParameterException", "PASSWORD is required")
+            })?;
             crate::secret_hash::validate_for_client(
                 state,
                 client_id,
@@ -1083,10 +1087,10 @@ pub fn admin_initiate_auth(
             )?;
             let username = {
                 let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-                    AwsError::not_found("ResourceNotFoundException", "User pool not found")
+                    AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
                 })?;
                 super::users::resolve_username_for_signin(&pool, raw_username).ok_or_else(|| {
-                    AwsError::not_found(
+                    AwsError::service_not_found(
                         "UserNotFoundException",
                         format!("User not found: {raw_username}"),
                     )
@@ -1098,7 +1102,7 @@ pub fn admin_initiate_auth(
             // immutable scope so we can take a mutable borrow below.
             {
                 let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-                    AwsError::not_found("ResourceNotFoundException", "User pool not found")
+                    AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
                 })?;
                 if let Some(arn) = pool.lambda_config.get("PreAuthentication") {
                     let trigger_event = json!({
@@ -1115,7 +1119,7 @@ pub fn admin_initiate_auth(
             // borrow without overlapping with the &mut user.
             {
                 let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-                    AwsError::not_found("ResourceNotFoundException", "User pool not found")
+                    AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
                 })?;
                 let block_action = super::auth_policy::compromised_credentials_action_for(
                     &pool,
@@ -1125,13 +1129,13 @@ pub fn admin_initiate_auth(
                 let compromised = super::auth_policy::is_compromised_password(password);
 
                 let user = pool.users.get_mut(username).ok_or_else(|| {
-                    AwsError::not_found(
+                    AwsError::service_not_found(
                         "UserNotFoundException",
                         format!("User not found: {username}"),
                     )
                 })?;
                 if !user.enabled {
-                    return Err(AwsError::forbidden(
+                    return Err(AwsError::bad_request(
                         "NotAuthorizedException",
                         "User is disabled.",
                     ));
@@ -1144,7 +1148,7 @@ pub fn admin_initiate_auth(
                         user,
                         super::auth_policy::build_signin_event(false, compromised),
                     );
-                    return Err(AwsError::forbidden(
+                    return Err(AwsError::bad_request(
                         "NotAuthorizedException",
                         "Incorrect username or password",
                     ));
@@ -1155,7 +1159,7 @@ pub fn admin_initiate_auth(
                         user,
                         super::auth_policy::build_signin_event(false, true),
                     );
-                    return Err(AwsError::forbidden(
+                    return Err(AwsError::bad_request(
                         "NotAuthorizedException",
                         "Risk-based authentication blocked sign-in: compromised credentials",
                     ));
@@ -1169,10 +1173,10 @@ pub fn admin_initiate_auth(
             }
 
             let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-                AwsError::not_found("ResourceNotFoundException", "User pool not found")
+                AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
             })?;
             let user = pool.users.get(username).ok_or_else(|| {
-                AwsError::not_found(
+                AwsError::service_not_found(
                     "UserNotFoundException",
                     format!("User not found: {username}"),
                 )
@@ -1232,10 +1236,13 @@ pub fn admin_initiate_auth(
             if mfa_eligible {
                 let challenge = {
                     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-                        AwsError::not_found("ResourceNotFoundException", "User pool not found")
+                        AwsError::service_not_found(
+                            "ResourceNotFoundException",
+                            "User pool not found",
+                        )
                     })?;
                     let user = pool.users.get_mut(username).ok_or_else(|| {
-                        AwsError::not_found(
+                        AwsError::service_not_found(
                             "UserNotFoundException",
                             format!("User not found: {username}"),
                         )
@@ -1254,10 +1261,10 @@ pub fn admin_initiate_auth(
             }
 
             let pool = state.user_pools.get(pool_id).ok_or_else(|| {
-                AwsError::not_found("ResourceNotFoundException", "User pool not found")
+                AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
             })?;
             let user = pool.users.get(username).ok_or_else(|| {
-                AwsError::not_found(
+                AwsError::service_not_found(
                     "UserNotFoundException",
                     format!("User not found: {username}"),
                 )
@@ -1300,7 +1307,7 @@ pub fn admin_initiate_auth(
             Ok(result)
         }
         flow => Err(AwsError::bad_request(
-            "InvalidParameter",
+            "InvalidParameterException",
             format!("Unsupported AuthFlow: {flow}"),
         )),
     }
@@ -1315,12 +1322,12 @@ pub fn respond_to_auth_challenge(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let client_id = input["ClientId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ClientId is required"))?;
-    let challenge_name = input["ChallengeName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ChallengeName is required"))?;
+    let client_id = input["ClientId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ClientId is required")
+    })?;
+    let challenge_name = input["ChallengeName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ChallengeName is required")
+    })?;
     let responses = &input["ChallengeResponses"];
 
     let pool_entry = state
@@ -1329,7 +1336,7 @@ pub fn respond_to_auth_challenge(
         .find(|e| e.clients.contains_key(client_id));
 
     let pool_id = pool_entry.map(|e| e.id.clone()).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("No pool found for client: {client_id}"),
         )
@@ -1362,23 +1369,23 @@ pub fn respond_to_auth_challenge(
         "NEW_PASSWORD_REQUIRED" => {
             let username = responses["USERNAME"].as_str().ok_or_else(|| {
                 AwsError::bad_request(
-                    "InvalidParameter",
+                    "InvalidParameterException",
                     "USERNAME is required in ChallengeResponses",
                 )
             })?;
             let new_password = responses["NEW_PASSWORD"].as_str().ok_or_else(|| {
                 AwsError::bad_request(
-                    "InvalidParameter",
+                    "InvalidParameterException",
                     "NEW_PASSWORD is required in ChallengeResponses",
                 )
             })?;
 
             let mut pool = state.user_pools.get_mut(&pool_id).ok_or_else(|| {
-                AwsError::not_found("ResourceNotFoundException", "User pool not found")
+                AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
             })?;
             let policy = pool.policies.clone();
             let user = pool.users.get_mut(username).ok_or_else(|| {
-                AwsError::not_found(
+                AwsError::service_not_found(
                     "UserNotFoundException",
                     format!("User not found: {username}"),
                 )
@@ -1449,10 +1456,12 @@ pub fn respond_to_auth_challenge(
                 .mfa_sessions
                 .get(session_id)
                 .map(|e| e.value().clone())
-                .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid session"))?;
+                .ok_or_else(|| {
+                    AwsError::bad_request("NotAuthorizedException", "Invalid session")
+                })?;
             if !session_still_valid(session_meta.issued_at) {
                 state.mfa_sessions.remove(session_id);
-                return Err(AwsError::forbidden(
+                return Err(AwsError::bad_request(
                     "NotAuthorizedException",
                     "MFA session has expired; restart the auth flow",
                 ));
@@ -1465,10 +1474,13 @@ pub fn respond_to_auth_challenge(
                             .user_pools
                             .get_mut(&session_meta.pool_id)
                             .ok_or_else(|| {
-                                AwsError::not_found("ResourceNotFoundException", "Pool not found")
+                                AwsError::service_not_found(
+                                    "ResourceNotFoundException",
+                                    "Pool not found",
+                                )
                             })?;
                     let user = pool.users.get_mut(&session_meta.username).ok_or_else(|| {
-                        AwsError::not_found("UserNotFoundException", "User not found")
+                        AwsError::service_not_found("UserNotFoundException", "User not found")
                     })?;
                     let code = generate_mfa_code();
                     let destination = user
@@ -1507,7 +1519,7 @@ pub fn respond_to_auth_challenge(
             verify_custom_auth_response(state, &pool_id, client_id, &ctx.region, input, ctx)
         }
         name => Err(AwsError::bad_request(
-            "InvalidParameter",
+            "InvalidParameterException",
             format!("Unsupported ChallengeName: {name}"),
         )),
     }
@@ -1522,41 +1534,41 @@ pub fn admin_respond_to_auth_challenge(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pool_id = input["UserPoolId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "UserPoolId is required"))?;
-    let client_id = input["ClientId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ClientId is required"))?;
-    let challenge_name = input["ChallengeName"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ChallengeName is required"))?;
+    let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
+    })?;
+    let client_id = input["ClientId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ClientId is required")
+    })?;
+    let challenge_name = input["ChallengeName"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ChallengeName is required")
+    })?;
     let responses = &input["ChallengeResponses"];
 
     match challenge_name {
         "NEW_PASSWORD_REQUIRED" => {
             let username = responses["USERNAME"].as_str().ok_or_else(|| {
                 AwsError::bad_request(
-                    "InvalidParameter",
+                    "InvalidParameterException",
                     "USERNAME is required in ChallengeResponses",
                 )
             })?;
             let new_password = responses["NEW_PASSWORD"].as_str().ok_or_else(|| {
                 AwsError::bad_request(
-                    "InvalidParameter",
+                    "InvalidParameterException",
                     "NEW_PASSWORD is required in ChallengeResponses",
                 )
             })?;
 
             let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
-                AwsError::not_found(
+                AwsError::service_not_found(
                     "ResourceNotFoundException",
                     format!("User pool not found: {pool_id}"),
                 )
             })?;
 
             if !pool.clients.contains_key(client_id) {
-                return Err(AwsError::not_found(
+                return Err(AwsError::service_not_found(
                     "ResourceNotFoundException",
                     format!("Client not found: {client_id}"),
                 ));
@@ -1564,7 +1576,7 @@ pub fn admin_respond_to_auth_challenge(
 
             let policy = pool.policies.clone();
             let user = pool.users.get_mut(username).ok_or_else(|| {
-                AwsError::not_found(
+                AwsError::service_not_found(
                     "UserNotFoundException",
                     format!("User not found: {username}"),
                 )
@@ -1621,7 +1633,7 @@ pub fn admin_respond_to_auth_challenge(
             EMAIL_OTP_KEY,
         ),
         name => Err(AwsError::bad_request(
-            "InvalidParameter",
+            "InvalidParameterException",
             format!("Unsupported ChallengeName: {name}"),
         )),
     }
@@ -1636,12 +1648,12 @@ pub fn get_tokens_from_refresh_token(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let refresh_tok = input["RefreshToken"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "RefreshToken is required"))?;
-    let client_id = input["ClientId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "ClientId is required"))?;
+    let refresh_tok = input["RefreshToken"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "RefreshToken is required")
+    })?;
+    let client_id = input["ClientId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "ClientId is required")
+    })?;
 
     let pool_entry = state
         .user_pools
@@ -1649,7 +1661,7 @@ pub fn get_tokens_from_refresh_token(
         .find(|e| e.clients.contains_key(client_id));
 
     let pool_id = pool_entry.map(|e| e.id.clone()).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("No pool found for client: {client_id}"),
         )
@@ -1662,7 +1674,7 @@ pub fn get_tokens_from_refresh_token(
         .unwrap_or("unknown");
 
     let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
-        AwsError::not_found(
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("Pool not found: {pool_id}"),
         )
@@ -1672,7 +1684,7 @@ pub fn get_tokens_from_refresh_token(
         .values()
         .find(|u| u.sub == sub || refresh_tok.contains(&u.sub))
         .ok_or_else(|| {
-            AwsError::not_found("UserNotFoundException", "User not found for refresh token")
+            AwsError::service_not_found("UserNotFoundException", "User not found for refresh token")
         })?;
     ensure_refresh_token_active(state, user, refresh_tok)?;
 
@@ -1698,12 +1710,12 @@ pub fn get_user_auth_factors(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let token = input["AccessToken"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
+    let token = input["AccessToken"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "AccessToken is required")
+    })?;
 
     let username = crate::jwt::extract_username_from_access_token(token)
-        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid access token"))?;
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))?;
 
     // Find pool containing this user
     for pool_ref in state.user_pools.iter() {
@@ -1719,7 +1731,7 @@ pub fn get_user_auth_factors(
         }
     }
 
-    Err(AwsError::not_found(
+    Err(AwsError::service_not_found(
         "UserNotFoundException",
         format!("User not found: {username}"),
     ))
@@ -1742,9 +1754,9 @@ fn start_srp_challenge(
     use num_bigint::BigUint;
     use num_traits::Num;
 
-    let raw_username = params["USERNAME"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "USERNAME is required"))?;
+    let raw_username = params["USERNAME"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "USERNAME is required")
+    })?;
     crate::secret_hash::validate_for_client(
         state,
         client_id,
@@ -1753,7 +1765,7 @@ fn start_srp_challenge(
     )?;
     let srp_a_hex = params["SRP_A"]
         .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "SRP_A is required"))?;
+        .ok_or_else(|| AwsError::bad_request("InvalidParameterException", "SRP_A is required"))?;
     if BigUint::from_str_radix(srp_a_hex, 16).is_err() {
         return Err(AwsError::bad_request(
             "InvalidParameterException",
@@ -1761,13 +1773,12 @@ fn start_srp_challenge(
         ));
     }
 
-    let pool = state
-        .user_pools
-        .get(pool_id)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", "User pool not found"))?;
+    let pool = state.user_pools.get(pool_id).ok_or_else(|| {
+        AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
+    })?;
     let resolved_username = super::users::resolve_username_for_signin(&pool, raw_username)
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "UserNotFoundException",
                 format!("User not found: {raw_username}"),
             )
@@ -1776,25 +1787,24 @@ fn start_srp_challenge(
     let user = pool
         .users
         .get(&resolved_username)
-        .ok_or_else(|| AwsError::not_found("UserNotFoundException", "User not found"))?;
+        .ok_or_else(|| AwsError::service_not_found("UserNotFoundException", "User not found"))?;
     if !user.enabled {
-        return Err(AwsError::forbidden(
+        return Err(AwsError::bad_request(
             "NotAuthorizedException",
             "User is disabled.",
         ));
     }
     let salt_hex = user.srp_salt.clone().ok_or_else(|| {
-        AwsError::forbidden(
+        AwsError::bad_request(
             "NotAuthorizedException",
             "User has no SRP material; ask the admin to reset the password",
         )
     })?;
-    let verifier_hex = user
-        .srp_verifier
-        .clone()
-        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "User has no SRP verifier"))?;
+    let verifier_hex = user.srp_verifier.clone().ok_or_else(|| {
+        AwsError::bad_request("NotAuthorizedException", "User has no SRP verifier")
+    })?;
     let verifier_big = BigUint::from_str_radix(&verifier_hex, 16)
-        .map_err(|_| AwsError::internal("Stored SRP verifier is not valid hex"))?;
+        .map_err(|_| crate::error::internal_error("Stored SRP verifier is not valid hex"))?;
 
     let (b_priv, b_pub) = crate::srp::server_keys(&verifier_big);
     let b_priv_hex = b_priv.to_str_radix(16);
@@ -1848,16 +1858,16 @@ fn verify_srp_password(
         .srp_sessions
         .get(session_id)
         .map(|e| e.value().clone())
-        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid session"))?;
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid session"))?;
     if session.client_id != client_id || session.pool_id != pool_id {
-        return Err(AwsError::forbidden(
+        return Err(AwsError::bad_request(
             "NotAuthorizedException",
             "Session does not match client or pool",
         ));
     }
     if !session_still_valid(session.issued_at) {
         state.srp_sessions.remove(session_id);
-        return Err(AwsError::forbidden(
+        return Err(AwsError::bad_request(
             "NotAuthorizedException",
             "SRP session has expired; restart the auth flow",
         ));
@@ -1874,7 +1884,7 @@ fn verify_srp_password(
             )
         })?;
     if secret_block_b64 != session.secret_block_b64 {
-        return Err(AwsError::forbidden(
+        return Err(AwsError::bad_request(
             "NotAuthorizedException",
             "PASSWORD_CLAIM_SECRET_BLOCK does not match server-issued value",
         ));
@@ -1897,23 +1907,22 @@ fn verify_srp_password(
             )
         })?;
 
-    let pool = state
-        .user_pools
-        .get(pool_id)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", "User pool not found"))?;
+    let pool = state.user_pools.get(pool_id).ok_or_else(|| {
+        AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
+    })?;
     let user = pool
         .users
         .get(&session.username)
-        .ok_or_else(|| AwsError::not_found("UserNotFoundException", "User not found"))?;
+        .ok_or_else(|| AwsError::service_not_found("UserNotFoundException", "User not found"))?;
     let verifier_hex = user.srp_verifier.clone().ok_or_else(|| {
-        AwsError::internal("User has no SRP verifier; cannot complete PASSWORD_VERIFIER")
+        crate::error::internal_error("User has no SRP verifier; cannot complete PASSWORD_VERIFIER")
     })?;
     let verifier_big = BigUint::from_str_radix(&verifier_hex, 16)
-        .map_err(|_| AwsError::internal("Stored SRP verifier is not valid hex"))?;
+        .map_err(|_| crate::error::internal_error("Stored SRP verifier is not valid hex"))?;
     let b_priv = BigUint::from_str_radix(&session.b_priv_hex, 16)
-        .map_err(|_| AwsError::internal("Stored SRP b is not valid hex"))?;
+        .map_err(|_| crate::error::internal_error("Stored SRP b is not valid hex"))?;
     let b_pub = BigUint::from_str_radix(&session.b_pub_hex, 16)
-        .map_err(|_| AwsError::internal("Stored SRP B is not valid hex"))?;
+        .map_err(|_| crate::error::internal_error("Stored SRP B is not valid hex"))?;
 
     // The client sends SRP_A (its public ephemeral) inside the challenge
     // responses on the second leg too, since the server needs both A and B
@@ -1927,7 +1936,7 @@ fn verify_srp_password(
 
     let k_session =
         crate::srp::derive_k(&a_pub, &b_pub, &b_priv, &verifier_big).ok_or_else(|| {
-            AwsError::forbidden("NotAuthorizedException", "SRP key derivation failed")
+            AwsError::bad_request("NotAuthorizedException", "SRP key derivation failed")
         })?;
 
     let pool_short = crate::password::pool_short_name(pool_id);
@@ -1939,7 +1948,7 @@ fn verify_srp_password(
         timestamp,
     );
     if !crate::srp::ct_eq(&expected, &provided_sig) {
-        return Err(AwsError::forbidden(
+        return Err(AwsError::bad_request(
             "NotAuthorizedException",
             "PASSWORD_CLAIM_SIGNATURE does not match",
         ));
@@ -1987,9 +1996,9 @@ fn start_custom_auth_challenge(
     params: &serde_json::Value,
     ctx: &RequestContext,
 ) -> Result<serde_json::Value, AwsError> {
-    let raw_username = params["USERNAME"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "USERNAME is required"))?;
+    let raw_username = params["USERNAME"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "USERNAME is required")
+    })?;
     crate::secret_hash::validate_for_client(
         state,
         client_id,
@@ -1997,13 +2006,12 @@ fn start_custom_auth_challenge(
         raw_username,
     )?;
 
-    let pool = state
-        .user_pools
-        .get(pool_id)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", "User pool not found"))?;
+    let pool = state.user_pools.get(pool_id).ok_or_else(|| {
+        AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
+    })?;
     let resolved_username = super::users::resolve_username_for_signin(&pool, raw_username)
         .ok_or_else(|| {
-            AwsError::not_found(
+            AwsError::service_not_found(
                 "UserNotFoundException",
                 format!("User not found: {raw_username}"),
             )
@@ -2011,7 +2019,7 @@ fn start_custom_auth_challenge(
     if let Some(user) = pool.users.get(&resolved_username)
         && !user.enabled
     {
-        return Err(AwsError::forbidden(
+        return Err(AwsError::bad_request(
             "NotAuthorizedException",
             "User is disabled.",
         ));
@@ -2092,16 +2100,16 @@ fn verify_custom_auth_response(
         .mfa_sessions
         .get(session_id)
         .map(|e| e.value().clone())
-        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid session"))?;
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid session"))?;
     if !session_still_valid(session.issued_at) {
         state.mfa_sessions.remove(session_id);
-        return Err(AwsError::forbidden(
+        return Err(AwsError::bad_request(
             "NotAuthorizedException",
             "Custom auth session has expired; restart the auth flow",
         ));
     }
     if session.pool_id != pool_id {
-        return Err(AwsError::forbidden(
+        return Err(AwsError::bad_request(
             "NotAuthorizedException",
             "Session does not match pool",
         ));
@@ -2116,10 +2124,9 @@ fn verify_custom_auth_response(
         ));
     }
 
-    let pool = state
-        .user_pools
-        .get(pool_id)
-        .ok_or_else(|| AwsError::not_found("ResourceNotFoundException", "User pool not found"))?;
+    let pool = state.user_pools.get(pool_id).ok_or_else(|| {
+        AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
+    })?;
     if let Some(arn) = pool.lambda_config.get("VerifyAuthChallengeResponse") {
         invoke_trigger(
             ctx,
@@ -2136,7 +2143,7 @@ fn verify_custom_auth_response(
     if let Some(expected) = pool.custom_auth_expected_answer.as_deref()
         && expected != answer
     {
-        return Err(AwsError::forbidden(
+        return Err(AwsError::bad_request(
             "NotAuthorizedException",
             "Incorrect answer to custom challenge",
         ));
@@ -2145,7 +2152,7 @@ fn verify_custom_auth_response(
     let user = pool
         .users
         .get(&session.username)
-        .ok_or_else(|| AwsError::not_found("UserNotFoundException", "User not found"))?;
+        .ok_or_else(|| AwsError::service_not_found("UserNotFoundException", "User not found"))?;
     let pairs = group_role_pairs(&pool, &user.groups);
     let validity = pool
         .clients

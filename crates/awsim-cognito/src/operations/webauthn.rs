@@ -27,13 +27,13 @@ fn credential_to_value(c: &WebAuthnCredential) -> Value {
 
 fn username_for_token(state: &CognitoState, access_token: &str) -> Result<String, AwsError> {
     if state.revoked_tokens.revoked.contains_key(access_token) {
-        return Err(AwsError::forbidden(
+        return Err(AwsError::bad_request(
             "NotAuthorizedException",
             "Token has been revoked",
         ));
     }
     crate::jwt::extract_username_from_access_token(access_token)
-        .ok_or_else(|| AwsError::forbidden("NotAuthorizedException", "Invalid access token"))
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid access token"))
 }
 
 pub fn start_webauthn_registration(
@@ -41,9 +41,9 @@ pub fn start_webauthn_registration(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let access_token = input["AccessToken"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
+    let access_token = input["AccessToken"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "AccessToken is required")
+    })?;
     let username = username_for_token(state, access_token)?;
     let challenge = Uuid::new_v4().to_string();
 
@@ -68,7 +68,7 @@ pub fn start_webauthn_registration(
             }));
         }
     }
-    Err(AwsError::not_found(
+    Err(AwsError::service_not_found(
         "UserNotFoundException",
         format!("User not found: {username}"),
     ))
@@ -79,9 +79,9 @@ pub fn complete_webauthn_registration(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let access_token = input["AccessToken"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
+    let access_token = input["AccessToken"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "AccessToken is required")
+    })?;
     let credential = &input["Credential"];
     let username = username_for_token(state, access_token)?;
 
@@ -112,7 +112,7 @@ pub fn complete_webauthn_registration(
             return Ok(json!({}));
         }
     }
-    Err(AwsError::not_found(
+    Err(AwsError::service_not_found(
         "UserNotFoundException",
         format!("User not found: {username}"),
     ))
@@ -123,12 +123,12 @@ pub fn delete_webauthn_credential(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let access_token = input["AccessToken"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
-    let credential_id = input["CredentialId"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "CredentialId is required"))?;
+    let access_token = input["AccessToken"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "AccessToken is required")
+    })?;
+    let credential_id = input["CredentialId"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "CredentialId is required")
+    })?;
     let username = username_for_token(state, access_token)?;
 
     for mut pool_entry in state.user_pools.iter_mut() {
@@ -137,7 +137,7 @@ pub fn delete_webauthn_credential(
             user.webauthn_credentials
                 .retain(|c| c.credential_id != credential_id);
             if user.webauthn_credentials.len() == len_before {
-                return Err(AwsError::not_found(
+                return Err(AwsError::service_not_found(
                     "ResourceNotFoundException",
                     format!("Credential not found: {credential_id}"),
                 ));
@@ -146,7 +146,7 @@ pub fn delete_webauthn_credential(
             return Ok(json!({}));
         }
     }
-    Err(AwsError::not_found(
+    Err(AwsError::service_not_found(
         "UserNotFoundException",
         format!("User not found: {username}"),
     ))
@@ -157,9 +157,9 @@ pub fn list_webauthn_credentials(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let access_token = input["AccessToken"]
-        .as_str()
-        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "AccessToken is required"))?;
+    let access_token = input["AccessToken"].as_str().ok_or_else(|| {
+        AwsError::bad_request("InvalidParameterException", "AccessToken is required")
+    })?;
     let max_results = input["MaxResults"].as_u64().unwrap_or(60) as usize;
     let username = username_for_token(state, access_token)?;
 
@@ -174,7 +174,7 @@ pub fn list_webauthn_credentials(
             return Ok(json!({ "Credentials": creds, "NextToken": Value::Null }));
         }
     }
-    Err(AwsError::not_found(
+    Err(AwsError::service_not_found(
         "UserNotFoundException",
         format!("User not found: {username}"),
     ))
