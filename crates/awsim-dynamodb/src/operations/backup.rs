@@ -366,6 +366,7 @@ pub fn restore_table_from_backup(
 
 pub fn restore_table_to_point_in_time(
     state: &DynamoState,
+    sqlite: &SqliteStore,
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
@@ -423,10 +424,48 @@ pub fn restore_table_to_point_in_time(
         read_capacity_units: source.read_capacity_units,
         write_capacity_units: source.write_capacity_units,
     };
+    drop(source);
 
-    // Restored tables start empty — actual point-in-time replay isn't
-    // implemented (it never was; this op was always a stub).
-    let desc = crate::operations::table::table_description(&new_table, 0);
+    // Mirror the schema to SQLite so the restored table's
+    // `(account, region, table)` namespace exists before item writes.
+    let schema_value = serde_json::to_value(&new_table)
+        .map_err(|e| AwsError::internal(format!("DynamoDB schema serialize failed: {e}")))?;
+    sqlite.put_table_schema(&ctx.account_id, &ctx.region, target_name, &schema_value)?;
+
+    // Copy the source table's current items into the restored table. True
+    // point-in-time recovery would replay a change log to a chosen instant;
+    // without one, awsim restores the latest snapshot, which is the closest
+    // faithful behavior. Collect rows first so the read iterator isn't held
+    // across the writes.
+    let mut rows: Vec<(String, String, Value)> = Vec::new();
+    sqlite.scan_table(
+        &ctx.account_id,
+        &ctx.region,
+        &source_key,
+        None,
+        |pk, sk, attrs| {
+            rows.push((pk.to_string(), sk.to_string(), attrs));
+            Ok(true)
+        },
+    )?;
+    let restored_count = rows.len() as u64;
+    for (pk, sk, attrs) in rows {
+        let gsi_keys = crate::keys::storage_value_to_item(attrs.clone())
+            .and_then(|item| crate::keys::extract_item_keys(&new_table, &item))
+            .map(|k| k.gsi)
+            .unwrap_or_default();
+        sqlite.put_item(
+            &ctx.account_id,
+            &ctx.region,
+            target_name,
+            &pk,
+            &sk,
+            &attrs,
+            &gsi_keys,
+        )?;
+    }
+
+    let desc = crate::operations::table::table_description(&new_table, restored_count);
     state.tables.insert(target_name.to_string(), new_table);
 
     Ok(json!({
@@ -576,6 +615,59 @@ mod tests {
         )
         .unwrap();
         assert_eq!(resp["Count"], json!(1));
+    }
+
+    #[test]
+    fn restore_to_point_in_time_copies_current_items() {
+        let state = DynamoState::default();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+
+        create_table(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "src",
+                "KeySchema": [{ "AttributeName": "pk", "KeyType": "HASH" }],
+                "AttributeDefinitions": [{ "AttributeName": "pk", "AttributeType": "S" }],
+                "BillingMode": "PAY_PER_REQUEST"
+            }),
+            &c,
+        )
+        .unwrap();
+        for i in 0..3 {
+            put_item(
+                &state,
+                &sqlite,
+                &json!({ "TableName": "src", "Item": { "pk": { "S": format!("p{i}") } } }),
+                &c,
+            )
+            .unwrap();
+        }
+
+        let resp = restore_table_to_point_in_time(
+            &state,
+            &sqlite,
+            &json!({ "SourceTableName": "src", "TargetTableName": "dst" }),
+            &c,
+        )
+        .unwrap();
+        // The restored table reports the copied item count, not zero.
+        assert_eq!(resp["TableDescription"]["ItemCount"], json!(3));
+
+        // And the items are actually queryable on the restored table.
+        let got = query(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "dst",
+                "KeyConditionExpression": "pk = :p",
+                "ExpressionAttributeValues": { ":p": { "S": "p1" } }
+            }),
+            &c,
+        )
+        .unwrap();
+        assert_eq!(got["Count"], json!(1));
     }
 
     fn backup_record(arn: &str) -> BackupRecord {
