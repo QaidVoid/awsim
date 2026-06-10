@@ -10,6 +10,7 @@ use crate::{
 
 use super::item::{
     ITEM_MAX_BYTES, estimate_item_bytes, estimate_value_bytes, item_to_json, parse_item,
+    reject_empty_key_values, validate_item,
 };
 use super::{
     item_collection_metrics, push_item_collection, read_capacity_units, write_capacity_units,
@@ -245,6 +246,8 @@ pub fn batch_write_item(
                         "Item size {item_bytes} bytes exceeds the {ITEM_MAX_BYTES}-byte (400 KB) per-item cap in table {table_name}"
                     )));
                 }
+                validate_item(&item)?;
+                reject_empty_key_values(&table, &item)?;
                 if let Some(keys) = extract_item_keys(&table, &item) {
                     let attrs = item_to_storage_value(&item);
                     *write_bytes_by_table.entry(table_name.clone()).or_default() += item_bytes;
