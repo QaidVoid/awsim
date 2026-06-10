@@ -160,17 +160,22 @@ pub fn parse_item(val: &Value) -> Option<DynamoItem> {
         .map(|obj| obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
 }
 
-/// Validate the AWS rules for typed-set attributes (SS / NS / BS):
-///   * each set must be non-empty,
-///   * elements within a set must be unique.
+/// Validate a single attribute value against AWS's rules:
+///   * typed sets (SS / NS / BS) must be non-empty with unique elements,
+///   * numbers (`N`, and each `NS` element) must be well-formed and within
+///     range / precision (see [`validate_number`]).
 ///
 /// AWS rejects violations with `ValidationException` ("One or more
-/// parameter values were invalid"). Walks `Value` recursively so sets
+/// parameter values were invalid"). Walks `Value` recursively so values
 /// nested inside lists/maps are caught too.
-pub(crate) fn validate_sets(name: &str, value: &Value) -> Result<(), AwsError> {
+pub(crate) fn validate_value(name: &str, value: &Value) -> Result<(), AwsError> {
     let Some(obj) = value.as_object() else {
         return Ok(());
     };
+    // Scalar numbers must be well-formed and within AWS's range / precision.
+    if let Some(n) = obj.get("N").and_then(Value::as_str) {
+        validate_number(name, n)?;
+    }
     for tag in ["SS", "NS", "BS"] {
         if let Some(arr) = obj.get(tag).and_then(Value::as_array) {
             if arr.is_empty() {
@@ -189,6 +194,10 @@ pub(crate) fn validate_sets(name: &str, value: &Value) -> Result<(), AwsError> {
                          {tag} elements must be strings (attribute: {name})"
                     )));
                 };
+                // Number-set elements are themselves numbers.
+                if tag == "NS" {
+                    validate_number(name, s)?;
+                }
                 if !seen.insert(s) {
                     return Err(AwsError::validation(format!(
                         "One or more parameter values were invalid: \
@@ -198,27 +207,131 @@ pub(crate) fn validate_sets(name: &str, value: &Value) -> Result<(), AwsError> {
             }
         }
     }
-    // Recurse into list / map elements so a set buried inside an L or M
-    // attribute is also caught.
+    // Recurse into list / map elements so a set or number buried inside an L
+    // or M attribute is also caught.
     if let Some(arr) = obj.get("L").and_then(Value::as_array) {
         for (i, v) in arr.iter().enumerate() {
-            validate_sets(&format!("{name}[{i}]"), v)?;
+            validate_value(&format!("{name}[{i}]"), v)?;
         }
     }
     if let Some(map) = obj.get("M").and_then(Value::as_object) {
         for (k, v) in map {
-            validate_sets(&format!("{name}.{k}"), v)?;
+            validate_value(&format!("{name}.{k}"), v)?;
         }
     }
     Ok(())
 }
 
-/// Run [`validate_sets`] over every attribute of an item. Used as the
-/// boundary check on PutItem / UpdateItem before the value lands in
-/// storage.
-pub(crate) fn validate_item_sets(item: &DynamoItem) -> Result<(), AwsError> {
+/// Validate a DynamoDB `N` value: it must be a well-formed decimal with at most
+/// 38 significant digits and a magnitude that is either zero or within AWS's
+/// supported range (`1E-130` to `9.99..E+125`).
+pub(crate) fn validate_number(name: &str, s: &str) -> Result<(), AwsError> {
+    let invalid = |reason: &str| {
+        AwsError::validation(format!(
+            "One or more parameter values were invalid: {reason} (attribute: {name})"
+        ))
+    };
+
+    let bytes = s.trim().as_bytes();
+    let mut i = 0;
+    if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') {
+        i += 1;
+    }
+    let int_start = i;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    let int_digits = &bytes[int_start..i];
+
+    let mut frac_digits: &[u8] = &[];
+    if i < bytes.len() && bytes[i] == b'.' {
+        i += 1;
+        let frac_start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        frac_digits = &bytes[frac_start..i];
+    }
+    if int_digits.is_empty() && frac_digits.is_empty() {
+        return Err(invalid("number is not a valid numeric value"));
+    }
+
+    let mut exp: i64 = 0;
+    if i < bytes.len() && (bytes[i] == b'e' || bytes[i] == b'E') {
+        i += 1;
+        let mut sign = 1i64;
+        if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') {
+            if bytes[i] == b'-' {
+                sign = -1;
+            }
+            i += 1;
+        }
+        let e_start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == e_start {
+            return Err(invalid("number has a malformed exponent"));
+        }
+        let digits = std::str::from_utf8(&bytes[e_start..i]).unwrap_or("");
+        exp = sign
+            * digits
+                .parse::<i64>()
+                .map_err(|_| invalid("number exponent is out of range"))?;
+    }
+    if i != bytes.len() {
+        return Err(invalid("number is not a valid numeric value"));
+    }
+
+    // Significant digits run from the first to the last nonzero digit across
+    // the integer and fractional parts. An all-zero mantissa is the value 0.
+    let combined: Vec<u8> = int_digits.iter().chain(frac_digits).copied().collect();
+    let Some(first) = combined.iter().position(|&c| c != b'0') else {
+        return Ok(());
+    };
+    let last = combined.iter().rposition(|&c| c != b'0').unwrap();
+    if last - first + 1 > 38 {
+        return Err(invalid("number has more than 38 digits of precision"));
+    }
+
+    // Decimal exponent of the leading significant digit; AWS allows the
+    // leading digit to sit at 10^-130 through 10^125.
+    let lead_exp = (int_digits.len() as i64 - 1 - first as i64) + exp;
+    if !(-130..=125).contains(&lead_exp) {
+        return Err(invalid("number magnitude is outside the supported range"));
+    }
+    Ok(())
+}
+
+/// Run [`validate_value`] over every attribute of an item. Used as the
+/// boundary check on the write paths before the value lands in storage.
+pub(crate) fn validate_item(item: &DynamoItem) -> Result<(), AwsError> {
     for (name, value) in item {
-        validate_sets(name, value)?;
+        validate_value(name, value)?;
+    }
+    Ok(())
+}
+
+/// Reject empty string / binary values for the table's key attributes. AWS
+/// permits empty strings for non-key attributes but not for partition or sort
+/// keys. `key_source` may be a full item or just a key map.
+pub(crate) fn reject_empty_key_values(
+    table: &crate::state::Table,
+    key_source: &DynamoItem,
+) -> Result<(), AwsError> {
+    for key in [table.hash_key(), table.range_key()].into_iter().flatten() {
+        if let Some(v) = key_source.get(key) {
+            let is_empty = ["S", "B"]
+                .iter()
+                .any(|t| v.get(t).and_then(Value::as_str) == Some(""));
+            if is_empty {
+                return Err(AwsError::validation(format!(
+                    "One or more parameter values were invalid: \
+                     The AttributeValue for a key attribute cannot contain an \
+                     empty string value. Key: {key}"
+                )));
+            }
+        }
     }
     Ok(())
 }
@@ -309,7 +422,7 @@ pub fn put_item(
 
     let item = parse_item(&input["Item"])
         .ok_or_else(|| AwsError::validation("Item is required and must be a map"))?;
-    validate_item_sets(&item)?;
+    validate_item(&item)?;
 
     let item_bytes = estimate_item_bytes(&item);
     if item_bytes > ITEM_MAX_BYTES {
@@ -347,6 +460,7 @@ pub fn put_item(
                 "One or more parameter values were invalid: Missing the key {rk} in the item"
             )));
         }
+        reject_empty_key_values(&table, &item)?;
 
         let sqlite_keys = extract_item_keys(&table, &item)
             .ok_or_else(|| AwsError::validation("Could not extract SQLite keys"))?;
@@ -493,6 +607,7 @@ pub fn delete_item(
             )
         })?;
 
+        reject_empty_key_values(&table, &key)?;
         let sqlite_pk_sk = extract_pk_sk(&table, &key)
             .ok_or_else(|| AwsError::validation("Could not extract SQLite keys"))?;
 
@@ -584,6 +699,7 @@ pub fn update_item(
             )
         })?;
 
+        reject_empty_key_values(&table, &key)?;
         let sqlite_pk_sk = extract_pk_sk(&table, &key)
             .ok_or_else(|| AwsError::validation("Could not extract SQLite keys"))?;
 
@@ -632,7 +748,7 @@ pub fn update_item(
     // The UpdateExpression may have left a set in an invalid state (empty
     // after DELETE, duplicates after ADD, etc.). Re-validate the merged
     // item so we don't persist something the AWS API would have rejected.
-    validate_item_sets(&new_item)?;
+    validate_item(&new_item)?;
 
     // Re-extract SQLite keys from the merged item — UpdateExpression may
     // have introduced or changed GSI key attributes.
@@ -756,27 +872,27 @@ mod tests {
     #[test]
     fn validate_sets_rejects_empty_string_set() {
         let v = json!({ "SS": [] });
-        assert!(validate_sets("attr", &v).is_err());
+        assert!(validate_value("attr", &v).is_err());
     }
 
     #[test]
     fn validate_sets_rejects_duplicate_string_set_elements() {
         let v = json!({ "SS": ["a", "a"] });
-        let err = validate_sets("attr", &v).unwrap_err();
+        let err = validate_value("attr", &v).unwrap_err();
         assert!(err.message.contains("duplicates"));
     }
 
     #[test]
     fn validate_sets_accepts_unique_non_empty_set() {
         let v = json!({ "SS": ["a", "b"] });
-        assert!(validate_sets("attr", &v).is_ok());
+        assert!(validate_value("attr", &v).is_ok());
     }
 
     #[test]
     fn validate_sets_recurses_into_lists_and_maps() {
         // Set buried inside a list element must still be caught.
         let v = json!({ "L": [ { "M": { "tags": { "NS": [] } } } ] });
-        assert!(validate_sets("attr", &v).is_err());
+        assert!(validate_value("attr", &v).is_err());
     }
 
     #[test]
@@ -784,15 +900,53 @@ mod tests {
         for tag in ["SS", "NS", "BS"] {
             let dup = json!({ tag: ["x", "x"] });
             assert!(
-                validate_sets("attr", &dup).is_err(),
+                validate_value("attr", &dup).is_err(),
                 "{tag} duplicates must reject"
             );
             let empty = json!({ tag: [] });
             assert!(
-                validate_sets("attr", &empty).is_err(),
+                validate_value("attr", &empty).is_err(),
                 "{tag} empty must reject"
             );
         }
+    }
+
+    #[test]
+    fn validate_number_accepts_valid_rejects_malformed() {
+        for ok in [
+            "0", "0.0", "-1", "3.14", "123456", "1e125", "-9.9e125", "1E-130",
+        ] {
+            assert!(validate_number("a", ok).is_ok(), "{ok} should be valid");
+        }
+        for bad in ["", "abc", "1.2.3", "1e", "1e+", "--1", "0x1", "NaN"] {
+            assert!(
+                validate_number("a", bad).is_err(),
+                "{bad} should be invalid"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_number_enforces_precision_and_magnitude() {
+        assert!(
+            validate_number("a", &"1".repeat(38)).is_ok(),
+            "38 digits ok"
+        );
+        assert!(
+            validate_number("a", &"1".repeat(39)).is_err(),
+            "39 digits rejected"
+        );
+        assert!(
+            validate_number("a", "1e126").is_err(),
+            "magnitude too large"
+        );
+        assert!(
+            validate_number("a", "1e-131").is_err(),
+            "magnitude too small"
+        );
+        // A leading digit at the boundary with trailing zeros is one
+        // significant digit and within range.
+        assert!(validate_number("a", "1e40").is_ok());
     }
 
     fn ctx() -> RequestContext {
@@ -1009,6 +1163,56 @@ mod tests {
             &ctx(),
         );
         assert!(aliased.is_ok(), "aliased reserved word must be accepted");
+    }
+
+    #[test]
+    fn put_item_rejects_invalid_and_out_of_range_numbers() {
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        for n in ["notanumber", "1e126"] {
+            let err = put_item(
+                &state,
+                &sqlite,
+                &json!({
+                    "TableName": "t",
+                    "Item": {"pk": {"S": "u"}, "sk": {"S": "p"}, "n": {"N": n}}
+                }),
+                &c,
+            )
+            .unwrap_err();
+            assert_eq!(err.code, "ValidationException", "N={n}");
+        }
+    }
+
+    #[test]
+    fn put_item_rejects_empty_key_but_allows_empty_non_key_string() {
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+
+        // Empty partition-key value is rejected.
+        let err = put_item(
+            &state,
+            &sqlite,
+            &json!({ "TableName": "t", "Item": {"pk": {"S": ""}, "sk": {"S": "p"}} }),
+            &c,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("empty string"));
+
+        // Empty non-key string is allowed (AWS permits this for non-key attrs).
+        put_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Item": {"pk": {"S": "u"}, "sk": {"S": "p"}, "note": {"S": ""}}
+            }),
+            &c,
+        )
+        .unwrap();
     }
 
     #[test]
