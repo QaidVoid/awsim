@@ -12,7 +12,7 @@ use crate::{
 };
 
 use super::{
-    get_expr_attr_names, get_expr_attr_values,
+    build_consumed_capacity, get_expr_attr_names, get_expr_attr_values,
     item::{
         estimate_item_bytes, estimate_value_bytes, item_to_json, parse_item,
         reject_empty_key_values, validate_item,
@@ -169,7 +169,19 @@ pub fn transact_get_items(
         state.enforce_throughput(table, BucketKind::Read, units)?;
     }
 
-    Ok(json!({ "Responses": responses }))
+    let mut response = json!({ "Responses": responses });
+    // ConsumedCapacity is a per-table list at the transactional read rate.
+    let caps: Vec<Value> = per_table_bytes
+        .iter()
+        .filter_map(|(table, bytes)| {
+            let units = read_capacity_units(*bytes, false, true);
+            build_consumed_capacity(input, table, units, 0.0, None)
+        })
+        .collect();
+    if !caps.is_empty() {
+        response["ConsumedCapacity"] = Value::Array(caps);
+    }
+    Ok(response)
 }
 
 pub fn transact_write_items(
@@ -684,6 +696,18 @@ pub fn transact_write_items(
     if !item_collections.is_empty() {
         result["ItemCollectionMetrics"] = Value::Object(item_collections);
     }
+    // ConsumedCapacity is a per-table list reported at the transactional (2x)
+    // write rate, matching the units charged above.
+    let caps: Vec<Value> = write_bytes_by_table
+        .iter()
+        .filter_map(|(table, bytes)| {
+            let units = write_capacity_units(*bytes, true);
+            build_consumed_capacity(input, table, 0.0, units, None)
+        })
+        .collect();
+    if !caps.is_empty() {
+        result["ConsumedCapacity"] = Value::Array(caps);
+    }
     idempotency.record(state, &result);
     Ok(result)
 }
@@ -732,6 +756,81 @@ mod tests {
         };
         state.tables.insert("t".into(), table);
         state
+    }
+
+    #[test]
+    fn write_items_reports_consumed_capacity_at_transactional_rate() {
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let res = transact_write_items(
+            &state,
+            &sqlite,
+            &json!({
+                "ReturnConsumedCapacity": "TOTAL",
+                "TransactItems": [
+                    {"Put": {"TableName": "t", "Item": {"pk": {"S": "a"}, "sk": {"S": "b"}}}}
+                ]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let caps = res["ConsumedCapacity"].as_array().unwrap();
+        assert_eq!(caps.len(), 1);
+        assert_eq!(caps[0]["TableName"], json!("t"));
+        // One small item at the 2x transactional write rate.
+        assert_eq!(caps[0]["CapacityUnits"], json!(2.0));
+    }
+
+    #[test]
+    fn write_items_omits_consumed_capacity_by_default() {
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let res = transact_write_items(
+            &state,
+            &sqlite,
+            &json!({
+                "TransactItems": [
+                    {"Put": {"TableName": "t", "Item": {"pk": {"S": "a"}, "sk": {"S": "b"}}}}
+                ]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(res.get("ConsumedCapacity").is_none());
+    }
+
+    #[test]
+    fn get_items_reports_consumed_capacity_when_requested() {
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        transact_write_items(
+            &state,
+            &sqlite,
+            &json!({
+                "TransactItems": [
+                    {"Put": {"TableName": "t", "Item": {"pk": {"S": "a"}, "sk": {"S": "b"}}}}
+                ]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        let res = transact_get_items(
+            &state,
+            &sqlite,
+            &json!({
+                "ReturnConsumedCapacity": "TOTAL",
+                "TransactItems": [
+                    {"Get": {"TableName": "t", "Key": {"pk": {"S": "a"}, "sk": {"S": "b"}}}}
+                ]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let caps = res["ConsumedCapacity"].as_array().unwrap();
+        assert_eq!(caps.len(), 1);
+        assert_eq!(caps[0]["TableName"], json!("t"));
+        assert_eq!(caps[0]["CapacityUnits"], json!(2.0));
     }
 
     #[test]
