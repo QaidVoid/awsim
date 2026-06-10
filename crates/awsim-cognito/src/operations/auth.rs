@@ -224,6 +224,7 @@ fn mfa_challenge_response(
             "Session": session_id,
             "ChallengeParameters": {
                 "USER_ID_FOR_SRP": username,
+                "FRIENDLY_DEVICE_NAME": "TOTP device",
             }
         }),
     }
@@ -253,6 +254,79 @@ fn mfa_setup_challenge(state: &CognitoState, pool_id: &str, username: &str) -> V
     })
 }
 
+/// Register a challenge session binding a session id to the user who just
+/// passed primary authentication, and return that id. Used for the
+/// NEW_PASSWORD_REQUIRED challenge so the follow-up response can prove the
+/// caller actually completed the password step (without it, anyone knowing a
+/// ClientId and username could reset any user's password).
+fn issue_challenge_session(state: &CognitoState, pool_id: &str, username: &str) -> String {
+    let session_id = Uuid::new_v4().to_string();
+    state.mfa_sessions.insert(
+        session_id.clone(),
+        MfaSession {
+            pool_id: pool_id.to_string(),
+            username: username.to_string(),
+            issued_at: now_epoch(),
+        },
+    );
+    session_id
+}
+
+/// Resolve and validate a challenge session, returning the bound username.
+/// The session must exist, be unexpired, belong to `pool_id`, and (when the
+/// caller supplied a USERNAME in ChallengeResponses) match it. An expired
+/// session is consumed. Mirrors Cognito's "Invalid session for the user."
+/// rejection of forged or stale sessions.
+fn resolve_challenge_session(
+    state: &CognitoState,
+    pool_id: &str,
+    session_id: &str,
+    claimed_username: Option<&str>,
+) -> Result<String, AwsError> {
+    let session = state
+        .mfa_sessions
+        .get(session_id)
+        .map(|e| e.value().clone())
+        .ok_or_else(|| {
+            AwsError::bad_request("NotAuthorizedException", "Invalid session for the user.")
+        })?;
+    if !session_still_valid(session.issued_at) {
+        state.mfa_sessions.remove(session_id);
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "Invalid session for the user, session is expired.",
+        ));
+    }
+    if session.pool_id != pool_id {
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "Invalid session for the user.",
+        ));
+    }
+    if let Some(claimed) = claimed_username
+        && claimed != session.username
+    {
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "Invalid session for the user.",
+        ));
+    }
+    Ok(session.username)
+}
+
+/// Serialize a user's attributes as the JSON-object string Cognito puts in the
+/// `userAttributes` ChallengeParameter (e.g. `{"email":"x"}`), which is what
+/// Amplify parses to prefill the NEW_PASSWORD_REQUIRED form. (The legacy array
+/// of `{"Name","Value"}` pairs is not what the service sends.)
+fn user_attributes_param(user: &CognitoUser) -> String {
+    let map: serde_json::Map<String, Value> = user
+        .attributes
+        .iter()
+        .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+        .collect();
+    serde_json::to_string(&map).unwrap_or_else(|_| "{}".to_string())
+}
+
 /// Build the concrete-factor challenge JSON after `SELECT_MFA_TYPE`, reusing
 /// the caller's existing session id so the follow-up response resolves back to
 /// the same user.
@@ -277,6 +351,7 @@ fn mfa_select_followup(session_id: &str, username: &str, challenge: MfaChallenge
             "Session": session_id,
             "ChallengeParameters": {
                 "USER_ID_FOR_SRP": username,
+                "FRIENDLY_DEVICE_NAME": "TOTP device",
             }
         }),
     }
@@ -446,6 +521,91 @@ fn complete_software_token_mfa(
     drop(pool);
     state.mfa_sessions.remove(session_id);
     info!(username = %session_meta.username, "Cognito: SOFTWARE_TOKEN_MFA success");
+    Ok(result)
+}
+
+/// Complete a `RespondToAuthChallenge(MFA_SETUP)`. By this point the client
+/// has, within the same session, run AssociateSoftwareToken +
+/// VerifySoftwareToken (which set the user's `totp_verified`). If the software
+/// token is now verified we record the preference, mint tokens, and consume the
+/// session; otherwise the setup is incomplete and we re-issue the MFA_SETUP
+/// challenge so the caller knows to finish enrolling.
+fn complete_mfa_setup(
+    state: &CognitoState,
+    client_id: &str,
+    region: &str,
+    input: &Value,
+) -> Result<Value, AwsError> {
+    let session_id = input["Session"].as_str().unwrap_or("");
+    let session = state
+        .mfa_sessions
+        .get(session_id)
+        .map(|e| e.value().clone())
+        .ok_or_else(|| {
+            AwsError::bad_request("NotAuthorizedException", "Invalid session for the user.")
+        })?;
+    if !session_still_valid(session.issued_at) {
+        state.mfa_sessions.remove(session_id);
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "Invalid session for the user, session is expired.",
+        ));
+    }
+
+    let setup_done = {
+        let mut pool = state.user_pools.get_mut(&session.pool_id).ok_or_else(|| {
+            AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
+        })?;
+        let user = pool.users.get_mut(&session.username).ok_or_else(|| {
+            AwsError::service_not_found("UserNotFoundException", "User does not exist.")
+        })?;
+        if user.totp_verified {
+            user.mfa_enabled = true;
+            if user.mfa_preferred.is_none() {
+                user.mfa_preferred = Some("SOFTWARE_TOKEN_MFA".to_string());
+            }
+            true
+        } else {
+            false
+        }
+    };
+
+    // Software token not yet verified: the caller must associate and verify it
+    // before retrying, so re-issue the same challenge.
+    if !setup_done {
+        return Ok(mfa_setup_challenge(
+            state,
+            &session.pool_id,
+            &session.username,
+        ));
+    }
+
+    let pool = state.user_pools.get(&session.pool_id).ok_or_else(|| {
+        AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
+    })?;
+    let user = pool.users.get(&session.username).ok_or_else(|| {
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
+    })?;
+    let pairs = group_role_pairs(&pool, &user.groups);
+    let validity = pool
+        .clients
+        .get(client_id)
+        .map(TokenValidity::from_client)
+        .unwrap_or_else(TokenValidity::defaults);
+    let result = build_auth_result_validity(
+        &user.sub,
+        &user.username,
+        region,
+        &session.pool_id,
+        client_id,
+        &user.attributes,
+        &crate::operations::users::client_read_set(&pool, client_id).unwrap_or_default(),
+        &pairs,
+        &validity,
+    );
+    drop(pool);
+    state.mfa_sessions.remove(session_id);
+    info!(username = %session.username, "Cognito: MFA_SETUP completed");
     Ok(result)
 }
 
@@ -657,16 +817,26 @@ fn invoke_trigger(ctx: &RequestContext, trigger_source: &str, lambda_arn: &str, 
 /// the modern `ALLOW_`-prefixed names are honoured.
 fn auth_flow_allowed(client: &UserPoolClient, auth_flow: &str) -> bool {
     let flows = &client.explicit_auth_flows;
-    if flows.is_empty() {
-        return true;
-    }
-    let has = |name: &str| flows.iter().any(|f| f == name);
+    // An unset ExplicitAuthFlows defaults to ALLOW_USER_SRP_AUTH +
+    // ALLOW_CUSTOM_AUTH + ALLOW_REFRESH_TOKEN_AUTH, matching real Cognito. The
+    // password flows must be opted into explicitly, so an empty list does not
+    // enable them.
+    let has = |name: &str| {
+        if flows.is_empty() {
+            matches!(
+                name,
+                "ALLOW_USER_SRP_AUTH" | "ALLOW_CUSTOM_AUTH" | "ALLOW_REFRESH_TOKEN_AUTH"
+            )
+        } else {
+            flows.iter().any(|f| f == name)
+        }
+    };
     match auth_flow {
         "USER_SRP_AUTH" => has("ALLOW_USER_SRP_AUTH"),
         "USER_PASSWORD_AUTH" => has("ALLOW_USER_PASSWORD_AUTH") || has("USER_PASSWORD_AUTH"),
         // AdminInitiateAuth-only flow; gated by its own ALLOW_ entry or the
         // legacy ADMIN_NO_SRP_AUTH name.
-        "ADMIN_USER_PASSWORD_AUTH" => {
+        "ADMIN_USER_PASSWORD_AUTH" | "ADMIN_NO_SRP_AUTH" => {
             has("ALLOW_ADMIN_USER_PASSWORD_AUTH") || has("ADMIN_NO_SRP_AUTH")
         }
         "CUSTOM_AUTH" => has("ALLOW_CUSTOM_AUTH") || has("CUSTOM_AUTH_FLOW_ONLY"),
@@ -845,16 +1015,9 @@ pub fn initiate_auth(
 
             // FORCE_CHANGE_PASSWORD challenge
             if user.status == "FORCE_CHANGE_PASSWORD" {
-                let session_id = Uuid::new_v4().to_string();
-                let user_attrs_json = serde_json::to_string(
-                    &user
-                        .attributes
-                        .iter()
-                        .map(|(k, v)| json!({"Name":k,"Value":v}))
-                        .collect::<Vec<_>>(),
-                )
-                .unwrap_or_default();
-                info!(username = %username, "Cognito: InitiateAuth → NEW_PASSWORD_REQUIRED");
+                let user_attrs_json = user_attributes_param(user);
+                let session_id = issue_challenge_session(state, &pool_id, username);
+                info!(username = %username, "Cognito: InitiateAuth -> NEW_PASSWORD_REQUIRED");
                 return Ok(json!({
                     "ChallengeName": "NEW_PASSWORD_REQUIRED",
                     "Session": session_id,
@@ -949,67 +1112,84 @@ pub fn initiate_auth(
             Ok(result)
         }
         "REFRESH_TOKEN_AUTH" | "REFRESH_TOKEN" => {
-            let refresh_tok = params["REFRESH_TOKEN"].as_str().ok_or_else(|| {
-                AwsError::bad_request("InvalidParameterException", "REFRESH_TOKEN is required")
-            })?;
-
-            // Extract sub from our opaque refresh token format: "refresh-{sub}-{uuid}"
-            let sub = refresh_tok
-                .strip_prefix("refresh-")
-                .and_then(|s| s.split('.').next())
-                .unwrap_or("unknown");
-            // Cognito accepts SECRET_HASH on REFRESH_TOKEN_AUTH using the
-            // *sub* as the username component (since the original username
-            // may not be on the wire). Skip when public-client.
-            crate::secret_hash::validate_for_client(
-                state,
-                client_id,
-                params["SECRET_HASH"].as_str(),
-                sub,
-            )?;
-
-            // Find user by sub
-            let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
-                AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
-            })?;
-            let user = pool
-                .users
-                .values()
-                .find(|u| u.sub == sub || refresh_tok.contains(&u.sub))
-                .ok_or_else(|| {
-                    AwsError::service_not_found(
-                        "UserNotFoundException",
-                        "User not found for refresh token",
-                    )
-                })?;
-            ensure_refresh_token_active(state, user, refresh_tok)?;
-
-            let pairs = group_role_pairs(&pool, &user.groups);
-            let validity = pool
-                .clients
-                .get(client_id)
-                .map(TokenValidity::from_client)
-                .unwrap_or_else(TokenValidity::defaults);
-            // include_refresh=false: AWS doesn't reissue a RefreshToken
-            // on REFRESH_TOKEN_AUTH; the SPA keeps the original one.
-            Ok(build_auth_result_inner(
-                &user.sub,
-                &user.username,
-                &ctx.region,
-                &pool_id,
-                client_id,
-                &user.attributes,
-                &crate::operations::users::client_read_set(&pool, client_id).unwrap_or_default(),
-                &pairs,
-                &validity,
-                false,
-            ))
+            refresh_token_auth(state, &pool_id, client_id, params, &ctx.region)
         }
         flow => Err(AwsError::bad_request(
             "InvalidParameterException",
             format!("Unsupported AuthFlow: {flow}"),
         )),
     }
+}
+
+/// Shared REFRESH_TOKEN_AUTH handler for both InitiateAuth and
+/// AdminInitiateAuth. Resolves the user from our opaque
+/// `refresh-{sub}.{ts}.{uuid}` token, honours revocation, and reissues
+/// access/id tokens without a new refresh token (matching AWS).
+fn refresh_token_auth(
+    state: &CognitoState,
+    pool_id: &str,
+    client_id: &str,
+    params: &Value,
+    region: &str,
+) -> Result<Value, AwsError> {
+    let refresh_tok = params["REFRESH_TOKEN"].as_str().ok_or_else(|| {
+        AwsError::bad_request("NotAuthorizedException", "Refresh token is missing.")
+    })?;
+
+    let sub = refresh_tok
+        .strip_prefix("refresh-")
+        .and_then(|s| s.split('.').next())
+        .unwrap_or("");
+
+    let pool = state.user_pools.get(pool_id).ok_or_else(|| {
+        AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
+    })?;
+    let user = pool
+        .users
+        .values()
+        .find(|u| u.sub == sub || refresh_tok.contains(&u.sub))
+        .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid Refresh Token."))?;
+
+    if !user.enabled {
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "User is disabled.",
+        ));
+    }
+
+    // Cognito accepts SECRET_HASH on REFRESH_TOKEN_AUTH computed with either
+    // the original username or the sub. Validate against the resolved client.
+    if let Some(client) = pool.clients.get(client_id) {
+        crate::secret_hash::validate_any_username(
+            client,
+            params["SECRET_HASH"].as_str(),
+            &[user.username.as_str(), user.sub.as_str()],
+            client_id,
+        )?;
+    }
+
+    ensure_refresh_token_active(state, user, refresh_tok)?;
+
+    let pairs = group_role_pairs(&pool, &user.groups);
+    let validity = pool
+        .clients
+        .get(client_id)
+        .map(TokenValidity::from_client)
+        .unwrap_or_else(TokenValidity::defaults);
+    // include_refresh=false: AWS doesn't reissue a RefreshToken on
+    // REFRESH_TOKEN_AUTH; the client keeps the original one.
+    Ok(build_auth_result_inner(
+        &user.sub,
+        &user.username,
+        region,
+        pool_id,
+        client_id,
+        &user.attributes,
+        &crate::operations::users::client_read_set(&pool, client_id).unwrap_or_default(),
+        &pairs,
+        &validity,
+        false,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -1059,7 +1239,22 @@ pub fn admin_initiate_auth(
     }
 
     match auth_flow {
-        "USER_PASSWORD_AUTH" | "ADMIN_USER_PASSWORD_AUTH" | "USER_SRP_AUTH" => {
+        // USER_SRP_AUTH on the admin path returns a PASSWORD_VERIFIER
+        // challenge just like the public path; the caller sends SRP_A, not a
+        // password.
+        "USER_SRP_AUTH" => start_srp_challenge(state, client_id, pool_id, params),
+        "CUSTOM_AUTH" => start_custom_auth_challenge(state, client_id, pool_id, params, ctx),
+        "REFRESH_TOKEN_AUTH" | "REFRESH_TOKEN" => {
+            refresh_token_auth(state, pool_id, client_id, params, &ctx.region)
+        }
+        // Real Cognito rejects the non-admin USER_PASSWORD_AUTH on the admin
+        // API; admins must use ADMIN_USER_PASSWORD_AUTH (or the legacy
+        // ADMIN_NO_SRP_AUTH alias).
+        "USER_PASSWORD_AUTH" => Err(AwsError::bad_request(
+            "InvalidParameterException",
+            "Initiate Auth method not supported",
+        )),
+        "ADMIN_USER_PASSWORD_AUTH" | "ADMIN_NO_SRP_AUTH" => {
             let raw_username = params["USERNAME"].as_str().ok_or_else(|| {
                 AwsError::bad_request("InvalidParameterException", "USERNAME is required")
             })?;
@@ -1176,16 +1371,9 @@ pub fn admin_initiate_auth(
 
             // FORCE_CHANGE_PASSWORD challenge
             if user.status == "FORCE_CHANGE_PASSWORD" {
-                let session_id = Uuid::new_v4().to_string();
-                let user_attrs_json = serde_json::to_string(
-                    &user
-                        .attributes
-                        .iter()
-                        .map(|(k, v)| json!({"Name":k,"Value":v}))
-                        .collect::<Vec<_>>(),
-                )
-                .unwrap_or_default();
-                info!(username = %username, pool_id = %pool_id, "Cognito: AdminInitiateAuth → NEW_PASSWORD_REQUIRED");
+                let user_attrs_json = user_attributes_param(user);
+                let session_id = issue_challenge_session(state, pool_id, username);
+                info!(username = %username, pool_id = %pool_id, "Cognito: AdminInitiateAuth -> NEW_PASSWORD_REQUIRED");
                 return Ok(json!({
                     "ChallengeName": "NEW_PASSWORD_REQUIRED",
                     "Session": session_id,
@@ -1339,12 +1527,14 @@ pub fn respond_to_auth_challenge(
 
     match challenge_name {
         "NEW_PASSWORD_REQUIRED" => {
-            let username = responses["USERNAME"].as_str().ok_or_else(|| {
-                AwsError::bad_request(
-                    "InvalidParameterException",
-                    "USERNAME is required in ChallengeResponses",
-                )
-            })?;
+            let session_id = input["Session"].as_str().unwrap_or("");
+            let username = resolve_challenge_session(
+                state,
+                &pool_id,
+                session_id,
+                responses["USERNAME"].as_str(),
+            )?;
+            let username = username.as_str();
             let new_password = responses["NEW_PASSWORD"].as_str().ok_or_else(|| {
                 AwsError::bad_request(
                     "InvalidParameterException",
@@ -1390,6 +1580,8 @@ pub fn respond_to_auth_challenge(
                 &validity,
             );
 
+            drop(pool);
+            state.mfa_sessions.remove(session_id);
             info!(username = %username, "Cognito: RespondToAuthChallenge NEW_PASSWORD_REQUIRED success");
             Ok(result)
         }
@@ -1478,11 +1670,7 @@ pub fn respond_to_auth_challenge(
             info!(username = %session_meta.username, selection = %answer, "Cognito: SELECT_MFA_TYPE");
             Ok(response)
         }
-        "MFA_SETUP" => Ok(json!({
-            "ChallengeName": "MFA_SETUP",
-            "ChallengeParameters": {},
-            "Session": input["Session"]
-        })),
+        "MFA_SETUP" => complete_mfa_setup(state, client_id, &ctx.region, input),
         "PASSWORD_VERIFIER" => verify_srp_password(state, &pool_id, client_id, &ctx.region, input),
         "CUSTOM_CHALLENGE" => {
             verify_custom_auth_response(state, &pool_id, client_id, &ctx.region, input, ctx)
@@ -1516,12 +1704,14 @@ pub fn admin_respond_to_auth_challenge(
 
     match challenge_name {
         "NEW_PASSWORD_REQUIRED" => {
-            let username = responses["USERNAME"].as_str().ok_or_else(|| {
-                AwsError::bad_request(
-                    "InvalidParameterException",
-                    "USERNAME is required in ChallengeResponses",
-                )
-            })?;
+            let session_id = input["Session"].as_str().unwrap_or("");
+            let username = resolve_challenge_session(
+                state,
+                pool_id,
+                session_id,
+                responses["USERNAME"].as_str(),
+            )?;
+            let username = username.as_str();
             let new_password = responses["NEW_PASSWORD"].as_str().ok_or_else(|| {
                 AwsError::bad_request(
                     "InvalidParameterException",
@@ -1578,6 +1768,8 @@ pub fn admin_respond_to_auth_challenge(
                 &validity,
             );
 
+            drop(pool);
+            state.mfa_sessions.remove(session_id);
             info!(username = %username, pool_id = %pool_id, "Cognito: AdminRespondToAuthChallenge NEW_PASSWORD_REQUIRED success");
             Ok(result)
         }
@@ -1598,6 +1790,11 @@ pub fn admin_respond_to_auth_challenge(
             "EMAIL_OTP_CODE",
             EMAIL_OTP_KEY,
         ),
+        "MFA_SETUP" => complete_mfa_setup(state, client_id, &ctx.region, input),
+        "PASSWORD_VERIFIER" => verify_srp_password(state, pool_id, client_id, &ctx.region, input),
+        "CUSTOM_CHALLENGE" => {
+            verify_custom_auth_response(state, pool_id, client_id, &ctx.region, input, ctx)
+        }
         name => Err(AwsError::bad_request(
             "InvalidParameterException",
             format!("Unsupported ChallengeName: {name}"),
@@ -1945,13 +2142,13 @@ fn verify_srp_password(
 // CUSTOM_AUTH flow
 // ---------------------------------------------------------------------------
 
-/// Phase 1 of CUSTOM_AUTH. Real Cognito invokes the DefineAuthChallenge and
-/// CreateAuthChallenge Lambda triggers to decide what challenge to issue
-/// and what parameters to expose to the client. awsim has no synchronous
-/// Lambda invocation path, so we publish those triggers as fire-and-forget
-/// events and emit a CUSTOM_CHALLENGE backed by the pool's
-/// `custom_auth_challenge_parameters` fixture. Tests can configure that
-/// fixture or the expected answer directly via UpdateUserPool.
+/// Handle an `InitiateAuth(CUSTOM_AUTH)`. Real Cognito invokes the
+/// DefineAuthChallenge and CreateAuthChallenge Lambda triggers to decide what
+/// challenge to issue and what parameters to expose to the client. awsim has no
+/// synchronous Lambda invocation path, so we publish those triggers as
+/// fire-and-forget events and emit a CUSTOM_CHALLENGE backed by the pool's
+/// `custom_auth_challenge_parameters` fixture. Tests can configure that fixture
+/// or the expected answer directly via UpdateUserPool.
 fn start_custom_auth_challenge(
     state: &CognitoState,
     client_id: &str,
@@ -2041,12 +2238,16 @@ fn start_custom_auth_challenge(
     }))
 }
 
-/// Phase 2 of CUSTOM_AUTH. Real Cognito would call the
-/// VerifyAuthChallengeResponse Lambda to decide if `ANSWER` is correct.
-/// awsim does the simplest equivalent: compare against the pool's
-/// `custom_auth_expected_answer` fixture (when set), or accept any
-/// non-empty answer otherwise. The Lambda trigger is still emitted as a
-/// fire-and-forget event so tests can observe it.
+/// Handle a `RespondToAuthChallenge(CUSTOM_CHALLENGE)`. Real Cognito calls the
+/// VerifyAuthChallengeResponse Lambda to decide if `ANSWER` is correct. awsim
+/// approximates this: it compares against the pool's
+/// `custom_auth_expected_answer` fixture when set. When neither a fixture nor a
+/// VerifyAuthChallengeResponse Lambda is configured there is no way to validate
+/// the answer, so the flow fails closed rather than minting tokens for any
+/// non-empty answer (which would make a default pool
+/// passwordless-auth-as-anyone). The Lambda trigger is emitted as a
+/// fire-and-forget event; synchronous Lambda-driven evaluation is not yet
+/// modelled.
 fn verify_custom_auth_response(
     state: &CognitoState,
     pool_id: &str,
@@ -2079,16 +2280,13 @@ fn verify_custom_auth_response(
 
     let resp = &input["ChallengeResponses"];
     let answer = resp["ANSWER"].as_str().unwrap_or("");
-    if answer.is_empty() {
-        return Err(AwsError::bad_request(
-            "InvalidParameterException",
-            "ChallengeResponses.ANSWER is required",
-        ));
-    }
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
     })?;
+    let has_verify_lambda = pool
+        .lambda_config
+        .contains_key("VerifyAuthChallengeResponse");
     if let Some(arn) = pool.lambda_config.get("VerifyAuthChallengeResponse") {
         invoke_trigger(
             ctx,
@@ -2102,13 +2300,28 @@ fn verify_custom_auth_response(
             }),
         );
     }
-    if let Some(expected) = pool.custom_auth_expected_answer.as_deref()
-        && expected != answer
-    {
-        return Err(AwsError::bad_request(
-            "NotAuthorizedException",
-            "Incorrect answer to custom challenge",
-        ));
+    match pool.custom_auth_expected_answer.as_deref() {
+        // A fixture pins the expected answer: compare directly.
+        Some(expected) => {
+            if expected != answer {
+                return Err(AwsError::bad_request(
+                    "NotAuthorizedException",
+                    "Incorrect username or password.",
+                ));
+            }
+        }
+        // No fixture: only a configured VerifyAuthChallengeResponse Lambda
+        // could decide correctness. Without one, fail closed; with one,
+        // accept a non-empty answer (synchronous Lambda evaluation is not
+        // yet modelled).
+        None => {
+            if !has_verify_lambda || answer.is_empty() {
+                return Err(AwsError::bad_request(
+                    "NotAuthorizedException",
+                    "Incorrect username or password.",
+                ));
+            }
+        }
     }
 
     let user = pool.users.get(&session.username).ok_or_else(|| {
@@ -2266,6 +2479,34 @@ mod auth_flow_tests {
     }
 
     #[test]
+    fn empty_explicit_flows_denies_password_but_allows_srp() {
+        let (state, _pool, client_id) = setup(&[], "OFF", "wes", "Passw0rd!");
+        // USER_PASSWORD_AUTH is not in the default flow set.
+        let err = initiate_auth(
+            &state,
+            &json!({ "ClientId": client_id, "AuthFlow": "USER_PASSWORD_AUTH",
+                     "AuthParameters": { "USERNAME": "wes", "PASSWORD": "Passw0rd!" } }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+        // USER_SRP_AUTH is part of the default set and gets past the gate to
+        // the SRP challenge (which needs SRP_A, absent here, so it fails for a
+        // different reason).
+        let err = initiate_auth(
+            &state,
+            &json!({ "ClientId": client_id, "AuthFlow": "USER_SRP_AUTH",
+                     "AuthParameters": { "USERNAME": "wes" } }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_ne!(
+            err.message,
+            "Auth flow not enabled for this client: USER_SRP_AUTH"
+        );
+    }
+
+    #[test]
     fn initiate_auth_accepts_listed_flow() {
         let (state, _pool, client_id) =
             setup(&["ALLOW_USER_PASSWORD_AUTH"], "OFF", "bob", "Passw0rd!");
@@ -2323,8 +2564,109 @@ mod auth_flow_tests {
     }
 
     #[test]
+    fn admin_initiate_auth_accepts_admin_no_srp_alias() {
+        let (state, pool_id, client_id) = setup(&["ADMIN_NO_SRP_AUTH"], "OFF", "nora", "Passw0rd!");
+        let res = admin_initiate_auth(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "ClientId": client_id,
+                "AuthFlow": "ADMIN_NO_SRP_AUTH",
+                "AuthParameters": { "USERNAME": "nora", "PASSWORD": "Passw0rd!" }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(res["AuthenticationResult"]["AccessToken"].is_string());
+    }
+
+    #[test]
+    fn admin_initiate_auth_rejects_plain_user_password_auth() {
+        let (state, pool_id, client_id) = setup(
+            &["ALLOW_ADMIN_USER_PASSWORD_AUTH", "ALLOW_USER_PASSWORD_AUTH"],
+            "OFF",
+            "olga",
+            "Passw0rd!",
+        );
+        let err = admin_initiate_auth(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "ClientId": client_id,
+                "AuthFlow": "USER_PASSWORD_AUTH",
+                "AuthParameters": { "USERNAME": "olga", "PASSWORD": "Passw0rd!" }
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn admin_initiate_auth_refresh_token_reissues_tokens() {
+        let (state, pool_id, client_id) = setup(
+            &["ALLOW_ADMIN_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"],
+            "OFF",
+            "pat",
+            "Passw0rd!",
+        );
+        let first = admin_initiate_auth(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "ClientId": client_id,
+                "AuthFlow": "ADMIN_USER_PASSWORD_AUTH",
+                "AuthParameters": { "USERNAME": "pat", "PASSWORD": "Passw0rd!" }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let refresh = first["AuthenticationResult"]["RefreshToken"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let res = admin_initiate_auth(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "ClientId": client_id,
+                "AuthFlow": "REFRESH_TOKEN_AUTH",
+                "AuthParameters": { "REFRESH_TOKEN": refresh }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(res["AuthenticationResult"]["AccessToken"].is_string());
+        // AWS does not reissue a refresh token on this flow.
+        assert!(res["AuthenticationResult"]["RefreshToken"].is_null());
+    }
+
+    #[test]
+    fn refresh_token_auth_rejects_garbage_token() {
+        let (state, _pool, client_id) = setup(
+            &["ALLOW_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"],
+            "OFF",
+            "quinn",
+            "Passw0rd!",
+        );
+        let err = initiate_auth(
+            &state,
+            &json!({
+                "ClientId": client_id,
+                "AuthFlow": "REFRESH_TOKEN_AUTH",
+                "AuthParameters": { "REFRESH_TOKEN": "refresh-nobody.0.deadbeef" }
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "NotAuthorizedException");
+        assert_eq!(err.message, "Invalid Refresh Token.");
+    }
+
+    #[test]
     fn sms_mfa_issuance_and_response() {
-        let (state, pool_id, client_id) = setup(&[], "ON", "eve", "Passw0rd!");
+        let (state, pool_id, client_id) =
+            setup(&["ALLOW_USER_PASSWORD_AUTH"], "ON", "eve", "Passw0rd!");
         set_user_mfa(
             &state,
             &pool_id,
@@ -2376,7 +2718,8 @@ mod auth_flow_tests {
 
     #[test]
     fn sms_mfa_response_rejects_wrong_code() {
-        let (state, pool_id, client_id) = setup(&[], "ON", "frank", "Passw0rd!");
+        let (state, pool_id, client_id) =
+            setup(&["ALLOW_USER_PASSWORD_AUTH"], "ON", "frank", "Passw0rd!");
         set_user_mfa(
             &state,
             &pool_id,
@@ -2412,7 +2755,8 @@ mod auth_flow_tests {
 
     #[test]
     fn email_otp_issuance_and_response() {
-        let (state, pool_id, client_id) = setup(&[], "ON", "grace", "Passw0rd!");
+        let (state, pool_id, client_id) =
+            setup(&["ALLOW_USER_PASSWORD_AUTH"], "ON", "grace", "Passw0rd!");
         {
             let mut pool = state.user_pools.get_mut(&pool_id).unwrap();
             let user = pool.users.get_mut("grace").unwrap();
@@ -2461,7 +2805,8 @@ mod auth_flow_tests {
 
     #[test]
     fn select_mfa_type_when_multiple_factors_then_choose_software() {
-        let (state, pool_id, client_id) = setup(&[], "ON", "heidi", "Passw0rd!");
+        let (state, pool_id, client_id) =
+            setup(&["ALLOW_USER_PASSWORD_AUTH"], "ON", "heidi", "Passw0rd!");
         // Both software-token and SMS enabled, no preference => SELECT_MFA_TYPE.
         set_user_mfa(&state, &pool_id, "heidi", None, true, Some("+12345550100"));
 
@@ -2496,7 +2841,8 @@ mod auth_flow_tests {
 
     #[test]
     fn select_mfa_type_choosing_sms_issues_code() {
-        let (state, pool_id, client_id) = setup(&[], "ON", "ivan", "Passw0rd!");
+        let (state, pool_id, client_id) =
+            setup(&["ALLOW_USER_PASSWORD_AUTH"], "ON", "ivan", "Passw0rd!");
         set_user_mfa(&state, &pool_id, "ivan", None, true, Some("+12345550100"));
 
         let challenge = initiate_auth(
@@ -2537,7 +2883,8 @@ mod auth_flow_tests {
 
     #[test]
     fn software_token_remains_default_when_only_factor() {
-        let (state, pool_id, client_id) = setup(&[], "ON", "judy", "Passw0rd!");
+        let (state, pool_id, client_id) =
+            setup(&["ALLOW_USER_PASSWORD_AUTH"], "ON", "judy", "Passw0rd!");
         set_user_mfa(&state, &pool_id, "judy", None, true, None);
         let challenge = initiate_auth(
             &state,
@@ -2883,5 +3230,201 @@ mod auth_flow_tests {
             .status
             .clone();
         assert_eq!(status, "FORCE_CHANGE_PASSWORD");
+    }
+
+    /// Put a freshly created user into FORCE_CHANGE_PASSWORD (the state
+    /// AdminCreateUser leaves them in) and return the issued challenge session.
+    fn force_change_setup() -> (CognitoState, String, String, String) {
+        let c = ctx();
+        let state = CognitoState::default();
+        let pool = pools::create_user_pool(&state, &json!({ "PoolName": "p" }), &c).unwrap();
+        let pool_id = pool["UserPool"]["Id"].as_str().unwrap().to_string();
+        let client = pools::create_user_pool_client(
+            &state,
+            &json!({ "UserPoolId": pool_id, "ClientName": "c",
+                     "ExplicitAuthFlows": ["ALLOW_USER_PASSWORD_AUTH"] }),
+            &c,
+        )
+        .unwrap();
+        let client_id = client["UserPoolClient"]["ClientId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        users::admin_create_user(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Username": "dan",
+                     "TemporaryPassword": "Temp@1234", "MessageAction": "SUPPRESS" }),
+            &c,
+        )
+        .unwrap();
+        let res = initiate_auth(
+            &state,
+            &json!({ "ClientId": client_id, "AuthFlow": "USER_PASSWORD_AUTH",
+                     "AuthParameters": { "USERNAME": "dan", "PASSWORD": "Temp@1234" } }),
+            &c,
+        )
+        .unwrap();
+        assert_eq!(res["ChallengeName"], "NEW_PASSWORD_REQUIRED");
+        // userAttributes is a JSON object string, not an array of Name/Value.
+        let attrs = res["ChallengeParameters"]["userAttributes"]
+            .as_str()
+            .unwrap();
+        assert!(serde_json::from_str::<serde_json::Map<String, Value>>(attrs).is_ok());
+        let session = res["Session"].as_str().unwrap().to_string();
+        (state, pool_id, client_id, session)
+    }
+
+    #[test]
+    fn new_password_required_completes_with_valid_session() {
+        let (state, _pool, client_id, session) = force_change_setup();
+        let res = respond_to_auth_challenge(
+            &state,
+            &json!({ "ClientId": client_id, "ChallengeName": "NEW_PASSWORD_REQUIRED",
+                     "Session": session,
+                     "ChallengeResponses": { "USERNAME": "dan", "NEW_PASSWORD": "Brandnew1!" } }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(res["AuthenticationResult"]["AccessToken"].is_string());
+    }
+
+    #[test]
+    fn new_password_required_rejects_forged_session() {
+        let (state, _pool, client_id, _session) = force_change_setup();
+        let err = respond_to_auth_challenge(
+            &state,
+            &json!({ "ClientId": client_id, "ChallengeName": "NEW_PASSWORD_REQUIRED",
+                     "Session": "made-up-session",
+                     "ChallengeResponses": { "USERNAME": "dan", "NEW_PASSWORD": "Brandnew1!" } }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "NotAuthorizedException");
+        // The user must remain unable to authenticate with the attacker password.
+        let still_forced = state
+            .user_pools
+            .get(&_pool)
+            .unwrap()
+            .users
+            .get("dan")
+            .unwrap()
+            .status
+            .clone();
+        assert_eq!(still_forced, "FORCE_CHANGE_PASSWORD");
+    }
+
+    #[test]
+    fn mfa_setup_challenge_completes_after_software_token_verified() {
+        use crate::operations::mfa;
+        // Pool with MFA ON; a fresh user has no factor, so InitiateAuth issues
+        // an MFA_SETUP challenge instead of tokens.
+        let (state, _pool, client_id) =
+            setup(&["ALLOW_USER_PASSWORD_AUTH"], "ON", "tina", "Passw0rd!");
+        let challenge = initiate_auth(
+            &state,
+            &json!({ "ClientId": client_id, "AuthFlow": "USER_PASSWORD_AUTH",
+                     "AuthParameters": { "USERNAME": "tina", "PASSWORD": "Passw0rd!" } }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(challenge["ChallengeName"], "MFA_SETUP");
+        let session = challenge["Session"].as_str().unwrap().to_string();
+
+        // Associate + verify a software token using the same session.
+        let assoc =
+            mfa::associate_software_token(&state, &json!({ "Session": session }), &ctx()).unwrap();
+        let secret = assoc["SecretCode"].as_str().unwrap();
+        let bytes = awsim_core::totp::decode_base32(secret).unwrap();
+        let code = format!("{:06}", awsim_core::totp::code_at(&bytes, now_epoch()));
+        mfa::verify_software_token(
+            &state,
+            &json!({ "Session": session, "UserCode": code }),
+            &ctx(),
+        )
+        .unwrap();
+
+        // Completing the MFA_SETUP challenge now issues tokens instead of
+        // echoing the challenge forever.
+        let res = respond_to_auth_challenge(
+            &state,
+            &json!({ "ClientId": client_id, "ChallengeName": "MFA_SETUP",
+                     "Session": session, "ChallengeResponses": {} }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(res["AuthenticationResult"]["AccessToken"].is_string());
+    }
+
+    #[test]
+    fn custom_auth_fails_closed_without_fixture_or_lambda() {
+        let (state, _pool, client_id) = setup(&["ALLOW_CUSTOM_AUTH"], "OFF", "rex", "Passw0rd!");
+        let challenge = initiate_auth(
+            &state,
+            &json!({ "ClientId": client_id, "AuthFlow": "CUSTOM_AUTH",
+                     "AuthParameters": { "USERNAME": "rex" } }),
+            &ctx(),
+        )
+        .unwrap();
+        let session = challenge["Session"].as_str().unwrap().to_string();
+        // No DefineAuthChallenge lambda and no expected-answer fixture: any
+        // answer must be rejected, not accepted.
+        let err = respond_to_auth_challenge(
+            &state,
+            &json!({ "ClientId": client_id, "ChallengeName": "CUSTOM_CHALLENGE",
+                     "Session": session,
+                     "ChallengeResponses": { "USERNAME": "rex", "ANSWER": "anything" } }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "NotAuthorizedException");
+    }
+
+    #[test]
+    fn custom_auth_succeeds_with_expected_answer_fixture() {
+        let (state, pool_id, client_id) = setup(&["ALLOW_CUSTOM_AUTH"], "OFF", "sam", "Passw0rd!");
+        state
+            .user_pools
+            .get_mut(&pool_id)
+            .unwrap()
+            .custom_auth_expected_answer = Some("1337".to_string());
+        let challenge = initiate_auth(
+            &state,
+            &json!({ "ClientId": client_id, "AuthFlow": "CUSTOM_AUTH",
+                     "AuthParameters": { "USERNAME": "sam" } }),
+            &ctx(),
+        )
+        .unwrap();
+        let session = challenge["Session"].as_str().unwrap().to_string();
+        let res = respond_to_auth_challenge(
+            &state,
+            &json!({ "ClientId": client_id, "ChallengeName": "CUSTOM_CHALLENGE",
+                     "Session": session,
+                     "ChallengeResponses": { "USERNAME": "sam", "ANSWER": "1337" } }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(res["AuthenticationResult"]["AccessToken"].is_string());
+    }
+
+    #[test]
+    fn new_password_required_rejects_username_session_mismatch() {
+        let (state, pool_id, client_id, session) = force_change_setup();
+        users::admin_create_user(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Username": "erin",
+                     "TemporaryPassword": "Temp@1234", "MessageAction": "SUPPRESS" }),
+            &ctx(),
+        )
+        .unwrap();
+        // dan's session must not let a caller rewrite erin's password.
+        let err = respond_to_auth_challenge(
+            &state,
+            &json!({ "ClientId": client_id, "ChallengeName": "NEW_PASSWORD_REQUIRED",
+                     "Session": session,
+                     "ChallengeResponses": { "USERNAME": "erin", "NEW_PASSWORD": "Brandnew1!" } }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "NotAuthorizedException");
     }
 }
