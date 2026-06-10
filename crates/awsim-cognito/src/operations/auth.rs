@@ -2041,13 +2041,13 @@ fn verify_srp_password(
 // CUSTOM_AUTH flow
 // ---------------------------------------------------------------------------
 
-/// Phase 1 of CUSTOM_AUTH. Real Cognito invokes the DefineAuthChallenge and
-/// CreateAuthChallenge Lambda triggers to decide what challenge to issue
-/// and what parameters to expose to the client. awsim has no synchronous
-/// Lambda invocation path, so we publish those triggers as fire-and-forget
-/// events and emit a CUSTOM_CHALLENGE backed by the pool's
-/// `custom_auth_challenge_parameters` fixture. Tests can configure that
-/// fixture or the expected answer directly via UpdateUserPool.
+/// Handle an `InitiateAuth(CUSTOM_AUTH)`. Real Cognito invokes the
+/// DefineAuthChallenge and CreateAuthChallenge Lambda triggers to decide what
+/// challenge to issue and what parameters to expose to the client. awsim has no
+/// synchronous Lambda invocation path, so we publish those triggers as
+/// fire-and-forget events and emit a CUSTOM_CHALLENGE backed by the pool's
+/// `custom_auth_challenge_parameters` fixture. Tests can configure that fixture
+/// or the expected answer directly via UpdateUserPool.
 fn start_custom_auth_challenge(
     state: &CognitoState,
     client_id: &str,
@@ -2137,12 +2137,16 @@ fn start_custom_auth_challenge(
     }))
 }
 
-/// Phase 2 of CUSTOM_AUTH. Real Cognito would call the
-/// VerifyAuthChallengeResponse Lambda to decide if `ANSWER` is correct.
-/// awsim does the simplest equivalent: compare against the pool's
-/// `custom_auth_expected_answer` fixture (when set), or accept any
-/// non-empty answer otherwise. The Lambda trigger is still emitted as a
-/// fire-and-forget event so tests can observe it.
+/// Handle a `RespondToAuthChallenge(CUSTOM_CHALLENGE)`. Real Cognito calls the
+/// VerifyAuthChallengeResponse Lambda to decide if `ANSWER` is correct. awsim
+/// approximates this: it compares against the pool's
+/// `custom_auth_expected_answer` fixture when set. When neither a fixture nor a
+/// VerifyAuthChallengeResponse Lambda is configured there is no way to validate
+/// the answer, so the flow fails closed rather than minting tokens for any
+/// non-empty answer (which would make a default pool
+/// passwordless-auth-as-anyone). The Lambda trigger is emitted as a
+/// fire-and-forget event; synchronous Lambda-driven evaluation is not yet
+/// modelled.
 fn verify_custom_auth_response(
     state: &CognitoState,
     pool_id: &str,
@@ -2175,16 +2179,13 @@ fn verify_custom_auth_response(
 
     let resp = &input["ChallengeResponses"];
     let answer = resp["ANSWER"].as_str().unwrap_or("");
-    if answer.is_empty() {
-        return Err(AwsError::bad_request(
-            "InvalidParameterException",
-            "ChallengeResponses.ANSWER is required",
-        ));
-    }
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
     })?;
+    let has_verify_lambda = pool
+        .lambda_config
+        .contains_key("VerifyAuthChallengeResponse");
     if let Some(arn) = pool.lambda_config.get("VerifyAuthChallengeResponse") {
         invoke_trigger(
             ctx,
@@ -2198,13 +2199,28 @@ fn verify_custom_auth_response(
             }),
         );
     }
-    if let Some(expected) = pool.custom_auth_expected_answer.as_deref()
-        && expected != answer
-    {
-        return Err(AwsError::bad_request(
-            "NotAuthorizedException",
-            "Incorrect answer to custom challenge",
-        ));
+    match pool.custom_auth_expected_answer.as_deref() {
+        // A fixture pins the expected answer: compare directly.
+        Some(expected) => {
+            if expected != answer {
+                return Err(AwsError::bad_request(
+                    "NotAuthorizedException",
+                    "Incorrect username or password.",
+                ));
+            }
+        }
+        // No fixture: only a configured VerifyAuthChallengeResponse Lambda
+        // could decide correctness. Without one, fail closed; with one,
+        // accept a non-empty answer (synchronous Lambda evaluation is not
+        // yet modelled).
+        None => {
+            if !has_verify_lambda || answer.is_empty() {
+                return Err(AwsError::bad_request(
+                    "NotAuthorizedException",
+                    "Incorrect username or password.",
+                ));
+            }
+        }
     }
 
     let user = pool.users.get(&session.username).ok_or_else(|| {
@@ -3160,6 +3176,57 @@ mod auth_flow_tests {
             .status
             .clone();
         assert_eq!(still_forced, "FORCE_CHANGE_PASSWORD");
+    }
+
+    #[test]
+    fn custom_auth_fails_closed_without_fixture_or_lambda() {
+        let (state, _pool, client_id) = setup(&["ALLOW_CUSTOM_AUTH"], "OFF", "rex", "Passw0rd!");
+        let challenge = initiate_auth(
+            &state,
+            &json!({ "ClientId": client_id, "AuthFlow": "CUSTOM_AUTH",
+                     "AuthParameters": { "USERNAME": "rex" } }),
+            &ctx(),
+        )
+        .unwrap();
+        let session = challenge["Session"].as_str().unwrap().to_string();
+        // No DefineAuthChallenge lambda and no expected-answer fixture: any
+        // answer must be rejected, not accepted.
+        let err = respond_to_auth_challenge(
+            &state,
+            &json!({ "ClientId": client_id, "ChallengeName": "CUSTOM_CHALLENGE",
+                     "Session": session,
+                     "ChallengeResponses": { "USERNAME": "rex", "ANSWER": "anything" } }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "NotAuthorizedException");
+    }
+
+    #[test]
+    fn custom_auth_succeeds_with_expected_answer_fixture() {
+        let (state, pool_id, client_id) = setup(&["ALLOW_CUSTOM_AUTH"], "OFF", "sam", "Passw0rd!");
+        state
+            .user_pools
+            .get_mut(&pool_id)
+            .unwrap()
+            .custom_auth_expected_answer = Some("1337".to_string());
+        let challenge = initiate_auth(
+            &state,
+            &json!({ "ClientId": client_id, "AuthFlow": "CUSTOM_AUTH",
+                     "AuthParameters": { "USERNAME": "sam" } }),
+            &ctx(),
+        )
+        .unwrap();
+        let session = challenge["Session"].as_str().unwrap().to_string();
+        let res = respond_to_auth_challenge(
+            &state,
+            &json!({ "ClientId": client_id, "ChallengeName": "CUSTOM_CHALLENGE",
+                     "Session": session,
+                     "ChallengeResponses": { "USERNAME": "sam", "ANSWER": "1337" } }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(res["AuthenticationResult"]["AccessToken"].is_string());
     }
 
     #[test]
