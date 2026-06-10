@@ -276,6 +276,31 @@ pub struct ImportRecord {
     pub s3_bucket: String,
     pub start_time: f64,
     pub end_time: Option<f64>,
+    #[serde(default)]
+    pub s3_key_prefix: Option<String>,
+    /// "NONE" | "GZIP"; `None` for records persisted before compression
+    /// support existed.
+    #[serde(default)]
+    pub input_compression_type: Option<String>,
+    /// Source items successfully written to the table.
+    #[serde(default)]
+    pub imported_item_count: u64,
+    /// Source items examined, including ones that failed to parse.
+    #[serde(default)]
+    pub processed_item_count: u64,
+    /// Total bytes of the source objects read from S3.
+    #[serde(default)]
+    pub processed_size_bytes: u64,
+    /// Source items rejected (malformed line or missing key attributes).
+    #[serde(default)]
+    pub error_count: u64,
+    #[serde(default)]
+    pub failure_code: Option<String>,
+    #[serde(default)]
+    pub failure_message: Option<String>,
+    /// The `TableCreationParameters` echoed by `DescribeImport`.
+    #[serde(default)]
+    pub table_creation_parameters: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

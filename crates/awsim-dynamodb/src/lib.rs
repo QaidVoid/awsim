@@ -37,6 +37,10 @@ pub struct DynamoDbService {
     /// data and manifest objects. Unset until [`Self::set_s3_writer`]
     /// runs; exports then record metadata only.
     s3_writer: std::sync::OnceLock<Arc<dyn awsim_core::S3ObjectWriter>>,
+    /// In-process S3 reader used by `ImportTable` to load source objects.
+    /// Unset until [`Self::set_s3_reader`] runs; imports then create the
+    /// table without loading items.
+    s3_reader: std::sync::OnceLock<Arc<dyn awsim_core::S3ObjectReader>>,
     /// Holds the per-process `TempDir` for the no-data-dir case so
     /// `dynamodb.db` + `.db-wal` + `.db-shm` are deleted when the
     /// service drops. `None` when persistent storage is in use — the
@@ -68,6 +72,7 @@ impl DynamoDbService {
             store: AccountRegionStore::new(),
             sqlite: Arc::new(sqlite),
             s3_writer: std::sync::OnceLock::new(),
+            s3_reader: std::sync::OnceLock::new(),
             _tempdir: Some(dir),
         }
     }
@@ -95,6 +100,7 @@ impl DynamoDbService {
             store: AccountRegionStore::new(),
             sqlite: Arc::new(sqlite),
             s3_writer: std::sync::OnceLock::new(),
+            s3_reader: std::sync::OnceLock::new(),
             _tempdir: None,
         }
     }
@@ -104,6 +110,13 @@ impl DynamoDbService {
     /// called after the service is registered; only the first call wins.
     pub fn set_s3_writer(&self, writer: Arc<dyn awsim_core::S3ObjectWriter>) {
         let _ = self.s3_writer.set(writer);
+    }
+
+    /// Wire the in-process S3 reader that `ImportTable` uses to load
+    /// source objects from the embedded S3. May be called after the
+    /// service is registered; only the first call wins.
+    pub fn set_s3_reader(&self, reader: Arc<dyn awsim_core::S3ObjectReader>) {
+        let _ = self.s3_reader.set(reader);
     }
 
     /// Reclaim disk space after heavy DELETE / UPDATE churn — exposed
@@ -686,7 +699,23 @@ impl ServiceHandler for DynamoDbService {
 
             // Imports
             "DescribeImport" => operations::export_import::describe_import(&state, &input, ctx),
-            "ImportTable" => operations::export_import::import_table(&state, &input, ctx),
+            "ImportTable" => {
+                let state = state.clone();
+                let sqlite = self.sqlite.clone();
+                let reader = self.s3_reader.get().cloned();
+                let input = input.clone();
+                let ctx = ctx.clone();
+                run_blocking(move || {
+                    operations::export_import::import_table(
+                        &state,
+                        &sqlite,
+                        reader.as_ref(),
+                        &input,
+                        &ctx,
+                    )
+                })
+                .await
+            }
             "ListImports" => operations::export_import::list_imports(&state, &input, ctx),
 
             // Contributor Insights

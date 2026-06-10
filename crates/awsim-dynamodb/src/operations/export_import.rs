@@ -11,14 +11,14 @@
 use std::io::Write as _;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use awsim_core::{AwsError, RequestContext, S3ObjectWriter, arn};
+use awsim_core::{AwsError, RequestContext, S3ObjectReader, S3ObjectWriter, arn};
 use base64::Engine as _;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use serde_json::{Value, json};
 
 use crate::sqlite_store::SqliteStore;
-use crate::state::{DynamoState, ExportRecord};
+use crate::state::{DynamoState, ExportRecord, ImportRecord};
 
 use super::{opt_str, require_str};
 
@@ -347,6 +347,8 @@ pub fn list_exports(
 
 // ─── Import ───────────────────────────────────────────────────────────────────
 
+/// DescribeImport reports the stored import, including item counts and
+/// any failure recorded while reading from S3.
 pub fn describe_import(
     state: &DynamoState,
     input: &Value,
@@ -360,24 +362,267 @@ pub fn describe_import(
         )
     })?;
 
-    Ok(json!({
-        "ImportTableDescription": {
-            "ImportArn": record.import_arn,
-            "ImportStatus": record.import_status,
-            "TableArn": record.table_arn,
-            "TableId": "00000000-0000-0000-0000-000000000000",
-            "InputFormat": record.input_format,
-            "S3BucketSource": {
-                "S3Bucket": record.s3_bucket
-            },
-            "StartTime": record.start_time,
-            "EndTime": record.end_time
-        }
-    }))
+    Ok(json!({ "ImportTableDescription": import_description(&record) }))
 }
 
+fn import_description(record: &ImportRecord) -> Value {
+    let mut source = json!({ "S3Bucket": record.s3_bucket });
+    if let Some(prefix) = &record.s3_key_prefix {
+        source["S3KeyPrefix"] = json!(prefix);
+    }
+    let mut desc = json!({
+        "ImportArn": record.import_arn,
+        "ImportStatus": record.import_status,
+        "TableArn": record.table_arn,
+        "TableId": "00000000-0000-0000-0000-000000000000",
+        "InputFormat": record.input_format,
+        "S3BucketSource": source,
+        "StartTime": record.start_time,
+        "EndTime": record.end_time,
+        "ProcessedItemCount": record.processed_item_count,
+        "ImportedItemCount": record.imported_item_count,
+        "ProcessedSizeBytes": record.processed_size_bytes,
+        "ErrorCount": record.error_count
+    });
+    if let Some(compression) = &record.input_compression_type {
+        desc["InputCompressionType"] = json!(compression);
+    }
+    if let Some(params) = &record.table_creation_parameters {
+        desc["TableCreationParameters"] = params.clone();
+    }
+    if let Some(code) = &record.failure_code {
+        desc["FailureCode"] = json!(code);
+    }
+    if let Some(message) = &record.failure_message {
+        desc["FailureMessage"] = json!(message);
+    }
+    desc
+}
+
+/// Counters accumulated while loading source objects.
+#[derive(Default)]
+struct ImportStats {
+    imported: u64,
+    processed: u64,
+    size_bytes: u64,
+    errors: u64,
+}
+
+/// Per-file CSV settings resolved from `InputFormatOptions.Csv`.
+struct CsvOptions {
+    delimiter: char,
+    header_list: Option<Vec<String>>,
+}
+
+fn csv_options(input: &Value) -> Result<CsvOptions, AwsError> {
+    let csv = input
+        .get("InputFormatOptions")
+        .and_then(|o| o.get("Csv"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let delimiter = match csv.get("Delimiter").and_then(|v| v.as_str()) {
+        None => ',',
+        Some(d) if d.chars().count() == 1 => d.chars().next().unwrap_or(','),
+        Some(d) => {
+            return Err(AwsError::bad_request(
+                "ValidationException",
+                format!("Delimiter '{d}' must be a single character"),
+            ));
+        }
+    };
+    let header_list = csv.get("HeaderList").and_then(|v| v.as_array()).map(|a| {
+        a.iter()
+            .filter_map(|h| h.as_str().map(String::from))
+            .collect()
+    });
+    Ok(CsvOptions {
+        delimiter,
+        header_list,
+    })
+}
+
+/// Split one CSV record into fields, honoring double-quoted fields with
+/// `""` escapes.
+fn parse_csv_record(line: &str, delimiter: char) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if in_quotes {
+            if c == '"' {
+                if chars.peek() == Some(&'"') {
+                    current.push('"');
+                    chars.next();
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                current.push(c);
+            }
+        } else if c == '"' && current.is_empty() {
+            in_quotes = true;
+        } else if c == delimiter {
+            fields.push(std::mem::take(&mut current));
+        } else {
+            current.push(c);
+        }
+    }
+    fields.push(current);
+    fields
+}
+
+/// Turn one CSV record into a wire-format item. Key and index attributes
+/// take their declared type from `attr_types`; every other column is a
+/// DynamoDB string, matching the AWS CSV import contract. Empty fields
+/// are omitted.
+fn csv_record_to_item(
+    headers: &[String],
+    fields: &[String],
+    attr_types: &std::collections::HashMap<String, String>,
+) -> Value {
+    let mut item = serde_json::Map::new();
+    for (header, field) in headers.iter().zip(fields) {
+        if field.is_empty() {
+            continue;
+        }
+        let attr_type = attr_types.get(header).map(String::as_str).unwrap_or("S");
+        item.insert(header.clone(), json!({ attr_type: field }));
+    }
+    Value::Object(item)
+}
+
+fn gunzip_text(bytes: &[u8]) -> Result<String, AwsError> {
+    use std::io::Read as _;
+    let mut text = String::new();
+    flate2::read::GzDecoder::new(bytes)
+        .read_to_string(&mut text)
+        .map_err(|e| AwsError::internal(format!("decompress import object: {e}")))?;
+    Ok(text)
+}
+
+/// Write one wire-format item into the table. Returns false (counted as
+/// an item error) when the item is malformed or missing key attributes;
+/// propagates real storage failures.
+fn put_import_item(
+    sqlite: &SqliteStore,
+    table: &crate::state::Table,
+    item_val: &Value,
+    ctx: &RequestContext,
+) -> Result<bool, AwsError> {
+    let Some(item) = crate::keys::storage_value_to_item(item_val.clone()) else {
+        return Ok(false);
+    };
+    let Some(keys) = crate::keys::extract_item_keys(table, &item) else {
+        return Ok(false);
+    };
+    sqlite.put_item(
+        &ctx.account_id,
+        &ctx.region,
+        &table.name,
+        &keys.pk,
+        &keys.sk,
+        item_val,
+        &keys.gsi,
+    )?;
+    Ok(true)
+}
+
+/// Read every source object under the bucket and key prefix and load its
+/// items into the freshly created table.
+#[allow(clippy::too_many_arguments)]
+fn load_import_objects(
+    state: &DynamoState,
+    sqlite: &SqliteStore,
+    reader: &dyn S3ObjectReader,
+    table_name: &str,
+    bucket: &str,
+    prefix: &str,
+    format: &str,
+    gzipped: bool,
+    csv: &CsvOptions,
+    ctx: &RequestContext,
+) -> Result<ImportStats, AwsError> {
+    let table = state
+        .tables
+        .get(table_name)
+        .map(|t| t.value().clone())
+        .ok_or_else(|| AwsError::internal("import target table disappeared"))?;
+    let attr_types: std::collections::HashMap<String, String> = table
+        .attribute_definitions
+        .iter()
+        .map(|d| (d.attribute_name.clone(), d.attribute_type.clone()))
+        .collect();
+
+    let mut stats = ImportStats::default();
+    for key in reader.list_objects(bucket, prefix, &ctx.account_id, &ctx.region)? {
+        let bytes = reader.get_object(bucket, &key, &ctx.account_id, &ctx.region)?;
+        stats.size_bytes += bytes.len() as u64;
+        let text = if gzipped {
+            gunzip_text(&bytes)?
+        } else {
+            String::from_utf8_lossy(&bytes).into_owned()
+        };
+
+        let mut lines = text.lines().filter(|l| !l.trim().is_empty());
+        let headers: Vec<String> = if format == "CSV" {
+            match &csv.header_list {
+                Some(list) => list.clone(),
+                // Without an explicit HeaderList the first record of each
+                // file is its header row.
+                None => match lines.next() {
+                    Some(line) => parse_csv_record(line, csv.delimiter)
+                        .into_iter()
+                        .map(|h| h.trim().to_string())
+                        .collect(),
+                    None => continue,
+                },
+            }
+        } else {
+            Vec::new()
+        };
+
+        for line in lines {
+            stats.processed += 1;
+            let item_val = if format == "CSV" {
+                let fields = parse_csv_record(line, csv.delimiter);
+                csv_record_to_item(&headers, &fields, &attr_types)
+            } else {
+                match serde_json::from_str::<Value>(line) {
+                    // Lines are `{"Item": {...}}` in AWS export output;
+                    // accept a bare item object as well.
+                    Ok(v) => v.get("Item").cloned().unwrap_or(v),
+                    Err(_) => {
+                        stats.errors += 1;
+                        continue;
+                    }
+                }
+            };
+            if put_import_item(sqlite, &table, &item_val, ctx)? {
+                stats.imported += 1;
+            } else {
+                stats.errors += 1;
+            }
+        }
+    }
+    Ok(stats)
+}
+
+/// ImportTable creates the target table from `TableCreationParameters`
+/// and loads every source object under the configured S3 bucket and key
+/// prefix.
+///
+/// The import runs synchronously: the response reports `IN_PROGRESS` to
+/// match the AWS wire contract, and `DescribeImport` then shows
+/// `COMPLETED` with item counts (malformed source items are skipped and
+/// surface in `ErrorCount`), or `FAILED` with the S3 error when the
+/// source could not be read. Supports `DYNAMODB_JSON` and `CSV` input in
+/// plain or GZIP compression. When no in-process S3 reader is wired, the
+/// import creates the table without loading items.
 pub fn import_table(
     state: &DynamoState,
+    sqlite: &SqliteStore,
+    s3: Option<&std::sync::Arc<dyn S3ObjectReader>>,
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
@@ -395,11 +640,58 @@ pub fn import_table(
     let s3_bucket = s3_source
         .get("S3Bucket")
         .and_then(|v| v.as_str())
-        .unwrap_or("")
+        .filter(|b| !b.is_empty())
+        .ok_or_else(|| AwsError::bad_request("ValidationException", "S3Bucket is required"))?
         .to_string();
-    let input_format = opt_str(input, "InputFormat")
-        .unwrap_or("DYNAMODB_JSON")
-        .to_string();
+    let s3_key_prefix = s3_source
+        .get("S3KeyPrefix")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    let input_format = opt_str(input, "InputFormat").unwrap_or("DYNAMODB_JSON");
+    match input_format {
+        "DYNAMODB_JSON" | "CSV" => {}
+        "ION" => {
+            return Err(AwsError::bad_request(
+                "ValidationException",
+                "ION input format is not supported",
+            ));
+        }
+        other => {
+            return Err(AwsError::bad_request(
+                "ValidationException",
+                format!(
+                    "Value '{other}' at 'inputFormat' failed to satisfy constraint: \
+                     Member must satisfy enum value set: [CSV, DYNAMODB_JSON, ION]"
+                ),
+            ));
+        }
+    }
+    let compression = opt_str(input, "InputCompressionType").unwrap_or("NONE");
+    let gzipped = match compression {
+        "NONE" => false,
+        "GZIP" => true,
+        "ZSTD" => {
+            return Err(AwsError::bad_request(
+                "ValidationException",
+                "ZSTD input compression is not supported",
+            ));
+        }
+        other => {
+            return Err(AwsError::bad_request(
+                "ValidationException",
+                format!(
+                    "Value '{other}' at 'inputCompressionType' failed to satisfy constraint: \
+                     Member must satisfy enum value set: [GZIP, ZSTD, NONE]"
+                ),
+            ));
+        }
+    };
+    let csv = csv_options(input)?;
+
+    // Create the target table first; a name collision surfaces as the
+    // usual ResourceInUseException before any data moves.
+    crate::operations::table::create_table(state, sqlite, params, ctx)?;
 
     let now = now_epoch_f64();
     let table_arn = arn::build(ctx, "dynamodb", format!("table/{table_name}"));
@@ -409,32 +701,61 @@ pub fn import_table(
         format!("table/{table_name}/import/{now:016.0}"),
     );
 
-    let record = crate::state::ImportRecord {
+    let mut record = ImportRecord {
         import_arn: import_arn.clone(),
-        table_arn: table_arn.clone(),
+        table_arn,
         table_name: table_name.to_string(),
-        import_status: "IN_PROGRESS".to_string(),
-        input_format: input_format.clone(),
+        import_status: "COMPLETED".to_string(),
+        input_format: input_format.to_string(),
         s3_bucket: s3_bucket.clone(),
         start_time: now,
         end_time: None,
+        s3_key_prefix: s3_key_prefix.clone(),
+        input_compression_type: Some(compression.to_string()),
+        imported_item_count: 0,
+        processed_item_count: 0,
+        processed_size_bytes: 0,
+        error_count: 0,
+        failure_code: None,
+        failure_message: None,
+        table_creation_parameters: Some(params.clone()),
     };
 
-    state.imports.insert(import_arn.clone(), record);
-
-    Ok(json!({
-        "ImportTableDescription": {
-            "ImportArn": import_arn,
-            "ImportStatus": "IN_PROGRESS",
-            "TableArn": table_arn,
-            "TableId": "00000000-0000-0000-0000-000000000000",
-            "InputFormat": input_format,
-            "S3BucketSource": {
-                "S3Bucket": s3_bucket
-            },
-            "StartTime": now
+    if let Some(reader) = s3 {
+        match load_import_objects(
+            state,
+            sqlite,
+            reader.as_ref(),
+            table_name,
+            &s3_bucket,
+            s3_key_prefix.as_deref().unwrap_or(""),
+            input_format,
+            gzipped,
+            &csv,
+            ctx,
+        ) {
+            Ok(stats) => {
+                record.imported_item_count = stats.imported;
+                record.processed_item_count = stats.processed;
+                record.processed_size_bytes = stats.size_bytes;
+                record.error_count = stats.errors;
+            }
+            Err(err) => {
+                record.import_status = "FAILED".to_string();
+                record.failure_code = Some(err.code.clone());
+                record.failure_message = Some(err.message.clone());
+            }
         }
-    }))
+    }
+    record.end_time = Some(now_epoch_f64());
+
+    let mut response = import_description(&record);
+    state.imports.insert(import_arn, record);
+
+    // AWS answers the initial request with IN_PROGRESS; the settled
+    // status is visible on the next DescribeImport.
+    response["ImportStatus"] = json!("IN_PROGRESS");
+    Ok(json!({ "ImportTableDescription": response }))
 }
 
 pub fn list_imports(
@@ -704,5 +1025,261 @@ mod tests {
             desc["ExportDescription"]["FailureCode"],
             json!("NoSuchBucket")
         );
+    }
+
+    /// In-memory S3 source for imports, keyed by object key.
+    #[derive(Default)]
+    struct MockSource {
+        objects: std::collections::BTreeMap<String, Vec<u8>>,
+    }
+
+    impl S3ObjectReader for MockSource {
+        fn get_object(
+            &self,
+            _bucket: &str,
+            key: &str,
+            _account: &str,
+            _region: &str,
+        ) -> Result<Vec<u8>, AwsError> {
+            self.objects.get(key).cloned().ok_or_else(|| {
+                AwsError::service_not_found("NoSuchKey", format!("missing key: {key}"))
+            })
+        }
+
+        fn list_objects(
+            &self,
+            _bucket: &str,
+            prefix: &str,
+            _account: &str,
+            _region: &str,
+        ) -> Result<Vec<String>, AwsError> {
+            Ok(self
+                .objects
+                .keys()
+                .filter(|k| k.starts_with(prefix))
+                .cloned()
+                .collect())
+        }
+    }
+
+    fn import_input(format: &str) -> Value {
+        json!({
+            "TableCreationParameters": {
+                "TableName": "imported",
+                "KeySchema": [{ "AttributeName": "pk", "KeyType": "HASH" }],
+                "AttributeDefinitions": [{ "AttributeName": "pk", "AttributeType": "S" }],
+                "BillingMode": "PAY_PER_REQUEST"
+            },
+            "S3BucketSource": { "S3Bucket": "src", "S3KeyPrefix": "seed/" },
+            "InputFormat": format
+        })
+    }
+
+    fn run_import(
+        state: &DynamoState,
+        sqlite: &SqliteStore,
+        source: MockSource,
+        input: &Value,
+        c: &RequestContext,
+    ) -> Value {
+        let reader: Arc<dyn S3ObjectReader> = Arc::new(source);
+        let resp = import_table(state, sqlite, Some(&reader), input, c).unwrap();
+        assert_eq!(
+            resp["ImportTableDescription"]["ImportStatus"],
+            json!("IN_PROGRESS")
+        );
+        let import_arn = resp["ImportTableDescription"]["ImportArn"]
+            .as_str()
+            .unwrap();
+        describe_import(state, &json!({ "ImportArn": import_arn }), c).unwrap()
+            ["ImportTableDescription"]
+            .clone()
+    }
+
+    #[test]
+    fn import_dynamodb_json_creates_table_and_loads_items() {
+        let state = DynamoState::default();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+
+        let mut source = MockSource::default();
+        source.objects.insert(
+            "seed/part-1.json".into(),
+            b"{\"Item\":{\"pk\":{\"S\":\"a\"},\"v\":{\"N\":\"1\"}}}\n{\"Item\":{\"pk\":{\"S\":\"b\"}}}\n"
+                .to_vec(),
+        );
+        source.objects.insert(
+            "seed/part-2.json".into(),
+            b"{\"Item\":{\"pk\":{\"S\":\"c\"}}}\n".to_vec(),
+        );
+        source
+            .objects
+            .insert("other/ignored.json".into(), b"{}".to_vec());
+
+        let desc = run_import(&state, &sqlite, source, &import_input("DYNAMODB_JSON"), &c);
+        assert_eq!(desc["ImportStatus"], json!("COMPLETED"));
+        assert_eq!(desc["ImportedItemCount"], json!(3));
+        assert_eq!(desc["ProcessedItemCount"], json!(3));
+        assert_eq!(desc["ErrorCount"], json!(0));
+        assert!(desc["ProcessedSizeBytes"].as_u64().unwrap() > 0);
+
+        let got = crate::operations::item::get_item(
+            &state,
+            &sqlite,
+            &json!({ "TableName": "imported", "Key": { "pk": { "S": "a" } } }),
+            &c,
+        )
+        .unwrap();
+        assert_eq!(got["Item"]["v"]["N"], json!("1"));
+    }
+
+    #[test]
+    fn import_reads_gzip_compressed_objects() {
+        let state = DynamoState::default();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+
+        let mut source = MockSource::default();
+        source.objects.insert(
+            "seed/part-1.json.gz".into(),
+            gzip(b"{\"Item\":{\"pk\":{\"S\":\"a\"}}}\n").unwrap(),
+        );
+
+        let mut input = import_input("DYNAMODB_JSON");
+        input["InputCompressionType"] = json!("GZIP");
+        let desc = run_import(&state, &sqlite, source, &input, &c);
+        assert_eq!(desc["ImportStatus"], json!("COMPLETED"));
+        assert_eq!(desc["ImportedItemCount"], json!(1));
+    }
+
+    #[test]
+    fn import_csv_types_key_columns_and_strings_the_rest() {
+        let state = DynamoState::default();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+
+        let mut source = MockSource::default();
+        source.objects.insert(
+            "seed/data.csv".into(),
+            b"id,name,score\n1,\"Ada, B.\",10\n2,Grace,\n".to_vec(),
+        );
+
+        let mut input = import_input("CSV");
+        input["TableCreationParameters"]["KeySchema"] =
+            json!([{ "AttributeName": "id", "KeyType": "HASH" }]);
+        input["TableCreationParameters"]["AttributeDefinitions"] =
+            json!([{ "AttributeName": "id", "AttributeType": "N" }]);
+        let desc = run_import(&state, &sqlite, source, &input, &c);
+        assert_eq!(desc["ImportStatus"], json!("COMPLETED"));
+        assert_eq!(desc["ImportedItemCount"], json!(2));
+
+        let got = crate::operations::item::get_item(
+            &state,
+            &sqlite,
+            &json!({ "TableName": "imported", "Key": { "id": { "N": "1" } } }),
+            &c,
+        )
+        .unwrap();
+        assert_eq!(got["Item"]["name"]["S"], json!("Ada, B."));
+        assert_eq!(got["Item"]["score"]["S"], json!("10"));
+        let sparse = crate::operations::item::get_item(
+            &state,
+            &sqlite,
+            &json!({ "TableName": "imported", "Key": { "id": { "N": "2" } } }),
+            &c,
+        )
+        .unwrap();
+        assert!(sparse["Item"].get("score").is_none(), "empty field omitted");
+    }
+
+    #[test]
+    fn import_counts_bad_source_items_without_failing() {
+        let state = DynamoState::default();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+
+        let mut source = MockSource::default();
+        source.objects.insert(
+            "seed/part-1.json".into(),
+            b"{\"Item\":{\"pk\":{\"S\":\"a\"}}}\nnot json\n{\"Item\":{\"wrong\":{\"S\":\"x\"}}}\n"
+                .to_vec(),
+        );
+
+        let desc = run_import(&state, &sqlite, source, &import_input("DYNAMODB_JSON"), &c);
+        assert_eq!(desc["ImportStatus"], json!("COMPLETED"));
+        assert_eq!(desc["ImportedItemCount"], json!(1));
+        assert_eq!(desc["ProcessedItemCount"], json!(3));
+        assert_eq!(desc["ErrorCount"], json!(2));
+    }
+
+    #[test]
+    fn import_rejects_unsupported_format_and_compression() {
+        let state = DynamoState::default();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+
+        let err = import_table(&state, &sqlite, None, &import_input("ION"), &c).unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("ION"));
+
+        let mut input = import_input("DYNAMODB_JSON");
+        input["InputCompressionType"] = json!("ZSTD");
+        let err = import_table(&state, &sqlite, None, &input, &c).unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("ZSTD"));
+    }
+
+    #[test]
+    fn exported_data_files_round_trip_through_import() {
+        let state = DynamoState::default();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        let table_arn = table_with_items(&state, &sqlite, &c, 5);
+        enable_pitr(&state, &c);
+
+        let mock = Arc::new(MockS3::default());
+        let writer: Arc<dyn S3ObjectWriter> = mock.clone();
+        export_table_to_point_in_time(
+            &state,
+            &sqlite,
+            Some(&writer),
+            &json!({ "TableArn": table_arn, "S3Bucket": "exports" }),
+            &c,
+        )
+        .unwrap();
+
+        let mut source = MockSource::default();
+        for (key, bytes) in mock.objects.lock().unwrap().iter() {
+            if key.ends_with(".json.gz") {
+                source.objects.insert(key.clone(), bytes.clone());
+            }
+        }
+        assert_eq!(source.objects.len(), 1);
+
+        let mut input = import_input("DYNAMODB_JSON");
+        input["S3BucketSource"]["S3KeyPrefix"] = json!("AWSDynamoDB/");
+        input["InputCompressionType"] = json!("GZIP");
+        let desc = run_import(&state, &sqlite, source, &input, &c);
+        assert_eq!(desc["ImportStatus"], json!("COMPLETED"));
+        assert_eq!(desc["ImportedItemCount"], json!(5));
+        assert_eq!(desc["ErrorCount"], json!(0));
+    }
+
+    #[test]
+    fn import_into_existing_table_is_rejected() {
+        let state = DynamoState::default();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        create_table(
+            &state,
+            &sqlite,
+            &import_input("DYNAMODB_JSON")["TableCreationParameters"],
+            &c,
+        )
+        .unwrap();
+
+        let err =
+            import_table(&state, &sqlite, None, &import_input("DYNAMODB_JSON"), &c).unwrap_err();
+        assert_eq!(err.code, "ResourceInUseException");
     }
 }
