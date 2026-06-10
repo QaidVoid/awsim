@@ -224,6 +224,7 @@ fn mfa_challenge_response(
             "Session": session_id,
             "ChallengeParameters": {
                 "USER_ID_FOR_SRP": username,
+                "FRIENDLY_DEVICE_NAME": "TOTP device",
             }
         }),
     }
@@ -350,6 +351,7 @@ fn mfa_select_followup(session_id: &str, username: &str, challenge: MfaChallenge
             "Session": session_id,
             "ChallengeParameters": {
                 "USER_ID_FOR_SRP": username,
+                "FRIENDLY_DEVICE_NAME": "TOTP device",
             }
         }),
     }
@@ -1147,6 +1149,13 @@ fn refresh_token_auth(
         .values()
         .find(|u| u.sub == sub || refresh_tok.contains(&u.sub))
         .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid Refresh Token."))?;
+
+    if !user.enabled {
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "User is disabled.",
+        ));
+    }
 
     // Cognito accepts SECRET_HASH on REFRESH_TOKEN_AUTH computed with either
     // the original username or the sub. Validate against the resolved client.
