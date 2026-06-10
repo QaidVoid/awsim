@@ -297,7 +297,12 @@ fn admin_access_key_does_not_bypass_other_keys() {
     let err = engine
         .check(&ctx, "s3:GetObject", "arn:aws:s3:::bucket/key")
         .unwrap_err();
-    assert_eq!(err.code, "AccessDenied");
+    assert_eq!(err.code, "InvalidClientTokenId");
+    assert!(
+        !err.message.contains("not-admin"),
+        "error message must not echo the access key: {}",
+        err.message
+    );
 }
 
 #[test]
