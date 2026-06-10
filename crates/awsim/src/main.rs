@@ -2693,6 +2693,11 @@ fn register_services(
     // read CSV inventories, without a network round trip.
     let firehose_s3_writer: Arc<dyn awsim_core::S3ObjectWriter> = Arc::new(s3.object_writer());
     let stepfunctions_s3_reader: Arc<dyn awsim_core::S3ObjectReader> = Arc::new(s3.object_reader());
+    // DynamoDB ExportTableToPointInTime delivers data and manifest objects
+    // into the embedded S3 through the same in-process path, and
+    // ImportTable reads its source objects back out of it.
+    dynamodb_clone.set_s3_writer(Arc::new(s3.object_writer()));
+    dynamodb_clone.set_s3_reader(Arc::new(s3.object_reader()));
     let s3_routes = {
         use awsim_core::ServiceHandler;
         s3.routes()

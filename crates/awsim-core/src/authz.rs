@@ -178,6 +178,23 @@ pub trait S3ObjectReader: Send + Sync {
         account: &str,
         region: &str,
     ) -> Result<Vec<u8>, AwsError>;
+
+    /// List every object key in `bucket` that starts with `prefix`, in
+    /// lexicographic order (e.g. DynamoDB `ImportTable` enumerating its
+    /// `S3KeyPrefix`). The default implementation reports that the reader
+    /// cannot list, so existing single-object readers keep compiling.
+    fn list_objects(
+        &self,
+        bucket: &str,
+        prefix: &str,
+        account: &str,
+        region: &str,
+    ) -> Result<Vec<String>, AwsError> {
+        let _ = (bucket, prefix, account, region);
+        Err(AwsError::internal(
+            "this S3 reader does not support listing objects",
+        ))
+    }
 }
 
 pub struct NoopPrincipalLookup;

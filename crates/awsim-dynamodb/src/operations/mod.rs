@@ -1,5 +1,6 @@
 pub mod backup;
 pub mod batch;
+pub mod export_import;
 pub mod idempotency;
 pub mod item;
 pub mod kinesis_dest;

@@ -1581,4 +1581,40 @@ impl awsim_core::S3ObjectReader for S3ServiceReader {
             .decode(b64)
             .map_err(|e| AwsError::internal(format!("decode s3 object body: {e}")))
     }
+
+    fn list_objects(
+        &self,
+        bucket: &str,
+        prefix: &str,
+        account: &str,
+        _region: &str,
+    ) -> Result<Vec<String>, AwsError> {
+        let state = self.store.get(account, "global");
+        if let Some(bs) = &self.body_store {
+            state.set_body_store(Arc::clone(bs));
+        }
+        let ctx = RequestContext::new_with_account("s3", "global", account);
+
+        let mut keys = Vec::new();
+        let mut continuation: Option<String> = None;
+        loop {
+            let mut input = serde_json::json!({ "Bucket": bucket, "prefix": prefix });
+            if let Some(token) = &continuation {
+                input["continuation-token"] = serde_json::json!(token);
+            }
+            let resp = operations::list::list_objects_v2(&state, &input, &ctx)?;
+            if let Some(contents) = resp["Contents"].as_array() {
+                keys.extend(
+                    contents
+                        .iter()
+                        .filter_map(|o| o["Key"].as_str().map(String::from)),
+                );
+            }
+            match resp["NextContinuationToken"].as_str() {
+                Some(token) => continuation = Some(token.to_string()),
+                None => break,
+            }
+        }
+        Ok(keys)
+    }
 }
