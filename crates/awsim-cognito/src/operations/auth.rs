@@ -253,6 +253,79 @@ fn mfa_setup_challenge(state: &CognitoState, pool_id: &str, username: &str) -> V
     })
 }
 
+/// Register a challenge session binding a session id to the user who just
+/// passed primary authentication, and return that id. Used for the
+/// NEW_PASSWORD_REQUIRED challenge so the follow-up response can prove the
+/// caller actually completed the password step (without it, anyone knowing a
+/// ClientId and username could reset any user's password).
+fn issue_challenge_session(state: &CognitoState, pool_id: &str, username: &str) -> String {
+    let session_id = Uuid::new_v4().to_string();
+    state.mfa_sessions.insert(
+        session_id.clone(),
+        MfaSession {
+            pool_id: pool_id.to_string(),
+            username: username.to_string(),
+            issued_at: now_epoch(),
+        },
+    );
+    session_id
+}
+
+/// Resolve and validate a challenge session, returning the bound username.
+/// The session must exist, be unexpired, belong to `pool_id`, and (when the
+/// caller supplied a USERNAME in ChallengeResponses) match it. An expired
+/// session is consumed. Mirrors Cognito's "Invalid session for the user."
+/// rejection of forged or stale sessions.
+fn resolve_challenge_session(
+    state: &CognitoState,
+    pool_id: &str,
+    session_id: &str,
+    claimed_username: Option<&str>,
+) -> Result<String, AwsError> {
+    let session = state
+        .mfa_sessions
+        .get(session_id)
+        .map(|e| e.value().clone())
+        .ok_or_else(|| {
+            AwsError::bad_request("NotAuthorizedException", "Invalid session for the user.")
+        })?;
+    if !session_still_valid(session.issued_at) {
+        state.mfa_sessions.remove(session_id);
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "Invalid session for the user, session is expired.",
+        ));
+    }
+    if session.pool_id != pool_id {
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "Invalid session for the user.",
+        ));
+    }
+    if let Some(claimed) = claimed_username
+        && claimed != session.username
+    {
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "Invalid session for the user.",
+        ));
+    }
+    Ok(session.username)
+}
+
+/// Serialize a user's attributes as the JSON-object string Cognito puts in the
+/// `userAttributes` ChallengeParameter (e.g. `{"email":"x"}`), which is what
+/// Amplify parses to prefill the NEW_PASSWORD_REQUIRED form. (The legacy array
+/// of `{"Name","Value"}` pairs is not what the service sends.)
+fn user_attributes_param(user: &CognitoUser) -> String {
+    let map: serde_json::Map<String, Value> = user
+        .attributes
+        .iter()
+        .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+        .collect();
+    serde_json::to_string(&map).unwrap_or_else(|_| "{}".to_string())
+}
+
 /// Build the concrete-factor challenge JSON after `SELECT_MFA_TYPE`, reusing
 /// the caller's existing session id so the follow-up response resolves back to
 /// the same user.
@@ -845,16 +918,9 @@ pub fn initiate_auth(
 
             // FORCE_CHANGE_PASSWORD challenge
             if user.status == "FORCE_CHANGE_PASSWORD" {
-                let session_id = Uuid::new_v4().to_string();
-                let user_attrs_json = serde_json::to_string(
-                    &user
-                        .attributes
-                        .iter()
-                        .map(|(k, v)| json!({"Name":k,"Value":v}))
-                        .collect::<Vec<_>>(),
-                )
-                .unwrap_or_default();
-                info!(username = %username, "Cognito: InitiateAuth → NEW_PASSWORD_REQUIRED");
+                let user_attrs_json = user_attributes_param(user);
+                let session_id = issue_challenge_session(state, &pool_id, username);
+                info!(username = %username, "Cognito: InitiateAuth -> NEW_PASSWORD_REQUIRED");
                 return Ok(json!({
                     "ChallengeName": "NEW_PASSWORD_REQUIRED",
                     "Session": session_id,
@@ -1176,16 +1242,9 @@ pub fn admin_initiate_auth(
 
             // FORCE_CHANGE_PASSWORD challenge
             if user.status == "FORCE_CHANGE_PASSWORD" {
-                let session_id = Uuid::new_v4().to_string();
-                let user_attrs_json = serde_json::to_string(
-                    &user
-                        .attributes
-                        .iter()
-                        .map(|(k, v)| json!({"Name":k,"Value":v}))
-                        .collect::<Vec<_>>(),
-                )
-                .unwrap_or_default();
-                info!(username = %username, pool_id = %pool_id, "Cognito: AdminInitiateAuth → NEW_PASSWORD_REQUIRED");
+                let user_attrs_json = user_attributes_param(user);
+                let session_id = issue_challenge_session(state, pool_id, username);
+                info!(username = %username, pool_id = %pool_id, "Cognito: AdminInitiateAuth -> NEW_PASSWORD_REQUIRED");
                 return Ok(json!({
                     "ChallengeName": "NEW_PASSWORD_REQUIRED",
                     "Session": session_id,
@@ -1339,12 +1398,14 @@ pub fn respond_to_auth_challenge(
 
     match challenge_name {
         "NEW_PASSWORD_REQUIRED" => {
-            let username = responses["USERNAME"].as_str().ok_or_else(|| {
-                AwsError::bad_request(
-                    "InvalidParameterException",
-                    "USERNAME is required in ChallengeResponses",
-                )
-            })?;
+            let session_id = input["Session"].as_str().unwrap_or("");
+            let username = resolve_challenge_session(
+                state,
+                &pool_id,
+                session_id,
+                responses["USERNAME"].as_str(),
+            )?;
+            let username = username.as_str();
             let new_password = responses["NEW_PASSWORD"].as_str().ok_or_else(|| {
                 AwsError::bad_request(
                     "InvalidParameterException",
@@ -1390,6 +1451,8 @@ pub fn respond_to_auth_challenge(
                 &validity,
             );
 
+            drop(pool);
+            state.mfa_sessions.remove(session_id);
             info!(username = %username, "Cognito: RespondToAuthChallenge NEW_PASSWORD_REQUIRED success");
             Ok(result)
         }
@@ -1516,12 +1579,14 @@ pub fn admin_respond_to_auth_challenge(
 
     match challenge_name {
         "NEW_PASSWORD_REQUIRED" => {
-            let username = responses["USERNAME"].as_str().ok_or_else(|| {
-                AwsError::bad_request(
-                    "InvalidParameterException",
-                    "USERNAME is required in ChallengeResponses",
-                )
-            })?;
+            let session_id = input["Session"].as_str().unwrap_or("");
+            let username = resolve_challenge_session(
+                state,
+                pool_id,
+                session_id,
+                responses["USERNAME"].as_str(),
+            )?;
+            let username = username.as_str();
             let new_password = responses["NEW_PASSWORD"].as_str().ok_or_else(|| {
                 AwsError::bad_request(
                     "InvalidParameterException",
@@ -1578,6 +1643,8 @@ pub fn admin_respond_to_auth_challenge(
                 &validity,
             );
 
+            drop(pool);
+            state.mfa_sessions.remove(session_id);
             info!(username = %username, pool_id = %pool_id, "Cognito: AdminRespondToAuthChallenge NEW_PASSWORD_REQUIRED success");
             Ok(result)
         }
@@ -2883,5 +2950,108 @@ mod auth_flow_tests {
             .status
             .clone();
         assert_eq!(status, "FORCE_CHANGE_PASSWORD");
+    }
+
+    /// Put a freshly created user into FORCE_CHANGE_PASSWORD (the state
+    /// AdminCreateUser leaves them in) and return the issued challenge session.
+    fn force_change_setup() -> (CognitoState, String, String, String) {
+        let c = ctx();
+        let state = CognitoState::default();
+        let pool = pools::create_user_pool(&state, &json!({ "PoolName": "p" }), &c).unwrap();
+        let pool_id = pool["UserPool"]["Id"].as_str().unwrap().to_string();
+        let client = pools::create_user_pool_client(
+            &state,
+            &json!({ "UserPoolId": pool_id, "ClientName": "c",
+                     "ExplicitAuthFlows": ["ALLOW_USER_PASSWORD_AUTH"] }),
+            &c,
+        )
+        .unwrap();
+        let client_id = client["UserPoolClient"]["ClientId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        users::admin_create_user(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Username": "dan",
+                     "TemporaryPassword": "Temp@1234", "MessageAction": "SUPPRESS" }),
+            &c,
+        )
+        .unwrap();
+        let res = initiate_auth(
+            &state,
+            &json!({ "ClientId": client_id, "AuthFlow": "USER_PASSWORD_AUTH",
+                     "AuthParameters": { "USERNAME": "dan", "PASSWORD": "Temp@1234" } }),
+            &c,
+        )
+        .unwrap();
+        assert_eq!(res["ChallengeName"], "NEW_PASSWORD_REQUIRED");
+        // userAttributes is a JSON object string, not an array of Name/Value.
+        let attrs = res["ChallengeParameters"]["userAttributes"]
+            .as_str()
+            .unwrap();
+        assert!(serde_json::from_str::<serde_json::Map<String, Value>>(attrs).is_ok());
+        let session = res["Session"].as_str().unwrap().to_string();
+        (state, pool_id, client_id, session)
+    }
+
+    #[test]
+    fn new_password_required_completes_with_valid_session() {
+        let (state, _pool, client_id, session) = force_change_setup();
+        let res = respond_to_auth_challenge(
+            &state,
+            &json!({ "ClientId": client_id, "ChallengeName": "NEW_PASSWORD_REQUIRED",
+                     "Session": session,
+                     "ChallengeResponses": { "USERNAME": "dan", "NEW_PASSWORD": "Brandnew1!" } }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(res["AuthenticationResult"]["AccessToken"].is_string());
+    }
+
+    #[test]
+    fn new_password_required_rejects_forged_session() {
+        let (state, _pool, client_id, _session) = force_change_setup();
+        let err = respond_to_auth_challenge(
+            &state,
+            &json!({ "ClientId": client_id, "ChallengeName": "NEW_PASSWORD_REQUIRED",
+                     "Session": "made-up-session",
+                     "ChallengeResponses": { "USERNAME": "dan", "NEW_PASSWORD": "Brandnew1!" } }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "NotAuthorizedException");
+        // The user must remain unable to authenticate with the attacker password.
+        let still_forced = state
+            .user_pools
+            .get(&_pool)
+            .unwrap()
+            .users
+            .get("dan")
+            .unwrap()
+            .status
+            .clone();
+        assert_eq!(still_forced, "FORCE_CHANGE_PASSWORD");
+    }
+
+    #[test]
+    fn new_password_required_rejects_username_session_mismatch() {
+        let (state, pool_id, client_id, session) = force_change_setup();
+        users::admin_create_user(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Username": "erin",
+                     "TemporaryPassword": "Temp@1234", "MessageAction": "SUPPRESS" }),
+            &ctx(),
+        )
+        .unwrap();
+        // dan's session must not let a caller rewrite erin's password.
+        let err = respond_to_auth_challenge(
+            &state,
+            &json!({ "ClientId": client_id, "ChallengeName": "NEW_PASSWORD_REQUIRED",
+                     "Session": session,
+                     "ChallengeResponses": { "USERNAME": "erin", "NEW_PASSWORD": "Brandnew1!" } }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "NotAuthorizedException");
     }
 }
