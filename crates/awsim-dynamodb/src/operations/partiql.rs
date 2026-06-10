@@ -23,6 +23,7 @@ use crate::{
 };
 
 use super::{
+    build_consumed_capacity,
     item::{estimate_item_bytes, estimate_value_bytes},
     read_capacity_units, write_capacity_units,
 };
@@ -42,12 +43,19 @@ pub fn execute_statement(
 
     let params = input.get("Parameters").cloned().unwrap_or(json!([]));
 
-    let items = run_statement(state, sqlite, ctx, stmt, &params)?;
+    let mut meter = CapacityMeter::default();
+    let items = run_statement(state, sqlite, ctx, stmt, &params, &mut meter, false)?;
 
-    Ok(json!({
+    let mut result = json!({
         "Items": items,
         "NextToken": null
-    }))
+    });
+    // ExecuteStatement touches a single table, so its ConsumedCapacity is one
+    // object rather than a list.
+    if let Some(cap) = meter.into_caps(input).into_iter().next() {
+        result["ConsumedCapacity"] = cap;
+    }
+    Ok(result)
 }
 
 pub fn batch_execute_statement(
@@ -79,6 +87,7 @@ pub fn batch_execute_statement(
     }
 
     let mut responses = Vec::new();
+    let mut meter = CapacityMeter::default();
 
     for stmt_obj in &stmts {
         let stmt = stmt_obj
@@ -87,7 +96,7 @@ pub fn batch_execute_statement(
             .unwrap_or("");
         let params = stmt_obj.get("Parameters").cloned().unwrap_or(json!([]));
 
-        match run_statement(state, sqlite, ctx, stmt, &params) {
+        match run_statement(state, sqlite, ctx, stmt, &params, &mut meter, false) {
             Ok(items) => {
                 let first = items.into_iter().next().unwrap_or(json!(null));
                 responses.push(json!({ "Item": first }));
@@ -105,7 +114,12 @@ pub fn batch_execute_statement(
         }
     }
 
-    Ok(json!({ "Responses": responses }))
+    let mut result = json!({ "Responses": responses });
+    let caps = meter.into_caps(input);
+    if !caps.is_empty() {
+        result["ConsumedCapacity"] = Value::Array(caps);
+    }
+    Ok(result)
 }
 
 /// AWS caps `BatchExecuteStatement` at 25 statements per call.
@@ -141,6 +155,7 @@ pub fn execute_transaction(
         .clone();
 
     let mut responses = Vec::new();
+    let mut meter = CapacityMeter::default();
 
     for stmt_obj in &stmts {
         let stmt = stmt_obj
@@ -149,7 +164,7 @@ pub fn execute_transaction(
             .unwrap_or("");
         let params = stmt_obj.get("Parameters").cloned().unwrap_or(json!([]));
 
-        match run_statement(state, sqlite, ctx, stmt, &params) {
+        match run_statement(state, sqlite, ctx, stmt, &params, &mut meter, true) {
             Ok(items) => {
                 let first = items.into_iter().next().unwrap_or(json!(null));
                 responses.push(json!({ "Item": first }));
@@ -161,12 +176,47 @@ pub fn execute_transaction(
         }
     }
 
-    let result = json!({ "Responses": responses });
+    let mut result = json!({ "Responses": responses });
+    let caps = meter.into_caps(input);
+    if !caps.is_empty() {
+        result["ConsumedCapacity"] = Value::Array(caps);
+    }
     idempotency.record(state, &result);
     Ok(result)
 }
 
 // ─── Core statement runner ────────────────────────────────────────────────────
+
+/// Accumulates consumed capacity per table across one or more statements so
+/// `ConsumedCapacity` can be reported the way each PartiQL entry point expects
+/// (a single object for ExecuteStatement, a per-table list for the batch and
+/// transaction forms).
+#[derive(Default)]
+struct CapacityMeter {
+    /// table name -> (read units, write units)
+    by_table: HashMap<String, (f64, f64)>,
+}
+
+impl CapacityMeter {
+    fn add_read(&mut self, table: &str, units: f64) {
+        self.by_table.entry(table.to_string()).or_default().0 += units;
+    }
+
+    fn add_write(&mut self, table: &str, units: f64) {
+        self.by_table.entry(table.to_string()).or_default().1 += units;
+    }
+
+    /// Build the per-table `ConsumedCapacity` entries honoring the request's
+    /// `ReturnConsumedCapacity` (empty when it is NONE / unset).
+    fn into_caps(self, input: &Value) -> Vec<Value> {
+        self.by_table
+            .iter()
+            .filter_map(|(table, (read, write))| {
+                build_consumed_capacity(input, table, *read, *write, None)
+            })
+            .collect()
+    }
+}
 
 fn run_statement(
     state: &DynamoState,
@@ -174,20 +224,22 @@ fn run_statement(
     ctx: &RequestContext,
     raw_stmt: &str,
     params: &Value,
+    meter: &mut CapacityMeter,
+    transactional: bool,
 ) -> Result<Vec<Value>, AwsError> {
     let stmt = raw_stmt.trim();
     let upper = stmt.to_uppercase();
 
     if upper.starts_with("SELECT") {
-        run_select(state, sqlite, ctx, stmt, params)
+        run_select(state, sqlite, ctx, stmt, params, meter, transactional)
     } else if upper.starts_with("INSERT") {
-        run_insert(state, sqlite, ctx, stmt, params)?;
+        run_insert(state, sqlite, ctx, stmt, params, meter, transactional)?;
         Ok(vec![])
     } else if upper.starts_with("UPDATE") {
-        run_update(state, sqlite, ctx, stmt, params)?;
+        run_update(state, sqlite, ctx, stmt, params, meter, transactional)?;
         Ok(vec![])
     } else if upper.starts_with("DELETE") {
-        run_delete(state, sqlite, ctx, stmt, params)?;
+        run_delete(state, sqlite, ctx, stmt, params, meter, transactional)?;
         Ok(vec![])
     } else {
         Err(AwsError::bad_request(
@@ -215,6 +267,8 @@ fn run_select(
     ctx: &RequestContext,
     stmt: &str,
     params: &Value,
+    meter: &mut CapacityMeter,
+    transactional: bool,
 ) -> Result<Vec<Value>, AwsError> {
     let (table_name, where_key, where_val) = parse_from_where(stmt, params)?;
 
@@ -248,8 +302,9 @@ fn run_select(
             Ok(true)
         },
     )?;
-    let read_units = read_capacity_units(response_bytes, false, false);
+    let read_units = read_capacity_units(response_bytes, false, transactional);
     state.enforce_throughput(&table_name, BucketKind::Read, read_units)?;
+    meter.add_read(&table_name, read_units);
     Ok(items)
 }
 
@@ -261,6 +316,8 @@ fn run_insert(
     ctx: &RequestContext,
     stmt: &str,
     _params: &Value,
+    meter: &mut CapacityMeter,
+    transactional: bool,
 ) -> Result<(), AwsError> {
     // INSERT INTO "TableName" VALUE {'key': 'val', ...}
     let upper = stmt.to_uppercase();
@@ -319,8 +376,9 @@ fn run_insert(
     }
 
     let item_bytes = estimate_item_bytes(&ddb_item);
-    let write_units = write_capacity_units(item_bytes, false);
+    let write_units = write_capacity_units(item_bytes, transactional);
     state.enforce_throughput(&table_name, BucketKind::Write, write_units)?;
+    meter.add_write(&table_name, write_units);
 
     let attrs = item_to_storage_value(&ddb_item);
     sqlite.put_item(
@@ -343,6 +401,8 @@ fn run_update(
     ctx: &RequestContext,
     stmt: &str,
     params: &Value,
+    meter: &mut CapacityMeter,
+    transactional: bool,
 ) -> Result<(), AwsError> {
     // UPDATE "TableName" SET attr = val [, ...] WHERE <full primary key> [AND ...]
     let upper = stmt.to_uppercase();
@@ -412,8 +472,9 @@ fn run_update(
     };
 
     let item_bytes = estimate_item_bytes(&item);
-    let write_units = write_capacity_units(item_bytes, false);
+    let write_units = write_capacity_units(item_bytes, transactional);
     state.enforce_throughput(&table_name, BucketKind::Write, write_units)?;
+    meter.add_write(&table_name, write_units);
 
     let attrs = item_to_storage_value(&item);
     sqlite.put_item(
@@ -436,6 +497,8 @@ fn run_delete(
     ctx: &RequestContext,
     stmt: &str,
     params: &Value,
+    meter: &mut CapacityMeter,
+    transactional: bool,
 ) -> Result<(), AwsError> {
     // DELETE FROM "TableName" WHERE <full primary key> [AND ...]
     let upper = stmt.to_uppercase();
@@ -466,8 +529,11 @@ fn run_delete(
         (pk, sk, non_key)
     };
 
-    // Charge the 1 WCU AWS minimum regardless of whether a row matched.
-    state.enforce_throughput(&table_name, BucketKind::Write, 1.0)?;
+    // Charge the 1 WCU AWS minimum (2x transactionally) regardless of whether
+    // a row matched.
+    let write_units = if transactional { 2.0 } else { 1.0 };
+    state.enforce_throughput(&table_name, BucketKind::Write, write_units)?;
+    meter.add_write(&table_name, write_units);
 
     let Some(stored) = sqlite.get_item(&ctx.account_id, &ctx.region, &table_name, &pk, &sk)? else {
         return Ok(()); // Deleting a missing key is a no-op success.
@@ -920,6 +986,72 @@ mod tests {
         // The item is still present.
         let sel = exec(&state, &sqlite, &c, r#"SELECT * FROM "t""#).unwrap();
         assert_eq!(sel["Items"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn execute_statement_reports_consumed_capacity_when_requested() {
+        let (state, sqlite, c) = setup();
+        let res = execute_statement(
+            &state,
+            &sqlite,
+            &json!({
+                "Statement": r#"INSERT INTO "t" VALUE {'pk': 'a', 'sk': 'b'}"#,
+                "ReturnConsumedCapacity": "TOTAL"
+            }),
+            &c,
+        )
+        .unwrap();
+        assert_eq!(res["ConsumedCapacity"]["TableName"], json!("t"));
+        assert!(res["ConsumedCapacity"]["CapacityUnits"].as_f64().unwrap() > 0.0);
+
+        // Omitted when not requested.
+        let plain = exec(&state, &sqlite, &c, r#"SELECT * FROM "t""#).unwrap();
+        assert!(plain.get("ConsumedCapacity").is_none());
+    }
+
+    #[test]
+    fn batch_execute_aggregates_consumed_capacity_per_table() {
+        let (state, sqlite, c) = setup();
+        let res = batch_execute_statement(
+            &state,
+            &sqlite,
+            &json!({
+                "ReturnConsumedCapacity": "TOTAL",
+                "Statements": [
+                    { "Statement": r#"INSERT INTO "t" VALUE {'pk': 'a', 'sk': 'b'}"# },
+                    { "Statement": r#"INSERT INTO "t" VALUE {'pk': 'a', 'sk': 'c'}"# }
+                ]
+            }),
+            &c,
+        )
+        .unwrap();
+        let caps = res["ConsumedCapacity"].as_array().unwrap();
+        assert_eq!(
+            caps.len(),
+            1,
+            "two writes to one table aggregate to one entry"
+        );
+        assert_eq!(caps[0]["TableName"], json!("t"));
+    }
+
+    #[test]
+    fn execute_transaction_reports_consumed_capacity_at_transactional_rate() {
+        let (state, sqlite, c) = setup();
+        let res = execute_transaction(
+            &state,
+            &sqlite,
+            &json!({
+                "ReturnConsumedCapacity": "TOTAL",
+                "TransactStatements": [
+                    { "Statement": r#"INSERT INTO "t" VALUE {'pk': 'a', 'sk': 'b'}"# }
+                ]
+            }),
+            &c,
+        )
+        .unwrap();
+        let caps = res["ConsumedCapacity"].as_array().unwrap();
+        assert_eq!(caps.len(), 1);
+        assert_eq!(caps[0]["CapacityUnits"], json!(2.0));
     }
 
     #[test]
