@@ -76,17 +76,22 @@ enum MfaChallenge {
     SoftwareToken,
 }
 
-/// Whether the user can complete a software-token (TOTP) challenge.
+/// Whether the user can complete a software-token (TOTP) challenge: the
+/// factor is enabled and a token has been verified.
 fn software_factor_enabled(user: &CognitoUser) -> bool {
-    user.totp_verified
+    user.software_token_mfa_enabled && user.totp_verified
 }
 
-/// Whether the user can receive an SMS_MFA code. awsim has no dedicated
-/// per-factor enabled flag beyond the preference, so SMS counts as available
-/// when the user prefers it or has a phone number on file with MFA enabled.
+/// Whether the user can receive an SMS_MFA code: SMS MFA is enabled and a
+/// verified phone number is on file.
 fn sms_factor_enabled(user: &CognitoUser) -> bool {
-    user.mfa_preferred.as_deref() == Some("SMS_MFA")
-        || (user.mfa_enabled && user.attributes.contains_key("phone_number"))
+    user.sms_mfa_enabled
+        && user.attributes.contains_key("phone_number")
+        && user
+            .attributes
+            .get("phone_number_verified")
+            .map(String::as_str)
+            == Some("true")
 }
 
 /// Whether the user can receive an EMAIL_OTP code. Driven purely by the
@@ -565,7 +570,7 @@ fn complete_mfa_setup(
             AwsError::service_not_found("UserNotFoundException", "User does not exist.")
         })?;
         if user.totp_verified {
-            user.mfa_enabled = true;
+            user.software_token_mfa_enabled = true;
             if user.mfa_preferred.is_none() {
                 user.mfa_preferred = Some("SOFTWARE_TOKEN_MFA".to_string());
             }
@@ -1047,7 +1052,8 @@ pub fn initiate_auth(
 
             // Check whether MFA is required
             let mfa_required = pool.mfa_configuration == "ON"
-                || (pool.mfa_configuration == "OPTIONAL" && user.mfa_enabled);
+                || (pool.mfa_configuration == "OPTIONAL"
+                    && (user.sms_mfa_enabled || user.software_token_mfa_enabled));
             let mfa_eligible = mfa_required
                 && (software_factor_enabled(user)
                     || sms_factor_enabled(user)
@@ -1410,7 +1416,8 @@ pub fn admin_initiate_auth(
 
             // Check whether MFA is required
             let mfa_required = pool.mfa_configuration == "ON"
-                || (pool.mfa_configuration == "OPTIONAL" && user.mfa_enabled);
+                || (pool.mfa_configuration == "OPTIONAL"
+                    && (user.sms_mfa_enabled || user.software_token_mfa_enabled));
             let mfa_eligible = mfa_required
                 && (software_factor_enabled(user)
                     || sms_factor_enabled(user)
@@ -2985,15 +2992,18 @@ mod auth_flow_tests {
     ) {
         let mut pool = state.user_pools.get_mut(pool_id).unwrap();
         let user = pool.users.get_mut(username).unwrap();
-        user.mfa_enabled = true;
         user.mfa_preferred = preferred.map(String::from);
         user.totp_verified = totp_verified;
+        user.software_token_mfa_enabled = totp_verified;
         if totp_verified {
             user.totp_secret = Some("JBSWY3DPEHPK3PXP".to_string());
         }
         if let Some(p) = phone {
             user.attributes
                 .insert("phone_number".to_string(), p.to_string());
+            user.attributes
+                .insert("phone_number_verified".to_string(), "true".to_string());
+            user.sms_mfa_enabled = true;
         }
     }
 
@@ -3296,7 +3306,6 @@ mod auth_flow_tests {
         {
             let mut pool = state.user_pools.get_mut(&pool_id).unwrap();
             let user = pool.users.get_mut("grace").unwrap();
-            user.mfa_enabled = true;
             user.mfa_preferred = Some("EMAIL_OTP".to_string());
             user.attributes
                 .insert("email".to_string(), "grace@example.com".to_string());
@@ -3998,6 +4007,67 @@ mod auth_flow_tests {
             .lambda_invoker
             .set(std::sync::Arc::new(CustomAuthMock));
         (state, pool_id, client_id)
+    }
+
+    #[test]
+    fn disabling_one_mfa_factor_keeps_the_other() {
+        use crate::operations::mfa::admin_set_user_mfa_preference;
+        let (state, pool_id, _client_id) = setup(&[], "OFF", "mfauser", "Passw0rd!");
+        // A verified software token must exist before it can be enabled.
+        {
+            let mut pool = state.user_pools.get_mut(&pool_id).unwrap();
+            let user = pool.users.get_mut("mfauser").unwrap();
+            user.totp_verified = true;
+            user.attributes
+                .insert("phone_number".to_string(), "+12025550100".to_string());
+        }
+        // Enable both factors.
+        admin_set_user_mfa_preference(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "mfauser",
+                "SMSMfaSettings": { "Enabled": true },
+                "SoftwareTokenMfaSettings": { "Enabled": true, "PreferredMfa": true }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        // Disable only the software token.
+        admin_set_user_mfa_preference(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "mfauser",
+                "SoftwareTokenMfaSettings": { "Enabled": false }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let pool = state.user_pools.get(&pool_id).unwrap();
+        let user = pool.users.get("mfauser").unwrap();
+        // SMS survives; software token is off; the now-disabled preferred
+        // method was cleared.
+        assert!(user.sms_mfa_enabled);
+        assert!(!user.software_token_mfa_enabled);
+        assert_eq!(user.mfa_preferred, None);
+    }
+
+    #[test]
+    fn preferring_a_disabled_mfa_factor_is_rejected() {
+        use crate::operations::mfa::admin_set_user_mfa_preference;
+        let (state, pool_id, _client_id) = setup(&[], "OFF", "mfauser2", "Passw0rd!");
+        let err = admin_set_user_mfa_preference(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "mfauser2",
+                "SMSMfaSettings": { "PreferredMfa": true }
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
     }
 
     #[test]
