@@ -592,6 +592,10 @@ async fn async_main() -> Result<()> {
     state.body_stores = Arc::new(body_stores);
     if let Some(ref dir) = cli.data_dir {
         state.data_dir = Some(Arc::new(std::path::PathBuf::from(dir)));
+        // Persist the Cognito JWT signing key so tokens minted before a
+        // restart still verify afterwards. Must run before any token is
+        // signed (seeding, restored snapshots).
+        awsim_cognito::keys::init_persistent(std::path::Path::new(dir));
     }
 
     // Billing meter: subscribes to the request-event stream and tallies
@@ -1246,6 +1250,19 @@ async fn async_main() -> Result<()> {
         // on non-PUT methods is fine: SDK-generated GET / DELETE /
         // POST bodies are naturally small, and the cap is a
         // streaming upper bound, not a forced allocation.
+        // Cognito OpenID discovery at the issuer root. SDK-flow tokens carry
+        // an issuer of `.../{pool_id}`, so JWKS/openid-configuration live at
+        // `/{pool_id}/.well-known/*`. These reuse the `{bucket}` parameter name
+        // of the catch-all below so the two coexist in one matchit router; the
+        // static `.well-known` segment makes them win over `/{bucket}/{*key}`.
+        .route(
+            "/{bucket}/.well-known/jwks.json",
+            axum::routing::get(awsim_cognito::well_known::jwks),
+        )
+        .route(
+            "/{bucket}/.well-known/openid-configuration",
+            axum::routing::get(awsim_cognito::well_known::openid_configuration),
+        )
         .route(
             "/{bucket}/{*key}",
             axum::routing::any(awsim_core::gateway::handle_request)

@@ -4,7 +4,7 @@ pub mod error;
 pub mod federation;
 mod identity;
 mod jwt;
-mod keys;
+pub mod keys;
 pub mod mock_idp;
 pub mod oauth;
 mod operations;
@@ -12,6 +12,7 @@ pub mod password;
 mod secret_hash;
 mod srp;
 pub mod state;
+pub mod well_known;
 
 pub use identity::CognitoIdentityService;
 pub use oauth::CognitoOAuthState;
