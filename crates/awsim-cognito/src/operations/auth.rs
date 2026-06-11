@@ -827,7 +827,7 @@ fn invoke_trigger(ctx: &RequestContext, trigger_source: &str, lambda_arn: &str, 
             detail: json!({
                 "triggerSource": trigger_source,
                 "functionArn": lambda_arn,
-                "event": event,
+                "event": crate::operations::cognito_trigger_event(event, trigger_source, &ctx.region),
             }),
         });
     }

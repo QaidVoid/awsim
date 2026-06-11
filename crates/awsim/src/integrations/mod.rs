@@ -1674,12 +1674,14 @@ pub async fn handle_cognito_trigger(
         "InvocationType": "Event",
     });
 
-    let ctx = RequestContext::new("lambda", &event.region);
+    // Route the invocation to the same account the trigger originated in,
+    // not the default account.
+    let ctx = RequestContext::new_with_account("lambda", &event.region, &event.account_id);
     match lambda.handle("Invoke", input, &ctx).await {
         Ok(_) => info!(
             function = %func_name,
             trigger = %trigger_source,
-            "Cognito trigger → Lambda invocation delivered"
+            "Cognito trigger -> Lambda invocation delivered"
         ),
         Err(e) => warn!(
             function = %func_name,

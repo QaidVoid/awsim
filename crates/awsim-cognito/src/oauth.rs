@@ -709,7 +709,11 @@ async fn authorize_get(
     let redirect_uri = match &params.redirect_uri {
         Some(u) => u.clone(),
         None => {
-            return (StatusCode::BAD_REQUEST, "redirect_uri is required").into_response();
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "redirect_uri is required.",
+            );
         }
     };
 
@@ -726,11 +730,11 @@ async fn authorize_get(
     if let Some(pool_ref) = oauth_state.cognito.user_pools.get(&pool_id)
         && !pool_ref.clients.contains_key(&params.client_id)
     {
-        return (
+        return error_response(
             StatusCode::BAD_REQUEST,
-            format!("Client {} not found.", params.client_id),
-        )
-            .into_response();
+            "invalid_client",
+            &format!("Client {} not found.", params.client_id),
+        );
     }
 
     // Validate redirect_uri against client's callback_urls.
@@ -744,11 +748,11 @@ async fn authorize_get(
             redirect_uri = %redirect_uri,
             "OAuth authorize: redirect_uri not in callback_urls"
         );
-        return (
+        return error_response(
             StatusCode::BAD_REQUEST,
-            "redirect_uri does not match any registered callback URL",
-        )
-            .into_response();
+            "invalid_request",
+            "redirect_uri does not match any registered callback URL.",
+        );
     }
 
     // Federation: when ?identity_provider=Foo is present, look up
@@ -900,7 +904,11 @@ async fn authorize_post(
     let redirect_uri = match &form.redirect_uri {
         Some(u) if !u.is_empty() => u.clone(),
         _ => {
-            return (StatusCode::BAD_REQUEST, "redirect_uri is required").into_response();
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "redirect_uri is required.",
+            );
         }
     };
     let scope_str = form.scope.as_deref().unwrap_or("openid").to_string();
@@ -948,11 +956,11 @@ async fn authorize_post(
         && !client.callback_urls.is_empty()
         && !client.callback_urls.contains(&redirect_uri)
     {
-        return (
+        return error_response(
             StatusCode::BAD_REQUEST,
-            "redirect_uri does not match any registered callback URL",
-        )
-            .into_response();
+            "invalid_request",
+            "redirect_uri does not match any registered callback URL.",
+        );
     }
 
     let resolved_username =
@@ -2121,11 +2129,11 @@ async fn logout(
                 logout_uri = %logout_uri,
                 "OAuth logout: logout_uri not in LogoutURLs"
             );
-            return (
+            return error_response(
                 StatusCode::BAD_REQUEST,
-                "logout_uri does not match any registered LogoutURL",
-            )
-                .into_response();
+                "invalid_request",
+                "logout_uri does not match any registered LogoutURL.",
+            );
         }
         info!(pool_id = %pool_id, client_id = %params.client_id, "OAuth: logout → logout_uri");
         return Redirect::to(logout_uri).into_response();
@@ -2135,11 +2143,11 @@ async fn logout(
         if !client.callback_urls.is_empty()
             && !client.callback_urls.contains(&redirect_uri.to_string())
         {
-            return (
+            return error_response(
                 StatusCode::BAD_REQUEST,
-                "redirect_uri does not match any registered callback URL",
-            )
-                .into_response();
+                "invalid_request",
+                "redirect_uri does not match any registered callback URL.",
+            );
         }
         let response_type = params.response_type.as_deref().unwrap_or("code");
         let scope = params.scope.as_deref().unwrap_or("openid");
