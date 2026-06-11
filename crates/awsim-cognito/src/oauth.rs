@@ -124,6 +124,10 @@ pub fn router(state: Arc<CognitoOAuthState>) -> axum::Router {
             axum::routing::get(idpresponse),
         )
         .route(
+            "/cognito/{pool_id}/saml2/idpresponse",
+            axum::routing::post(saml_acs),
+        )
+        .route(
             "/cognito/{pool_id}/oauth2/token",
             axum::routing::post(token),
         )
@@ -821,6 +825,11 @@ async fn start_federation(
     };
     drop(pool_ref);
 
+    if idp.provider_type.eq_ignore_ascii_case("SAML") {
+        return start_saml_federation(oauth_state, headers, pool_id, &idp, params, redirect_uri)
+            .await;
+    }
+
     let cfg = match crate::federation::parse_oidc_config(&idp) {
         Ok(c) => c,
         Err(e) => return (StatusCode::BAD_REQUEST, e.message).into_response(),
@@ -871,6 +880,194 @@ async fn start_federation(
         "Cognito federation: redirecting to IdP authorize"
     );
     Redirect::to(&url).into_response()
+}
+
+/// Form body the IdP POSTs to the SAML assertion consumer service.
+#[derive(Deserialize, Default)]
+struct SamlAcsForm {
+    #[serde(rename = "SAMLResponse")]
+    saml_response: Option<String>,
+    #[serde(rename = "RelayState")]
+    relay_state: Option<String>,
+}
+
+/// SP-initiated SAML: build an AuthnRequest, park the app's authorize params
+/// under a relay token, and redirect the browser to the IdP's SSO URL.
+async fn start_saml_federation(
+    oauth_state: &Arc<CognitoOAuthState>,
+    headers: &HeaderMap,
+    pool_id: &str,
+    idp: &crate::state::IdentityProvider,
+    params: &AuthorizeParams,
+    redirect_uri: &str,
+) -> Response {
+    let cfg = match crate::saml::parse_saml_config(idp) {
+        Ok(c) => c,
+        Err(e) => return error_response(StatusCode::BAD_REQUEST, "invalid_request", &e.message),
+    };
+
+    let pending = crate::federation::PendingFederation {
+        pool_id: pool_id.to_string(),
+        client_id: params.client_id.clone(),
+        redirect_uri: redirect_uri.to_string(),
+        scope: params.scope.clone().unwrap_or_else(|| "openid".to_string()),
+        app_state: params.state.clone().unwrap_or_default(),
+        nonce: params.nonce.clone().filter(|s| !s.is_empty()),
+        code_challenge: params.code_challenge.clone().filter(|s| !s.is_empty()),
+        code_challenge_method: params
+            .code_challenge_method
+            .clone()
+            .filter(|s| !s.is_empty()),
+        provider_name: idp.provider_name.clone(),
+        issued_at: now_epoch(),
+    };
+    let relay_state = crate::federation::stash(&oauth_state.federation, pending);
+
+    let acs_url = format!(
+        "{}/cognito/{pool_id}/saml2/idpresponse",
+        oauth_state.base_url(headers)
+    );
+    let request_id = format!("_{}", new_code());
+    let issue_instant = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let url = crate::saml::build_authn_request_url(
+        &cfg.sso_redirect_url,
+        &crate::saml::sp_entity_id(pool_id),
+        &acs_url,
+        &relay_state,
+        &request_id,
+        &issue_instant,
+    );
+    info!(
+        pool_id = %pool_id,
+        provider = %idp.provider_name,
+        "Cognito federation: redirecting to SAML IdP SSO"
+    );
+    Redirect::to(&url).into_response()
+}
+
+/// SAML assertion consumer service: the IdP POSTs a base64 `SAMLResponse`
+/// (HTTP-POST binding) with the `RelayState` we set on the AuthnRequest.
+async fn saml_acs(
+    State(oauth_state): State<Arc<CognitoOAuthState>>,
+    Path(pool_id): Path<String>,
+    Form(form): Form<SamlAcsForm>,
+) -> Response {
+    saml_acs_inner(&oauth_state, pool_id, form)
+}
+
+/// Synchronous core of [`saml_acs`]; split out so it is directly testable
+/// without an async runtime (the handler does no real I/O).
+fn saml_acs_inner(
+    oauth_state: &Arc<CognitoOAuthState>,
+    pool_id: String,
+    form: SamlAcsForm,
+) -> Response {
+    let Some(response_b64) = form.saml_response.filter(|s| !s.is_empty()) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "SAMLResponse is required",
+        );
+    };
+    let relay_state = form.relay_state.unwrap_or_default();
+
+    let xml = match base64_decode_standard(&response_b64) {
+        Some(bytes) => bytes,
+        None => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "SAMLResponse is not valid base64",
+            );
+        }
+    };
+    let assertion = match crate::saml::parse_saml_response(&xml) {
+        Ok(a) => a,
+        Err(e) => return error_response(StatusCode::BAD_REQUEST, "invalid_request", &e.message),
+    };
+
+    // RelayState carries the relay token from the SP-initiated AuthnRequest.
+    let pending = match crate::federation::take(&oauth_state.federation, &relay_state) {
+        Some(p) => p,
+        None => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "Unknown or expired RelayState; IdP-initiated SSO is not supported",
+            );
+        }
+    };
+    if pending.pool_id != pool_id {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "RelayState does not match this user pool",
+        );
+    }
+
+    let idp = match oauth_state.cognito.user_pools.get(&pool_id).and_then(|p| {
+        p.identity_providers
+            .iter()
+            .find(|i| i.provider_name == pending.provider_name)
+            .cloned()
+    }) {
+        Some(i) => i,
+        None => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "identity_provider no longer registered",
+            );
+        }
+    };
+
+    let mapped = crate::federation::map_attributes(&idp, &assertion.attributes);
+
+    let mut pool = match oauth_state.cognito.user_pools.get_mut(&pool_id) {
+        Some(p) => p,
+        None => {
+            return error_response(StatusCode::BAD_REQUEST, "invalid_request", "user pool gone");
+        }
+    };
+    let (username, user_sub) = crate::federation::upsert_user(
+        &mut pool,
+        &pending.provider_name,
+        &assertion.name_id,
+        mapped,
+    );
+    drop(pool);
+
+    let scopes = parse_scopes(&pending.scope);
+    let cognito_code = crate::federation::mint_cognito_code(
+        oauth_state,
+        &pool_id,
+        &pending.client_id,
+        &pending.redirect_uri,
+        &user_sub,
+        &username,
+        scopes,
+        pending.nonce,
+        pending.code_challenge,
+        pending.code_challenge_method,
+    );
+
+    let mut url = format!("{}?code={cognito_code}", pending.redirect_uri);
+    if !pending.app_state.is_empty() {
+        url.push_str(&format!("&state={}", urlencoding(&pending.app_state)));
+    }
+    info!(
+        pool_id = %pool_id,
+        provider = %pending.provider_name,
+        username = %username,
+        "Cognito SAML federation: handed app the final code"
+    );
+    Redirect::to(&url).into_response()
+}
+
+/// Decode standard-alphabet base64 (the HTTP-POST binding encoding).
+fn base64_decode_standard(s: &str) -> Option<Vec<u8>> {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    STANDARD.decode(s.trim()).ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -2466,4 +2663,132 @@ async fn forgot_password_confirm_post(
 fn bearer_token(headers: &HeaderMap) -> Option<String> {
     let auth = headers.get("authorization")?.to_str().ok()?;
     auth.strip_prefix("Bearer ").map(|t| t.trim().to_string())
+}
+
+#[cfg(test)]
+mod saml_tests {
+    use super::*;
+    use crate::operations::{identity_providers, pools};
+    use awsim_core::RequestContext;
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use dashmap::DashMap;
+    use serde_json::json;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("cognito-idp", "us-east-1")
+    }
+
+    fn setup() -> (Arc<CognitoOAuthState>, String, String) {
+        let cognito = Arc::new(CognitoState::default());
+        let pool = pools::create_user_pool(&cognito, &json!({ "PoolName": "p" }), &ctx()).unwrap();
+        let pool_id = pool["UserPool"]["Id"].as_str().unwrap().to_string();
+        let client = pools::create_user_pool_client(
+            &cognito,
+            &json!({ "UserPoolId": pool_id, "ClientName": "c",
+                     "CallbackURLs": ["https://app.test/cb"] }),
+            &ctx(),
+        )
+        .unwrap();
+        let client_id = client["UserPoolClient"]["ClientId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        identity_providers::create_identity_provider(
+            &cognito,
+            &json!({
+                "UserPoolId": pool_id,
+                "ProviderName": "CorpSAML",
+                "ProviderType": "SAML",
+                "ProviderDetails": { "SSORedirectBindingURI": "https://idp.example/sso" },
+                "AttributeMapping": { "email": "http://schemas.xmlsoap.org/claims/EmailAddress" }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let state = Arc::new(CognitoOAuthState {
+            cognito,
+            default_region: "us-east-1".to_string(),
+            default_account_id: "000000000000".to_string(),
+            auth_codes: Arc::new(DashMap::new()),
+            revoked_refresh_tokens: Arc::new(DashMap::new()),
+            federation: crate::federation::FederationState::new(),
+            port: 4566,
+        });
+        (state, pool_id, client_id)
+    }
+
+    fn saml_response_b64(name_id: &str, email: &str) -> String {
+        let xml = format!(
+            r#"<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"
+                 xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion">
+              <saml:Assertion><saml:Subject>
+                <saml:NameID>{name_id}</saml:NameID>
+              </saml:Subject><saml:AttributeStatement>
+                <saml:Attribute Name="http://schemas.xmlsoap.org/claims/EmailAddress">
+                  <saml:AttributeValue>{email}</saml:AttributeValue>
+                </saml:Attribute>
+              </saml:AttributeStatement></saml:Assertion>
+            </samlp:Response>"#
+        );
+        STANDARD.encode(xml)
+    }
+
+    #[test]
+    fn saml_acs_federates_user_and_issues_code() {
+        let (state, pool_id, client_id) = setup();
+        let relay = crate::federation::stash(
+            &state.federation,
+            crate::federation::PendingFederation {
+                pool_id: pool_id.clone(),
+                client_id: client_id.clone(),
+                redirect_uri: "https://app.test/cb".to_string(),
+                scope: "openid email".to_string(),
+                app_state: "xyz".to_string(),
+                nonce: None,
+                code_challenge: None,
+                code_challenge_method: None,
+                provider_name: "CorpSAML".to_string(),
+                issued_at: now_epoch(),
+            },
+        );
+
+        let form = SamlAcsForm {
+            saml_response: Some(saml_response_b64("corp-user-1", "alice@corp.example")),
+            relay_state: Some(relay),
+        };
+        let resp = saml_acs_inner(&state, pool_id.clone(), form);
+
+        assert!(resp.status().is_redirection(), "ACS redirects back to app");
+        let location = resp
+            .headers()
+            .get(axum::http::header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(location.starts_with("https://app.test/cb?code="));
+        assert!(location.contains("&state=xyz"));
+
+        // The federated user was created with the mapped email.
+        let pool = state.cognito.user_pools.get(&pool_id).unwrap();
+        let user = pool
+            .users
+            .get("CorpSAML_corp-user-1")
+            .expect("federated user");
+        assert_eq!(
+            user.attributes.get("email").map(String::as_str),
+            Some("alice@corp.example")
+        );
+        assert_eq!(user.status, "EXTERNAL_PROVIDER");
+    }
+
+    #[test]
+    fn saml_acs_rejects_unknown_relay_state() {
+        let (state, pool_id, _client_id) = setup();
+        let form = SamlAcsForm {
+            saml_response: Some(saml_response_b64("u", "u@e.com")),
+            relay_state: Some("nonexistent".to_string()),
+        };
+        let resp = saml_acs_inner(&state, pool_id, form);
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
 }

@@ -9,6 +9,7 @@ pub mod mock_idp;
 pub mod oauth;
 mod operations;
 pub mod password;
+pub mod saml;
 mod secret_hash;
 mod srp;
 pub mod state;
