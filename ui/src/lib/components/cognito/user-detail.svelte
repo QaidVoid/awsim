@@ -51,6 +51,19 @@
 		allGroups.filter((g) => !groups.some((existing) => existing.name === g.name))
 	);
 
+	const sub = $derived(user?.attributes.find((a) => a.name === 'sub')?.value ?? '');
+
+	const MFA_LABELS: Record<string, string> = {
+		SOFTWARE_TOKEN_MFA: 'TOTP',
+		SMS_MFA: 'SMS',
+		EMAIL_OTP: 'Email'
+	};
+	const mfaLabel = $derived(
+		!user || user.mfaSettings.length === 0
+			? 'None'
+			: user.mfaSettings.map((m) => MFA_LABELS[m] ?? m).join(', ')
+	);
+
 	onMount(load);
 
 	async function load() {
@@ -165,6 +178,42 @@
 			<Loader2 class="inline size-3 animate-spin" /> Loading...
 		</p>
 	{:else if user}
+		<div class="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm sm:grid-cols-3">
+			<div class="flex flex-col gap-0.5">
+				<span class="text-[10px] uppercase tracking-wide text-muted-foreground">Status</span>
+				<Badge variant="outline" class="w-fit font-mono text-[10px]">{user.status}</Badge>
+			</div>
+			<div class="flex flex-col gap-0.5">
+				<span class="text-[10px] uppercase tracking-wide text-muted-foreground">Enabled</span>
+				<Badge variant={user.enabled ? 'secondary' : 'destructive'} class="w-fit">
+					{user.enabled ? 'enabled' : 'disabled'}
+				</Badge>
+			</div>
+			<div class="flex flex-col gap-0.5">
+				<span class="text-[10px] uppercase tracking-wide text-muted-foreground">MFA</span>
+				<span class="text-xs">
+					{mfaLabel}
+					{#if user.preferredMfa}
+						<span class="text-muted-foreground"
+							>(pref: {MFA_LABELS[user.preferredMfa] ?? user.preferredMfa})</span
+						>
+					{/if}
+				</span>
+			</div>
+			<div class="col-span-2 flex flex-col gap-0.5 sm:col-span-3">
+				<span class="text-[10px] uppercase tracking-wide text-muted-foreground">Sub</span>
+				<span class="truncate font-mono text-xs" title={sub}>{sub || '—'}</span>
+			</div>
+			<div class="flex flex-col gap-0.5">
+				<span class="text-[10px] uppercase tracking-wide text-muted-foreground">Created</span>
+				<span class="text-xs text-muted-foreground">{fmtDate(user.createDate)}</span>
+			</div>
+			<div class="flex flex-col gap-0.5">
+				<span class="text-[10px] uppercase tracking-wide text-muted-foreground">Modified</span>
+				<span class="text-xs text-muted-foreground">{fmtDate(user.lastModifiedDate)}</span>
+			</div>
+		</div>
+
 		<div>
 			<div class="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
 				Attributes
