@@ -474,12 +474,15 @@ fn change_password_page_html(
 
     let html = format!(
         r#"<!DOCTYPE html>
-<html><head><title>AWSim Change Password</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AWSim Change Password</title>
 <style>
-body {{ font-family: sans-serif; background: #18181b; color: #e4e4e7; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }}
-.card {{ background: #27272a; border: 1px solid #3f3f46; border-radius: 12px; padding: 32px; width: 360px; }}
+* {{ box-sizing: border-box; }}
+body {{ font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: #18181b; color: #e4e4e7; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 16px; }}
+.card {{ background: #27272a; border: 1px solid #3f3f46; border-radius: 12px; padding: 32px; width: 100%; max-width: 360px; }}
 h2 {{ margin-top: 0; color: #fb923c; }}
-input {{ width: 100%; padding: 10px; margin: 8px 0; background: #18181b; border: 1px solid #3f3f46; border-radius: 6px; color: #e4e4e7; box-sizing: border-box; }}
+input {{ width: 100%; padding: 10px; margin: 8px 0; background: #18181b; border: 1px solid #3f3f46; border-radius: 6px; color: #e4e4e7; }}
+input:focus {{ outline: none; border-color: #ea580c; }}
 button {{ width: 100%; padding: 10px; background: #ea580c; border: none; border-radius: 6px; color: white; font-weight: bold; cursor: pointer; margin-top: 12px; }}
 button:hover {{ background: #f97316; }}
 .pool {{ color: #71717a; font-size: 12px; margin-bottom: 16px; }}
@@ -562,12 +565,15 @@ fn forgot_password_page_html(
     let code_challenge_method_e = escape_html(code_challenge_method);
     let html = format!(
         r#"<!DOCTYPE html>
-<html><head><title>AWSim Forgot Password</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AWSim Forgot Password</title>
 <style>
-body {{ font-family: sans-serif; background: #18181b; color: #e4e4e7; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }}
-.card {{ background: #27272a; border: 1px solid #3f3f46; border-radius: 12px; padding: 32px; width: 360px; }}
+* {{ box-sizing: border-box; }}
+body {{ font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: #18181b; color: #e4e4e7; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 16px; }}
+.card {{ background: #27272a; border: 1px solid #3f3f46; border-radius: 12px; padding: 32px; width: 100%; max-width: 360px; }}
 h2 {{ margin-top: 0; color: #fb923c; }}
-input {{ width: 100%; padding: 10px; margin: 8px 0; background: #18181b; border: 1px solid #3f3f46; border-radius: 6px; color: #e4e4e7; box-sizing: border-box; }}
+input {{ width: 100%; padding: 10px; margin: 8px 0; background: #18181b; border: 1px solid #3f3f46; border-radius: 6px; color: #e4e4e7; }}
+input:focus {{ outline: none; border-color: #ea580c; }}
 button {{ width: 100%; padding: 10px; background: #ea580c; border: none; border-radius: 6px; color: white; font-weight: bold; cursor: pointer; margin-top: 12px; }}
 button:hover {{ background: #f97316; }}
 .pool {{ color: #71717a; font-size: 12px; margin-bottom: 16px; }}
@@ -657,12 +663,15 @@ fn forgot_password_confirm_page_html(
     let code_challenge_method_e = escape_html(code_challenge_method);
     let html = format!(
         r#"<!DOCTYPE html>
-<html><head><title>AWSim Confirm Reset</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AWSim Confirm Reset</title>
 <style>
-body {{ font-family: sans-serif; background: #18181b; color: #e4e4e7; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }}
-.card {{ background: #27272a; border: 1px solid #3f3f46; border-radius: 12px; padding: 32px; width: 360px; }}
+* {{ box-sizing: border-box; }}
+body {{ font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: #18181b; color: #e4e4e7; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 16px; }}
+.card {{ background: #27272a; border: 1px solid #3f3f46; border-radius: 12px; padding: 32px; width: 100%; max-width: 360px; }}
 h2 {{ margin-top: 0; color: #fb923c; }}
-input {{ width: 100%; padding: 10px; margin: 8px 0; background: #18181b; border: 1px solid #3f3f46; border-radius: 6px; color: #e4e4e7; box-sizing: border-box; }}
+input {{ width: 100%; padding: 10px; margin: 8px 0; background: #18181b; border: 1px solid #3f3f46; border-radius: 6px; color: #e4e4e7; }}
+input:focus {{ outline: none; border-color: #ea580c; }}
 button {{ width: 100%; padding: 10px; background: #ea580c; border: none; border-radius: 6px; color: white; font-weight: bold; cursor: pointer; margin-top: 12px; }}
 button:hover {{ background: #f97316; }}
 .pool {{ color: #71717a; font-size: 12px; margin-bottom: 16px; }}
