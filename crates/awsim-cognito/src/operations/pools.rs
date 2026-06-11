@@ -340,24 +340,48 @@ fn pool_to_value(pool: &UserPool) -> Value {
 
 pub fn list_user_pools(
     state: &CognitoState,
-    _input: &Value,
+    input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pools: Vec<Value> = state
+    use awsim_core::pagination::{cap_max_results, paginate};
+
+    let mut pools: Vec<(String, String, u64, u64)> = state
         .user_pools
         .iter()
         .map(|e| {
+            (
+                e.id.clone(),
+                e.name.clone(),
+                e.created_date,
+                e.last_modified_date,
+            )
+        })
+        .collect();
+    pools.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let limit = cap_max_results(input["MaxResults"].as_i64(), 60, 60);
+    let token = input["NextToken"].as_str();
+    let page = paginate(pools, limit, token, |p| p.0.clone())?;
+
+    let user_pools: Vec<Value> = page
+        .items
+        .iter()
+        .map(|(id, name, created, modified)| {
             json!({
-                "Id": e.id,
-                "Name": e.name,
+                "Id": id,
+                "Name": name,
                 "Status": "Active",
-                "CreationDate": e.created_date,
-                "LastModifiedDate": e.created_date
+                "CreationDate": created,
+                "LastModifiedDate": modified
             })
         })
         .collect();
 
-    Ok(json!({ "UserPools": pools }))
+    let mut resp = json!({ "UserPools": user_pools });
+    if let Some(next) = page.next_token {
+        resp["NextToken"] = json!(next);
+    }
+    Ok(resp)
 }
 
 // ---------------------------------------------------------------------------
@@ -664,7 +688,7 @@ pub fn list_user_pool_clients(
         AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
     })?;
 
-    let max_results = input["MaxResults"].as_u64().unwrap_or(60) as usize;
+    use awsim_core::pagination::{cap_max_results, paginate};
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
@@ -673,20 +697,36 @@ pub fn list_user_pool_clients(
         )
     })?;
 
-    let clients: Vec<Value> = pool
+    let mut clients: Vec<(String, String, String)> = pool
         .clients
         .values()
-        .take(max_results)
         .map(|c| {
-            json!({
-                "ClientId": c.client_id,
-                "ClientName": c.client_name,
-                "UserPoolId": c.user_pool_id
-            })
+            (
+                c.client_id.clone(),
+                c.client_name.clone(),
+                c.user_pool_id.clone(),
+            )
+        })
+        .collect();
+    clients.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let limit = cap_max_results(input["MaxResults"].as_i64(), 60, 60);
+    let token = input["NextToken"].as_str();
+    let page = paginate(clients, limit, token, |c| c.0.clone())?;
+
+    let client_values: Vec<Value> = page
+        .items
+        .iter()
+        .map(|(id, name, pool_id)| {
+            json!({ "ClientId": id, "ClientName": name, "UserPoolId": pool_id })
         })
         .collect();
 
-    Ok(json!({ "UserPoolClients": clients }))
+    let mut resp = json!({ "UserPoolClients": client_values });
+    if let Some(next) = page.next_token {
+        resp["NextToken"] = json!(next);
+    }
+    Ok(resp)
 }
 
 // ---------------------------------------------------------------------------
@@ -1711,6 +1751,25 @@ mod tests {
             resp["UserPool"]["AdminCreateUserConfig"]["AllowAdminCreateUserOnly"],
             true
         );
+    }
+
+    #[test]
+    fn list_user_pools_paginates() {
+        let state = CognitoState::default();
+        for i in 0..3 {
+            create_user_pool(&state, &json!({ "PoolName": format!("p{i}") }), &ctx()).unwrap();
+        }
+        let first = list_user_pools(&state, &json!({ "MaxResults": 2 }), &ctx()).unwrap();
+        assert_eq!(first["UserPools"].as_array().unwrap().len(), 2);
+        let next = first["NextToken"].as_str().expect("more pages");
+        let second = list_user_pools(
+            &state,
+            &json!({ "MaxResults": 2, "NextToken": next }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(second["UserPools"].as_array().unwrap().len(), 1);
+        assert!(second["NextToken"].is_null());
     }
 
     #[test]
