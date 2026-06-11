@@ -5,7 +5,6 @@ use awsim_core::{AwsError, RequestContext, arn};
 use rand::Rng;
 use serde_json::{Value, json};
 use tracing::info;
-use uuid::Uuid;
 
 use crate::state::{
     CognitoState, MAX_CUSTOM_ATTRIBUTES, NumberAttributeConstraints, PasswordPolicy,
@@ -20,10 +19,10 @@ fn now_epoch() -> u64 {
         .as_secs()
 }
 
-/// Generate a random 52-char alphanumeric client secret.
-fn generate_client_secret() -> String {
+/// Generate a random alphanumeric string of `len` characters.
+fn random_alnum(len: usize) -> String {
     let mut rng = rand::thread_rng();
-    (0..52)
+    (0..len)
         .map(|_| {
             let idx = rng.gen_range(0..62);
             match idx {
@@ -33,6 +32,11 @@ fn generate_client_secret() -> String {
             }
         })
         .collect()
+}
+
+/// Generate a random 52-char alphanumeric client secret.
+fn generate_client_secret() -> String {
+    random_alnum(52)
 }
 
 fn password_policy_to_value(p: &PasswordPolicy) -> Value {
@@ -136,7 +140,7 @@ pub fn create_user_pool(
         AwsError::bad_request("InvalidParameterException", "PoolName is required")
     })?;
 
-    let random = &Uuid::new_v4().to_string()[..8];
+    let random = random_alnum(9);
     let pool_id = format!("{0}_{1}", ctx.region, random);
     let arn = arn::build(ctx, "cognito-idp", format!("userpool/{pool_id}"));
     let now = now_epoch();
@@ -570,7 +574,7 @@ pub fn create_user_pool_client(
 
     validate_client_attributes(&pool, &read_attributes, &write_attributes)?;
 
-    let client_id = Uuid::new_v4().to_string().replace('-', "")[..26].to_string();
+    let client_id = random_alnum(26);
     let now = now_epoch();
 
     let client = UserPoolClient {
@@ -1011,11 +1015,29 @@ fn parse_custom_schema_entry(name: &str, entry: &Value) -> Result<SchemaAttribut
             "Schema attribute Name is empty",
         ));
     }
+    let base_name = name.strip_prefix("custom:").unwrap_or(name);
     let full_name = if name.starts_with("custom:") {
         name.to_string()
     } else {
         format!("custom:{name}")
     };
+
+    // Custom attribute names are 1-20 characters (excluding the prefix).
+    let base_len = base_name.chars().count();
+    if !(1..=20).contains(&base_len) {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            "Custom attribute name must be between 1 and 20 characters.",
+        ));
+    }
+
+    // Cognito does not allow custom attributes to be Required.
+    if entry["Required"].as_bool() == Some(true) {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            "Required custom attributes are not supported currently.",
+        ));
+    }
 
     let data_type = entry["AttributeDataType"].as_str().unwrap_or("String");
     validate_data_type(data_type)?;
@@ -1284,6 +1306,8 @@ fn parse_extra_pool_config(input: &Value) -> HashMap<String, Value> {
         .or_insert_with(
             || json!({ "AllowAdminCreateUserOnly": false, "UnusedAccountValidityDays": 7 }),
         );
+    map.entry("EmailConfiguration".to_string())
+        .or_insert_with(|| json!({ "EmailSendingAccount": "COGNITO_DEFAULT" }));
     map
 }
 
@@ -1811,6 +1835,60 @@ mod tests {
         )
         .unwrap();
         assert!(described["UserPoolClient"]["ClientSecret"].is_string());
+    }
+
+    #[test]
+    fn create_user_pool_rejects_required_custom_attribute() {
+        let state = CognitoState::default();
+        let err = create_user_pool(
+            &state,
+            &json!({
+                "PoolName": "p",
+                "Schema": [{ "Name": "org", "AttributeDataType": "String", "Required": true }]
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+        assert!(err.message.contains("Required custom attributes"));
+    }
+
+    #[test]
+    fn create_user_pool_rejects_overlong_custom_attribute_name() {
+        let state = CognitoState::default();
+        let err = create_user_pool(
+            &state,
+            &json!({
+                "PoolName": "p",
+                "Schema": [{ "Name": "this_name_is_far_too_long", "AttributeDataType": "String" }]
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn pool_and_client_ids_are_alphanumeric() {
+        let state = CognitoState::default();
+        let created = create_user_pool(&state, &json!({ "PoolName": "p" }), &ctx()).unwrap();
+        let pool_id = created["UserPool"]["Id"].as_str().unwrap().to_string();
+        let suffix = pool_id.split_once('_').unwrap().1;
+        assert_eq!(suffix.len(), 9);
+        assert!(suffix.chars().all(|c| c.is_ascii_alphanumeric()));
+        assert_eq!(
+            created["UserPool"]["EmailConfiguration"]["EmailSendingAccount"],
+            "COGNITO_DEFAULT"
+        );
+        let client = create_user_pool_client(
+            &state,
+            &json!({ "UserPoolId": pool_id, "ClientName": "c" }),
+            &ctx(),
+        )
+        .unwrap();
+        let cid = client["UserPoolClient"]["ClientId"].as_str().unwrap();
+        assert_eq!(cid.len(), 26);
+        assert!(cid.chars().all(|c| c.is_ascii_alphanumeric()));
     }
 
     #[test]

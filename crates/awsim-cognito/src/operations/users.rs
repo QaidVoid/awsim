@@ -2502,13 +2502,14 @@ mod tests {
     #[test]
     fn admin_create_user_required_attr_missing_rejected() {
         let state = CognitoState::default();
-        // Required attr without default value.
+        // A standard attribute marked Required (custom attributes cannot be
+        // required in Cognito). Creating a user without it is rejected.
         create_user_pool(
             &state,
             &json!({
                 "PoolName": "p",
                 "Schema": [
-                    { "Name": "org", "AttributeDataType": "String", "Required": true }
+                    { "Name": "email", "Required": true, "Mutable": true }
                 ]
             }),
             &ctx(),
@@ -2532,7 +2533,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.message.contains("required attribute missing"));
-        assert!(err.message.contains("custom:org"));
+        assert!(err.message.contains("email"));
     }
 
     #[test]
