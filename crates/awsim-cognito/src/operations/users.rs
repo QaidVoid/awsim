@@ -415,6 +415,23 @@ fn prepare_user_attributes(
     Ok(attrs)
 }
 
+/// Reject an attribute update that would set an alias attribute (email /
+/// phone_number / preferred_username when configured as a pool alias) to a
+/// value another user already holds. AWS raises AliasExistsException; awsim
+/// previously only enforced this at create time.
+fn check_alias_uniqueness_on_update(
+    pool: &UserPool,
+    username: &str,
+    new_attrs: &HashMap<String, String>,
+) -> Result<(), AwsError> {
+    for alias in &pool.alias_attributes {
+        if let Some(value) = new_attrs.get(alias) {
+            ensure_attribute_unique(pool, username, alias, value, "AliasExistsException")?;
+        }
+    }
+    Ok(())
+}
+
 fn ensure_attribute_unique(
     pool: &UserPool,
     new_username: &str,
@@ -1627,12 +1644,14 @@ pub fn admin_update_user_attributes(
     let username = resolve_username(&pool, username).ok_or_else(|| {
         AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
-    let user = pool.users.get_mut(&username).ok_or_else(|| {
-        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
-    })?;
 
     let new_attrs = parse_user_attributes(input, "UserAttributes");
     validate_attribute_values(&schema, &new_attrs)?;
+    check_alias_uniqueness_on_update(&pool, &username, &new_attrs)?;
+
+    let user = pool.users.get_mut(&username).ok_or_else(|| {
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
+    })?;
     validate_mutability(&schema, &user.attributes, &new_attrs)?;
 
     apply_attribute_updates(user, new_attrs, &username_attrs)?;
@@ -1785,6 +1804,7 @@ pub fn update_user_attributes(
             )?;
             let username_attrs = pool_entry.username_attributes.clone();
             let schema = pool_entry.schema.clone();
+            check_alias_uniqueness_on_update(&pool_entry, &username, &new_attrs)?;
             let user = pool_entry.users.get_mut(&username).expect("just checked");
             validate_attribute_values(&schema, &new_attrs)?;
             validate_mutability(&schema, &user.attributes, &new_attrs)?;
@@ -3238,6 +3258,45 @@ mod tests {
             .unwrap()
             .to_string();
         (state, pool_id, client_id)
+    }
+
+    #[test]
+    fn admin_update_attributes_rejects_alias_collision() {
+        let state = CognitoState::default();
+        // Pool with email as an alias attribute.
+        let pool = crate::operations::pools::create_user_pool(
+            &state,
+            &json!({ "PoolName": "p", "AliasAttributes": ["email"] }),
+            &ctx(),
+        )
+        .unwrap();
+        let pool_id = pool["UserPool"]["Id"].as_str().unwrap().to_string();
+        for (name, email) in [("alice", "alice@e.com"), ("bob", "bob@e.com")] {
+            admin_create_user(
+                &state,
+                &json!({ "UserPoolId": pool_id, "Username": name, "MessageAction": "SUPPRESS",
+                         "UserAttributes": [{ "Name": "email", "Value": email }] }),
+                &ctx(),
+            )
+            .unwrap();
+        }
+        // Changing bob's email to alice's must collide.
+        let err = admin_update_user_attributes(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Username": "bob",
+                     "UserAttributes": [{ "Name": "email", "Value": "alice@e.com" }] }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "AliasExistsException");
+        // A non-colliding change still works.
+        admin_update_user_attributes(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Username": "bob",
+                     "UserAttributes": [{ "Name": "email", "Value": "bob2@e.com" }] }),
+            &ctx(),
+        )
+        .unwrap();
     }
 
     #[test]
