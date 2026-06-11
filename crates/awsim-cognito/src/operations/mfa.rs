@@ -107,13 +107,30 @@ pub fn set_user_pool_mfa_config(
         )
     })?;
 
-    if let Some(mfa) = input["MfaConfiguration"].as_str() {
-        pool.mfa_configuration = mfa.to_string();
+    // Resolve the would-be config (input overrides, falling back to current
+    // state) so we can validate before mutating anything.
+    let new_mfa = input["MfaConfiguration"]
+        .as_str()
+        .unwrap_or(&pool.mfa_configuration)
+        .to_string();
+    let software_enabled = input["SoftwareTokenMfaConfiguration"]["Enabled"]
+        .as_bool()
+        .unwrap_or(pool.software_token_mfa_enabled);
+    let has_sms = !input["SmsMfaConfiguration"].is_null()
+        || pool.extra_config.contains_key("SmsMfaConfiguration");
+    let has_email = !input["EmailMfaConfiguration"].is_null()
+        || pool.extra_config.contains_key("EmailMfaConfiguration");
+
+    // AWS requires at least one second factor whenever MFA is not OFF.
+    if (new_mfa == "ON" || new_mfa == "OPTIONAL") && !(software_enabled || has_sms || has_email) {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            "At least one MFA method must be enabled when MfaConfiguration is ON or OPTIONAL.",
+        ));
     }
 
-    if let Some(enabled) = input["SoftwareTokenMfaConfiguration"]["Enabled"].as_bool() {
-        pool.software_token_mfa_enabled = enabled;
-    }
+    pool.mfa_configuration = new_mfa;
+    pool.software_token_mfa_enabled = software_enabled;
 
     // SMS and email MFA config are stored verbatim so GetUserPoolMfaConfig
     // round-trips them (awsim does not model SMS/email delivery itself).
@@ -379,4 +396,50 @@ fn apply_mfa_settings_to_user(
         user.mfa_preferred = Some("SMS_MFA".to_string());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod mfa_config_tests {
+    use super::*;
+    use crate::operations::pools::create_user_pool;
+    use serde_json::json;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("cognito-idp", "us-east-1")
+    }
+
+    fn pool(state: &CognitoState) -> String {
+        let p = create_user_pool(state, &json!({ "PoolName": "p" }), &ctx()).unwrap();
+        p["UserPool"]["Id"].as_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn mfa_on_without_a_method_is_rejected() {
+        let state = CognitoState::default();
+        let pool_id = pool(&state);
+        let err = set_user_pool_mfa_config(
+            &state,
+            &json!({ "UserPoolId": pool_id, "MfaConfiguration": "ON" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn mfa_on_with_software_token_is_accepted() {
+        let state = CognitoState::default();
+        let pool_id = pool(&state);
+        set_user_pool_mfa_config(
+            &state,
+            &json!({ "UserPoolId": pool_id, "MfaConfiguration": "ON",
+                     "SoftwareTokenMfaConfiguration": { "Enabled": true } }),
+            &ctx(),
+        )
+        .unwrap();
+        let cfg =
+            get_user_pool_mfa_config(&state, &json!({ "UserPoolId": pool_id }), &ctx()).unwrap();
+        assert_eq!(cfg["MfaConfiguration"], "ON");
+        assert_eq!(cfg["SoftwareTokenMfaConfiguration"]["Enabled"], true);
+    }
 }

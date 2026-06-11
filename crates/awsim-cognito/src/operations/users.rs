@@ -185,6 +185,17 @@ fn mask_email(email: &str) -> String {
     }
 }
 
+/// Mask a phone number the way Cognito does in CodeDeliveryDetails, keeping
+/// only the last two digits (e.g. `+14155551234` -> `+********34`).
+fn mask_phone(phone: &str) -> String {
+    let digits: Vec<char> = phone.chars().filter(|c| c.is_ascii_digit()).collect();
+    if digits.len() < 2 {
+        return "+********".to_string();
+    }
+    let last2: String = digits[digits.len() - 2..].iter().collect();
+    format!("+********{last2}")
+}
+
 pub fn user_to_value(user: &CognitoUser) -> Value {
     let attributes: Vec<Value> = user
         .attributes
@@ -628,6 +639,14 @@ pub fn confirm_sign_up(
     let user = pool.users.get_mut(&username).ok_or_else(|| {
         AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
+    // A user can only be confirmed once. AWS rejects a repeat ConfirmSignUp
+    // rather than silently succeeding.
+    if user.status == "CONFIRMED" {
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "User cannot be confirmed. Current status is CONFIRMED",
+        ));
+    }
     check_code_rate_limit(user)?;
 
     let stored = state
@@ -1736,7 +1755,7 @@ pub fn admin_delete_user_attributes(
 pub fn update_user_attributes(
     state: &CognitoState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let access_token = input["AccessToken"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "AccessToken is required")
@@ -1769,8 +1788,65 @@ pub fn update_user_attributes(
             let user = pool_entry.users.get_mut(&username).expect("just checked");
             validate_attribute_values(&schema, &new_attrs)?;
             validate_mutability(&schema, &user.attributes, &new_attrs)?;
+
+            // Detect changes to verifiable attributes before applying: AWS
+            // resets the verified flag and issues a verification code.
+            let email_changed = matches!(
+                new_attrs.get("email"),
+                Some(e) if Some(e) != user.attributes.get("email")
+            );
+            let phone_changed = matches!(
+                new_attrs.get("phone_number"),
+                Some(p) if Some(p) != user.attributes.get("phone_number")
+            );
+
             apply_attribute_updates(user, new_attrs, &username_attrs)?;
-            return Ok(json!({ "CodeDeliveryDetailsList": [] }));
+
+            let mut delivery: Vec<Value> = Vec::new();
+            let mut email_delivery: Option<(String, String)> = None;
+            if email_changed {
+                user.attributes
+                    .insert("email_verified".to_string(), "false".to_string());
+                let code = format!("{:06}", rand::random::<u32>() % 1_000_000);
+                user.pending_verifications
+                    .insert("email".to_string(), code.clone());
+                user.pending_verifications_issued
+                    .insert("email".to_string(), now_epoch());
+                if let Some(email) = user.attributes.get("email").cloned() {
+                    delivery.push(json!({
+                        "AttributeName": "email",
+                        "DeliveryMedium": "EMAIL",
+                        "Destination": mask_email(&email),
+                    }));
+                    email_delivery = Some((email, code));
+                }
+            }
+            if phone_changed {
+                user.attributes
+                    .insert("phone_number_verified".to_string(), "false".to_string());
+                // SMS delivery is not modelled, but the code is still stashed
+                // so VerifyUserAttribute works, and AWS reports the medium.
+                let code = format!("{:06}", rand::random::<u32>() % 1_000_000);
+                user.pending_verifications
+                    .insert("phone_number".to_string(), code);
+                user.pending_verifications_issued
+                    .insert("phone_number".to_string(), now_epoch());
+                if let Some(phone) = user.attributes.get("phone_number").cloned() {
+                    delivery.push(json!({
+                        "AttributeName": "phone_number",
+                        "DeliveryMedium": "SMS",
+                        "Destination": mask_phone(&phone),
+                    }));
+                }
+            }
+
+            // Route the email code through SES (user borrow has ended).
+            if let Some((email, code)) = email_delivery {
+                let (subject, body) =
+                    super::email::verification_message(&pool_entry.extra_config, &code);
+                super::email::deliver(ctx, &email, &subject, &body, "UpdateUserAttributes");
+            }
+            return Ok(json!({ "CodeDeliveryDetailsList": delivery }));
         }
     }
 
@@ -3143,5 +3219,109 @@ mod tests {
             .find(|a| a["Name"] == "email_verified")
             .map(|a| a["Value"].clone());
         assert_eq!(verified, Some(json!("true")));
+    }
+
+    fn pool_and_client() -> (CognitoState, String, String) {
+        let state = CognitoState::default();
+        let pool =
+            crate::operations::pools::create_user_pool(&state, &json!({ "PoolName": "p" }), &ctx())
+                .unwrap();
+        let pool_id = pool["UserPool"]["Id"].as_str().unwrap().to_string();
+        let client = crate::operations::pools::create_user_pool_client(
+            &state,
+            &json!({ "UserPoolId": pool_id, "ClientName": "c" }),
+            &ctx(),
+        )
+        .unwrap();
+        let client_id = client["UserPoolClient"]["ClientId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        (state, pool_id, client_id)
+    }
+
+    #[test]
+    fn confirm_sign_up_rejects_already_confirmed() {
+        let (state, _pool_id, client_id) = pool_and_client();
+        sign_up(
+            &state,
+            &json!({ "ClientId": client_id, "Username": "u1", "Password": "Passw0rd!",
+                     "UserAttributes": [{ "Name": "email", "Value": "u1@e.com" }] }),
+            &ctx(),
+        )
+        .unwrap();
+        confirm_sign_up(
+            &state,
+            &json!({ "ClientId": client_id, "Username": "u1", "ConfirmationCode": "123456" }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = confirm_sign_up(
+            &state,
+            &json!({ "ClientId": client_id, "Username": "u1", "ConfirmationCode": "123456" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "NotAuthorizedException");
+    }
+
+    #[test]
+    fn update_user_attributes_email_change_issues_code_and_unverifies() {
+        let (state, pool_id, client_id) = pool_and_client();
+        admin_create_user(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Username": "u1", "MessageAction": "SUPPRESS",
+                     "UserAttributes": [
+                         { "Name": "email", "Value": "old@e.com" },
+                         { "Name": "email_verified", "Value": "true" }
+                     ] }),
+            &ctx(),
+        )
+        .unwrap();
+        let sub = state
+            .user_pools
+            .get(&pool_id)
+            .unwrap()
+            .users
+            .get("u1")
+            .unwrap()
+            .sub
+            .clone();
+        let token = crate::jwt::access_token(
+            &sub,
+            "us-east-1",
+            &pool_id,
+            &client_id,
+            "u1",
+            &[],
+            &[],
+            None,
+            3600,
+            None,
+        );
+        let resp = update_user_attributes(
+            &state,
+            &json!({ "AccessToken": token,
+                     "UserAttributes": [{ "Name": "email", "Value": "new@e.com" }] }),
+            &ctx(),
+        )
+        .unwrap();
+        let list = resp["CodeDeliveryDetailsList"].as_array().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0]["AttributeName"], "email");
+        assert_eq!(list[0]["DeliveryMedium"], "EMAIL");
+
+        let pool = state.user_pools.get(&pool_id).unwrap();
+        let user = pool.users.get("u1").unwrap();
+        assert_eq!(
+            user.attributes.get("email").map(String::as_str),
+            Some("new@e.com")
+        );
+        assert_eq!(
+            user.attributes.get("email_verified").map(String::as_str),
+            Some("false"),
+            "changing email resets the verified flag"
+        );
+        assert!(user.pending_verifications.contains_key("email"));
     }
 }
