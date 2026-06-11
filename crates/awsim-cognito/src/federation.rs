@@ -484,6 +484,7 @@ pub fn upsert_user(
         enabled: true,
         groups: Vec::new(),
         created_date: now_epoch(),
+        last_modified_date: now_epoch(),
         pending_verifications: HashMap::new(),
         pending_verifications_issued: HashMap::new(),
         code_failed_attempts: 0,

@@ -46,9 +46,65 @@ pub(crate) fn resolve_username(pool: &UserPool, identifier: &str) -> Option<Stri
     if pool.users.contains_key(identifier) {
         return Some(identifier.to_string());
     }
-    pool.users
+    if let Some(name) = pool
+        .users
         .iter()
         .find_map(|(name, user)| (user.sub == identifier).then(|| name.clone()))
+    {
+        return Some(name);
+    }
+    // Real AWS also accepts an alias (email / phone_number / preferred_username)
+    // as the Username on the admin and code APIs.
+    resolve_via_attributes(pool, identifier)
+}
+
+/// Match an identifier against a pool's alias and username attributes,
+/// honouring Cognito's verified requirement: `email` / `phone_number` aliases
+/// resolve only when the matching `<attr>_verified` flag is "true", while
+/// `preferred_username` is always usable. Returns the stored user-pool key.
+fn resolve_via_attributes(pool: &UserPool, input: &str) -> Option<String> {
+    let mut aliases: Vec<&String> = Vec::new();
+    for a in pool
+        .alias_attributes
+        .iter()
+        .chain(pool.username_attributes.iter())
+    {
+        if !aliases.contains(&a) {
+            aliases.push(a);
+        }
+    }
+    for alias in aliases {
+        let case_insensitive = matches!(alias.as_str(), "email" | "preferred_username");
+        for (key, user) in pool.users.iter() {
+            let Some(stored) = user.attributes.get(alias) else {
+                continue;
+            };
+            let matches = if case_insensitive {
+                stored.eq_ignore_ascii_case(input)
+            } else {
+                stored == input
+            };
+            if !matches {
+                continue;
+            }
+            let verified_ok = match alias.as_str() {
+                "email" => {
+                    user.attributes.get("email_verified").map(String::as_str) == Some("true")
+                }
+                "phone_number" => {
+                    user.attributes
+                        .get("phone_number_verified")
+                        .map(String::as_str)
+                        == Some("true")
+                }
+                _ => true,
+            };
+            if verified_ok {
+                return Some(key.clone());
+            }
+        }
+    }
+    None
 }
 
 /// Default validity window for confirmation / reset codes, matching real
@@ -119,14 +175,27 @@ pub fn user_to_value(user: &CognitoUser) -> Value {
         .map(|(k, v)| json!({"Name": k, "Value": v}))
         .collect();
 
+    // Surface the user's enrolled MFA methods and preference, derived from the
+    // per-user MFA state, the way AdminGetUser / GetUser report them.
+    let mut mfa_settings: Vec<&str> = Vec::new();
+    if user.totp_verified {
+        mfa_settings.push("SOFTWARE_TOKEN_MFA");
+    }
+    if user.mfa_enabled && user.attributes.contains_key("phone_number") {
+        mfa_settings.push("SMS_MFA");
+    }
+    let preferred = user.mfa_preferred.clone().unwrap_or_default();
+
     json!({
         "Username": user.username,
         "UserStatus": user.status,
         "Enabled": user.enabled,
         "UserCreateDate": user.created_date,
-        "UserLastModifiedDate": user.created_date,
+        "UserLastModifiedDate": user.last_modified_date,
         "Attributes": &attributes,
-        "UserAttributes": &attributes
+        "UserAttributes": &attributes,
+        "UserMFASettingList": mfa_settings,
+        "PreferredMfaSetting": preferred
     })
 }
 
@@ -152,6 +221,7 @@ fn make_user(
         enabled: true,
         groups: Vec::new(),
         created_date: now_epoch(),
+        last_modified_date: now_epoch(),
         pending_verifications: HashMap::new(),
         pending_verifications_issued: HashMap::new(),
         code_failed_attempts: 0,
@@ -357,35 +427,15 @@ fn ensure_attribute_unique(
 /// Resolve a sign-in identifier (Username from `InitiateAuth` /
 /// `AdminInitiateAuth` / hosted UI) to the actual user-pool key.
 ///
-/// First tries a literal match against `pool.users`. If that misses and
-/// the pool has `AliasAttributes` configured, scans users for one whose
-/// matching attribute equals the input (case-insensitive for `email` and
-/// `preferred_username`). Returns `None` if no user is found by either
-/// route.
+/// Tries a literal match against `pool.users` first, then resolves via the
+/// pool's alias / username attributes. `email` and `phone_number` aliases
+/// only resolve when the matching attribute is verified, so an unverified
+/// (potentially squatted) address can't be used to sign in.
 pub fn resolve_username_for_signin(pool: &UserPool, input: &str) -> Option<String> {
     if pool.users.contains_key(input) {
         return Some(input.to_string());
     }
-    if pool.alias_attributes.is_empty() {
-        return None;
-    }
-    for alias in &pool.alias_attributes {
-        let case_insensitive = matches!(alias.as_str(), "email" | "preferred_username");
-        for (key, user) in pool.users.iter() {
-            let Some(stored) = user.attributes.get(alias) else {
-                continue;
-            };
-            let matches = if case_insensitive {
-                stored.eq_ignore_ascii_case(input)
-            } else {
-                stored == input
-            };
-            if matches {
-                return Some(key.clone());
-            }
-        }
-    }
-    None
+    resolve_via_attributes(pool, input)
 }
 
 fn looks_like_email(s: &str) -> bool {
@@ -538,9 +588,12 @@ pub fn confirm_sign_up(
         )
     })?;
 
+    let username = resolve_username(&pool, username).ok_or_else(|| {
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
+    })?;
     let code_key = format!("{pool_id}:{username}");
     let auto_verified = pool.auto_verified_attributes.clone();
-    let user = pool.users.get_mut(username).ok_or_else(|| {
+    let user = pool.users.get_mut(&username).ok_or_else(|| {
         AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
     check_code_rate_limit(user)?;
@@ -589,6 +642,7 @@ pub fn confirm_sign_up(
     let _ = state.confirmation_codes_issued.remove(&code_key);
 
     user.status = "CONFIRMED".to_string();
+    user.last_modified_date = now_epoch();
     // AutoVerifiedAttributes on the pool flips the matching
     // `<attr>_verified` flag the moment the user confirms sign-up.
     // Without this the user is CONFIRMED but their email/phone never
@@ -644,6 +698,7 @@ pub fn admin_confirm_sign_up(
     })?;
 
     user.status = "CONFIRMED".to_string();
+    user.last_modified_date = now_epoch();
     info!(username = %username, pool_id = %pool_id, "Cognito: admin confirmed sign-up");
 
     // Post-Confirmation trigger (fire-and-forget)
@@ -662,6 +717,36 @@ pub fn admin_confirm_sign_up(
 // AdminCreateUser
 // ---------------------------------------------------------------------------
 
+/// Generate a random temporary password that satisfies the default pool
+/// policy (>= 8 chars with a lowercase, uppercase, digit, and symbol). Used
+/// when AdminCreateUser is called without an explicit TemporaryPassword,
+/// instead of a guessable constant.
+fn generate_temp_password() -> String {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    const LOWER: &[u8] = b"abcdefghijkmnpqrstuvwxyz";
+    const UPPER: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ";
+    const DIGITS: &[u8] = b"23456789";
+    const SYMBOLS: &[u8] = b"!@#$%^&*()-_=+";
+    let pick = |rng: &mut rand::rngs::ThreadRng, set: &[u8]| set[rng.gen_range(0..set.len())];
+    // One from each class guarantees the policy is met, then fill to length.
+    let mut chars: Vec<u8> = vec![
+        pick(&mut rng, LOWER),
+        pick(&mut rng, UPPER),
+        pick(&mut rng, DIGITS),
+        pick(&mut rng, SYMBOLS),
+    ];
+    let all = [LOWER, UPPER, DIGITS, SYMBOLS].concat();
+    while chars.len() < 14 {
+        chars.push(pick(&mut rng, &all));
+    }
+    // Shuffle so the class-ordered prefix isn't predictable.
+    for i in (1..chars.len()).rev() {
+        chars.swap(i, rng.gen_range(0..=i));
+    }
+    String::from_utf8(chars).expect("ascii bytes are valid utf8")
+}
+
 pub fn admin_create_user(
     state: &CognitoState,
     input: &Value,
@@ -673,8 +758,16 @@ pub fn admin_create_user(
     let username = input["Username"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "Username is required")
     })?;
+    let message_action = input["MessageAction"].as_str();
 
-    let password = input["TemporaryPassword"].as_str().unwrap_or("Temp@1234");
+    let generated_password;
+    let password = match input["TemporaryPassword"].as_str() {
+        Some(p) => p,
+        None => {
+            generated_password = generate_temp_password();
+            &generated_password
+        }
+    };
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
@@ -682,6 +775,23 @@ pub fn admin_create_user(
             format!("User pool {pool_id} does not exist."),
         )
     })?;
+
+    // MessageAction=RESEND re-sends the invitation for an existing user
+    // instead of creating one: a missing user is an error, an existing one is
+    // returned unchanged.
+    if message_action == Some("RESEND") {
+        let resolved = resolve_username(&pool, username);
+        return match resolved.and_then(|u| pool.users.get(&u).map(user_to_value)) {
+            Some(user_value) => {
+                info!(username = %username, pool_id = %pool_id, "Cognito: admin re-sent user invitation");
+                Ok(json!({ "User": user_value }))
+            }
+            None => Err(AwsError::service_not_found(
+                "UserNotFoundException",
+                "User does not exist.",
+            )),
+        };
+    }
 
     if pool.users.contains_key(username) {
         return Err(AwsError::bad_request(
@@ -833,6 +943,7 @@ pub fn admin_set_user_password(
     } else {
         "FORCE_CHANGE_PASSWORD".to_string()
     };
+    user.last_modified_date = now_epoch();
     // Setting a fresh password administratively unlocks the account.
     user.failed_login_attempts = 0;
     user.locked_until_secs = None;
@@ -867,8 +978,12 @@ pub fn list_users(
     let mut users: Vec<CognitoUser> = pool.users.values().cloned().collect();
     users.sort_by(|a, b| a.username.cmp(&b.username));
 
-    // Apply Filter if provided
-    if let Some(filter_str) = input["Filter"].as_str() {
+    // Apply Filter if provided. Cognito only supports `=` and `^=`; anything
+    // else (notably `!=`) is rejected rather than silently mis-parsed.
+    if let Some(filter_str) = input["Filter"].as_str()
+        && !filter_str.trim().is_empty()
+    {
+        validate_cognito_filter(filter_str)?;
         users.retain(|u| evaluate_cognito_filter(u, filter_str));
     }
 
@@ -889,6 +1004,29 @@ pub fn list_users(
 ///
 /// Cognito filter format: `attribute operator "value"`
 /// Operators: `=` (exact match), `^=` (starts with)
+/// Reject a ListUsers filter using an operator Cognito does not support.
+/// Only `=` and `^=` are valid; `!=` and a bare attribute (no operator) are
+/// InvalidParameterException, matching the service.
+fn validate_cognito_filter(filter: &str) -> Result<(), AwsError> {
+    if filter.contains("^=") {
+        return Ok(());
+    }
+    // A `=` that is preceded by `!` is the unsupported `!=` operator.
+    if let Some(idx) = filter.find('=') {
+        if filter[..idx].trim_end().ends_with('!') {
+            return Err(AwsError::bad_request(
+                "InvalidParameterException",
+                "Invalid filter: the != operator is not supported.",
+            ));
+        }
+        return Ok(());
+    }
+    Err(AwsError::bad_request(
+        "InvalidParameterException",
+        "Invalid filter: expected attribute = \"value\".",
+    ))
+}
+
 fn evaluate_cognito_filter(user: &CognitoUser, filter: &str) -> bool {
     // Determine operator and split
     let (attr_name, operator, value) = if let Some(idx) = filter.find("^=") {
@@ -1019,7 +1157,10 @@ pub fn forgot_password(
             )
         })?;
         let lambda_arn = pool.lambda_config.get("CustomMessage").cloned();
-        let user = pool.users.get_mut(username).ok_or_else(|| {
+        let resolved = resolve_username(&pool, username).ok_or_else(|| {
+            AwsError::service_not_found("UserNotFoundException", "User does not exist.")
+        })?;
+        let user = pool.users.get_mut(&resolved).ok_or_else(|| {
             AwsError::service_not_found("UserNotFoundException", "User does not exist.")
         })?;
         user.pending_verifications
@@ -1117,7 +1258,10 @@ pub fn confirm_forgot_password(
     })?;
     super::auth_policy::validate_password(&pool.policies, password)?;
 
-    let user = pool.users.get_mut(username).ok_or_else(|| {
+    let username = resolve_username(&pool, username).ok_or_else(|| {
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
+    })?;
+    let user = pool.users.get_mut(&username).ok_or_else(|| {
         AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
     check_code_rate_limit(user)?;
@@ -1160,10 +1304,11 @@ pub fn confirm_forgot_password(
     user.pending_verifications_issued
         .remove(FORGOT_PASSWORD_KEY);
     user.password_hash = crate::password::hash(password)?;
-    let (s, v) = crate::password::srp_material(&pool_id, username, password);
+    let (s, v) = crate::password::srp_material(&pool_id, &username, password);
     user.srp_salt = Some(s);
     user.srp_verifier = Some(v);
     user.status = "CONFIRMED".to_string();
+    user.last_modified_date = now_epoch();
     user.failed_login_attempts = 0;
     user.locked_until_secs = None;
 
@@ -1219,6 +1364,7 @@ pub fn change_password(
             user.srp_verifier = Some(v);
             user.failed_login_attempts = 0;
             user.locked_until_secs = None;
+            user.last_modified_date = now_epoch();
             return Ok(json!({}));
         }
     }
@@ -1297,6 +1443,7 @@ pub fn admin_enable_user(
     })?;
 
     user.enabled = true;
+    user.last_modified_date = now_epoch();
     info!(username = %username, pool_id = %pool_id, "Cognito: admin enabled user");
     Ok(json!({}))
 }
@@ -1332,6 +1479,7 @@ pub fn admin_disable_user(
     })?;
 
     user.enabled = false;
+    user.last_modified_date = now_epoch();
     info!(username = %username, pool_id = %pool_id, "Cognito: admin disabled user");
     Ok(json!({}))
 }
@@ -1367,7 +1515,16 @@ pub fn admin_reset_user_password(
     })?;
 
     user.status = "RESET_REQUIRED".to_string();
-    info!(username = %username, pool_id = %pool_id, "Cognito: admin reset user password");
+    // AWS delivers a reset code with this call so the user can complete
+    // ConfirmForgotPassword immediately; stash one under the forgot-password
+    // key (matching what ForgotPassword writes) rather than dead-ending.
+    let code = generate_reset_code();
+    user.pending_verifications
+        .insert(FORGOT_PASSWORD_KEY.to_string(), code.clone());
+    user.pending_verifications_issued
+        .insert(FORGOT_PASSWORD_KEY.to_string(), now_epoch());
+    user.last_modified_date = now_epoch();
+    info!(username = %username, pool_id = %pool_id, code = %code, "Cognito: admin reset user password");
     Ok(json!({}))
 }
 
@@ -1428,6 +1585,12 @@ fn apply_attribute_updates(
     new_attrs: HashMap<String, String>,
     pool_username_attributes: &[String],
 ) -> Result<(), AwsError> {
+    // A caller may set an email/phone and its verified flag in the same
+    // request. The explicit flag must win, so only auto-reset the flag when
+    // the caller did not supply it. (new_attrs is unordered, so this can't
+    // depend on iteration order.)
+    let caller_set_email_verified = new_attrs.contains_key("email_verified");
+    let caller_set_phone_verified = new_attrs.contains_key("phone_number_verified");
     for (k, v) in new_attrs {
         if k == "sub" {
             if user.attributes.get("sub").map(String::as_str) == Some(v.as_str()) {
@@ -1446,11 +1609,15 @@ fn apply_attribute_updates(
                 format!("{k} is the pool's username and cannot be changed"),
             ));
         }
-        if k == "email" && user.attributes.get("email").map(String::as_str) != Some(v.as_str()) {
+        if k == "email"
+            && !caller_set_email_verified
+            && user.attributes.get("email").map(String::as_str) != Some(v.as_str())
+        {
             user.attributes
                 .insert("email_verified".to_string(), "false".to_string());
         }
         if k == "phone_number"
+            && !caller_set_phone_verified
             && user.attributes.get("phone_number").map(String::as_str) != Some(v.as_str())
         {
             user.attributes
@@ -1458,6 +1625,7 @@ fn apply_attribute_updates(
         }
         user.attributes.insert(k, v);
     }
+    user.last_modified_date = now_epoch();
     Ok(())
 }
 
@@ -1698,12 +1866,9 @@ pub fn resend_confirmation_code(
             format!("User pool {pool_id} does not exist."),
         )
     })?;
-    if !pool.users.contains_key(username) {
-        return Err(AwsError::service_not_found(
-            "UserNotFoundException",
-            "User does not exist.",
-        ));
-    }
+    let username = resolve_username(&pool, username).ok_or_else(|| {
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
+    })?;
 
     let code = format!("{:06}", rand::random::<u32>() % 1_000_000);
     let key = format!("{pool_id}:{username}");
@@ -2055,6 +2220,7 @@ mod tests {
             enabled: true,
             groups: Vec::new(),
             created_date: 0,
+            last_modified_date: 0,
             pending_verifications: Default::default(),
             pending_verifications_issued: Default::default(),
             code_failed_attempts: 0,
@@ -2660,5 +2826,203 @@ mod tests {
             &ctx(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn admin_reset_user_password_stores_reset_code() {
+        let (state, pool_id) = schema_fixture();
+        make_u1(&state, &pool_id);
+        admin_reset_user_password(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Username": "u1" }),
+            &ctx(),
+        )
+        .unwrap();
+        let pool = state.user_pools.get(&pool_id).unwrap();
+        let user = pool.users.get("u1").unwrap();
+        assert_eq!(user.status, "RESET_REQUIRED");
+        // A reset code is now available so ConfirmForgotPassword can proceed.
+        assert!(user.pending_verifications.contains_key(FORGOT_PASSWORD_KEY));
+    }
+
+    #[test]
+    fn list_users_rejects_not_equals_filter() {
+        let (state, pool_id) = schema_fixture();
+        make_u1(&state, &pool_id);
+        let err = list_users(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Filter": "email != \"x@y.com\"" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn admin_get_user_resolves_verified_email_alias() {
+        // AliasAttributes=email pool: a user keyed by username with a
+        // verified email can be fetched by that email; an unverified one
+        // cannot.
+        let state = CognitoState::default();
+        create_user_pool(
+            &state,
+            &json!({ "PoolName": "p", "AliasAttributes": ["email"] }),
+            &ctx(),
+        )
+        .unwrap();
+        let pool_id = state.user_pools.iter().next().unwrap().id.clone();
+        admin_create_user(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "user-uuid",
+                "MessageAction": "SUPPRESS",
+                "UserAttributes": [
+                    { "Name": "email", "Value": "dave@example.com" },
+                    { "Name": "email_verified", "Value": "true" }
+                ]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let by_email = admin_get_user(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Username": "dave@example.com" }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(by_email["Username"], "user-uuid");
+
+        // A second user with an unverified email is not resolvable by it.
+        admin_create_user(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "user2-uuid",
+                "MessageAction": "SUPPRESS",
+                "UserAttributes": [{ "Name": "email", "Value": "unverified@example.com" }]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = admin_get_user(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Username": "unverified@example.com" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "UserNotFoundException");
+    }
+
+    #[test]
+    fn admin_get_user_reports_mfa_fields() {
+        let (state, pool_id) = schema_fixture();
+        make_u1(&state, &pool_id);
+        // Before enrollment: empty list, empty preference.
+        let before = admin_get_user(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Username": "u1" }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(before["UserMFASettingList"].as_array().unwrap().len(), 0);
+        assert_eq!(before["PreferredMfaSetting"], "");
+        // Enroll a verified software token + preference directly.
+        {
+            let mut pool = state.user_pools.get_mut(&pool_id).unwrap();
+            let user = pool.users.get_mut("u1").unwrap();
+            user.totp_verified = true;
+            user.mfa_preferred = Some("SOFTWARE_TOKEN_MFA".to_string());
+        }
+        let after = admin_get_user(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Username": "u1" }),
+            &ctx(),
+        )
+        .unwrap();
+        let list: Vec<String> = after["UserMFASettingList"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert!(list.contains(&"SOFTWARE_TOKEN_MFA".to_string()));
+        assert_eq!(after["PreferredMfaSetting"], "SOFTWARE_TOKEN_MFA");
+    }
+
+    #[test]
+    fn admin_create_user_resend_missing_user_errors() {
+        let (state, pool_id) = schema_fixture();
+        let err = admin_create_user(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Username": "ghost", "MessageAction": "RESEND" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "UserNotFoundException");
+    }
+
+    #[test]
+    fn admin_create_user_resend_existing_returns_user() {
+        let (state, pool_id) = schema_fixture();
+        make_u1(&state, &pool_id);
+        let res = admin_create_user(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Username": "u1", "MessageAction": "RESEND" }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(res["User"]["Username"], "u1");
+    }
+
+    #[test]
+    fn admin_create_user_generates_policy_compliant_temp_password() {
+        let (state, pool_id) = schema_fixture();
+        // No TemporaryPassword: a random one is generated and must pass the
+        // pool policy (so the call succeeds rather than erroring).
+        admin_create_user(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "auto",
+                "UserAttributes": [{ "Name": "email", "Value": "auto@example.com" }]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn admin_update_explicit_email_verified_is_honored() {
+        let (state, pool_id) = schema_fixture();
+        make_u1(&state, &pool_id);
+        // Set a new email and email_verified=true in the same request: the
+        // explicit flag must win over the auto-unverify, deterministically.
+        admin_update_user_attributes(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "u1",
+                "UserAttributes": [
+                    { "Name": "email", "Value": "new@example.com" },
+                    { "Name": "email_verified", "Value": "true" }
+                ]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let got = admin_get_user(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Username": "u1" }),
+            &ctx(),
+        )
+        .unwrap();
+        let verified = got["UserAttributes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["Name"] == "email_verified")
+            .map(|a| a["Value"].clone());
+        assert_eq!(verified, Some(json!("true")));
     }
 }
