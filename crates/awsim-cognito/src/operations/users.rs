@@ -662,6 +662,36 @@ pub fn admin_confirm_sign_up(
 // AdminCreateUser
 // ---------------------------------------------------------------------------
 
+/// Generate a random temporary password that satisfies the default pool
+/// policy (>= 8 chars with a lowercase, uppercase, digit, and symbol). Used
+/// when AdminCreateUser is called without an explicit TemporaryPassword,
+/// instead of a guessable constant.
+fn generate_temp_password() -> String {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    const LOWER: &[u8] = b"abcdefghijkmnpqrstuvwxyz";
+    const UPPER: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ";
+    const DIGITS: &[u8] = b"23456789";
+    const SYMBOLS: &[u8] = b"!@#$%^&*()-_=+";
+    let pick = |rng: &mut rand::rngs::ThreadRng, set: &[u8]| set[rng.gen_range(0..set.len())];
+    // One from each class guarantees the policy is met, then fill to length.
+    let mut chars: Vec<u8> = vec![
+        pick(&mut rng, LOWER),
+        pick(&mut rng, UPPER),
+        pick(&mut rng, DIGITS),
+        pick(&mut rng, SYMBOLS),
+    ];
+    let all = [LOWER, UPPER, DIGITS, SYMBOLS].concat();
+    while chars.len() < 14 {
+        chars.push(pick(&mut rng, &all));
+    }
+    // Shuffle so the class-ordered prefix isn't predictable.
+    for i in (1..chars.len()).rev() {
+        chars.swap(i, rng.gen_range(0..=i));
+    }
+    String::from_utf8(chars).expect("ascii bytes are valid utf8")
+}
+
 pub fn admin_create_user(
     state: &CognitoState,
     input: &Value,
@@ -673,8 +703,16 @@ pub fn admin_create_user(
     let username = input["Username"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "Username is required")
     })?;
+    let message_action = input["MessageAction"].as_str();
 
-    let password = input["TemporaryPassword"].as_str().unwrap_or("Temp@1234");
+    let generated_password;
+    let password = match input["TemporaryPassword"].as_str() {
+        Some(p) => p,
+        None => {
+            generated_password = generate_temp_password();
+            &generated_password
+        }
+    };
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
@@ -682,6 +720,23 @@ pub fn admin_create_user(
             format!("User pool {pool_id} does not exist."),
         )
     })?;
+
+    // MessageAction=RESEND re-sends the invitation for an existing user
+    // instead of creating one: a missing user is an error, an existing one is
+    // returned unchanged.
+    if message_action == Some("RESEND") {
+        let resolved = resolve_username(&pool, username);
+        return match resolved.and_then(|u| pool.users.get(&u).map(user_to_value)) {
+            Some(user_value) => {
+                info!(username = %username, pool_id = %pool_id, "Cognito: admin re-sent user invitation");
+                Ok(json!({ "User": user_value }))
+            }
+            None => Err(AwsError::service_not_found(
+                "UserNotFoundException",
+                "User does not exist.",
+            )),
+        };
+    }
 
     if pool.users.contains_key(username) {
         return Err(AwsError::bad_request(
@@ -1428,6 +1483,12 @@ fn apply_attribute_updates(
     new_attrs: HashMap<String, String>,
     pool_username_attributes: &[String],
 ) -> Result<(), AwsError> {
+    // A caller may set an email/phone and its verified flag in the same
+    // request. The explicit flag must win, so only auto-reset the flag when
+    // the caller did not supply it. (new_attrs is unordered, so this can't
+    // depend on iteration order.)
+    let caller_set_email_verified = new_attrs.contains_key("email_verified");
+    let caller_set_phone_verified = new_attrs.contains_key("phone_number_verified");
     for (k, v) in new_attrs {
         if k == "sub" {
             if user.attributes.get("sub").map(String::as_str) == Some(v.as_str()) {
@@ -1446,11 +1507,15 @@ fn apply_attribute_updates(
                 format!("{k} is the pool's username and cannot be changed"),
             ));
         }
-        if k == "email" && user.attributes.get("email").map(String::as_str) != Some(v.as_str()) {
+        if k == "email"
+            && !caller_set_email_verified
+            && user.attributes.get("email").map(String::as_str) != Some(v.as_str())
+        {
             user.attributes
                 .insert("email_verified".to_string(), "false".to_string());
         }
         if k == "phone_number"
+            && !caller_set_phone_verified
             && user.attributes.get("phone_number").map(String::as_str) != Some(v.as_str())
         {
             user.attributes
@@ -2660,5 +2725,81 @@ mod tests {
             &ctx(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn admin_create_user_resend_missing_user_errors() {
+        let (state, pool_id) = schema_fixture();
+        let err = admin_create_user(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Username": "ghost", "MessageAction": "RESEND" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "UserNotFoundException");
+    }
+
+    #[test]
+    fn admin_create_user_resend_existing_returns_user() {
+        let (state, pool_id) = schema_fixture();
+        make_u1(&state, &pool_id);
+        let res = admin_create_user(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Username": "u1", "MessageAction": "RESEND" }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(res["User"]["Username"], "u1");
+    }
+
+    #[test]
+    fn admin_create_user_generates_policy_compliant_temp_password() {
+        let (state, pool_id) = schema_fixture();
+        // No TemporaryPassword: a random one is generated and must pass the
+        // pool policy (so the call succeeds rather than erroring).
+        admin_create_user(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "auto",
+                "UserAttributes": [{ "Name": "email", "Value": "auto@example.com" }]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn admin_update_explicit_email_verified_is_honored() {
+        let (state, pool_id) = schema_fixture();
+        make_u1(&state, &pool_id);
+        // Set a new email and email_verified=true in the same request: the
+        // explicit flag must win over the auto-unverify, deterministically.
+        admin_update_user_attributes(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "u1",
+                "UserAttributes": [
+                    { "Name": "email", "Value": "new@example.com" },
+                    { "Name": "email_verified", "Value": "true" }
+                ]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let got = admin_get_user(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Username": "u1" }),
+            &ctx(),
+        )
+        .unwrap();
+        let verified = got["UserAttributes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["Name"] == "email_verified")
+            .map(|a| a["Value"].clone());
+        assert_eq!(verified, Some(json!("true")));
     }
 }

@@ -54,7 +54,8 @@ impl Default for PasswordPolicy {
             require_lowercase: true,
             require_uppercase: true,
             require_numbers: true,
-            require_symbols: false,
+            // AWS's default pool policy requires all four character classes.
+            require_symbols: true,
             temporary_password_validity_days: 7,
         }
     }
