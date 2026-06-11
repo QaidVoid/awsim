@@ -729,6 +729,35 @@ export async function adminAddUserToGroup(
   });
 }
 
+export interface MfaPreference {
+  /** Enable the software-token (TOTP) factor. */
+  softwareTokenEnabled: boolean;
+  /** Enable the SMS factor. */
+  smsEnabled: boolean;
+  /** Which enabled factor is preferred, if any. */
+  preferred: "SOFTWARE_TOKEN_MFA" | "SMS_MFA" | null;
+}
+
+/** Set a user's MFA factors and preference. Disabling both clears MFA. */
+export async function adminSetUserMfaPreference(
+  poolId: string,
+  username: string,
+  pref: MfaPreference,
+): Promise<void> {
+  await idpRequest("AdminSetUserMFAPreference", {
+    UserPoolId: poolId,
+    Username: username,
+    SoftwareTokenMfaSettings: {
+      Enabled: pref.softwareTokenEnabled,
+      PreferredMfa: pref.preferred === "SOFTWARE_TOKEN_MFA",
+    },
+    SMSMfaSettings: {
+      Enabled: pref.smsEnabled,
+      PreferredMfa: pref.preferred === "SMS_MFA",
+    },
+  });
+}
+
 export async function adminRemoveUserFromGroup(
   poolId: string,
   username: string,
