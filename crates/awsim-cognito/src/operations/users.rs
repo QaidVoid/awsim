@@ -782,7 +782,7 @@ fn generate_temp_password() -> String {
 pub fn admin_create_user(
     state: &CognitoState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
@@ -846,6 +846,15 @@ pub fn admin_create_user(
         "FORCE_CHANGE_PASSWORD",
     )?;
     let user_value = user_to_value(&user);
+    // Unless suppressed, send the invitation (username + temporary password)
+    // to the user's email via SES.
+    if message_action != Some("SUPPRESS")
+        && let Some(email) = user.attributes.get("email").map(String::from)
+    {
+        let (subject, body) =
+            super::email::invitation_message(&pool.extra_config, username, password);
+        super::email::deliver(ctx, &email, &subject, &body, "AdminCreateUser");
+    }
     info!(username = %username, pool_id = %pool_id, "Cognito: admin created user");
     pool.users.insert(username.to_string(), user);
 
@@ -1207,17 +1216,20 @@ pub fn forgot_password(
             .insert(FORGOT_PASSWORD_KEY.to_string(), code.clone());
         user.pending_verifications_issued
             .insert(FORGOT_PASSWORD_KEY.to_string(), now_epoch());
-        dest = user
-            .attributes
-            .get("email")
-            .cloned()
+        let real_email = user.attributes.get("email").cloned();
+        dest = real_email
+            .clone()
             .unwrap_or_else(|| "***@example.com".to_string());
         info!(
             username = %username,
             pool_id = %pool_id,
-            code = %code,
             "Cognito: ForgotPassword code issued (dev: also visible at /cognito/<pool>/oauth2/forgot-password/confirm)"
         );
+        // Route the reset code to SES so it shows up in the sent-email store.
+        if let Some(email) = real_email.as_deref() {
+            let (subject, body) = super::email::forgot_password_message(&pool.extra_config, &code);
+            super::email::deliver(ctx, email, &subject, &body, "ForgotPassword");
+        }
         // Custom Message trigger (fire-and-forget) — kept here so the
         // immutable Lambda ARN we cloned out is still in scope.
         if let Some(arn) = lambda_arn {
@@ -1873,7 +1885,7 @@ pub fn delete_user(
 pub fn resend_confirmation_code(
     state: &CognitoState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let client_id = input["ClientId"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "ClientId is required")
@@ -1910,11 +1922,13 @@ pub fn resend_confirmation_code(
         AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
-    let dest = pool
+    let real_email = pool
         .users
         .get(&username)
-        .and_then(|u| u.attributes.get("email"))
-        .map(|e| mask_email(e))
+        .and_then(|u| u.attributes.get("email").cloned());
+    let dest = real_email
+        .as_deref()
+        .map(mask_email)
         .unwrap_or_else(|| "***".to_string());
 
     let code = format!("{:06}", rand::random::<u32>() % 1_000_000);
@@ -1922,7 +1936,12 @@ pub fn resend_confirmation_code(
     state.confirmation_codes.insert(key.clone(), code.clone());
     state.confirmation_codes_issued.insert(key, now_epoch());
 
-    info!(username = %username, code = %code, "Cognito: resend confirmation code");
+    if let Some(email) = real_email.as_deref() {
+        let (subject, body) = super::email::verification_message(&pool.extra_config, &code);
+        super::email::deliver(ctx, email, &subject, &body, "ResendConfirmationCode");
+    }
+
+    info!(username = %username, "Cognito: resend confirmation code");
     Ok(json!({
         "CodeDeliveryDetails": {
             "AttributeName": "email",
@@ -1939,7 +1958,7 @@ pub fn resend_confirmation_code(
 pub fn get_user_attribute_verification_code(
     state: &CognitoState,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let access_token = input["AccessToken"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "AccessToken is required")
@@ -1965,12 +1984,27 @@ pub fn get_user_attribute_verification_code(
                 .insert(attribute_name.to_string(), code.clone());
             user.pending_verifications_issued
                 .insert(attribute_name.to_string(), now_epoch());
-            let dest = user
-                .attributes
-                .get(attribute_name)
-                .map(|v| mask_email(v))
+            let real_value = user.attributes.get(attribute_name).cloned();
+            let dest = real_value
+                .as_deref()
+                .map(mask_email)
                 .unwrap_or_else(|| "***".to_string());
-            info!(username = %username, attribute_name = %attribute_name, code = %code, "Cognito: attribute verification code sent");
+            // Email attributes are routed to SES; phone numbers would be SMS,
+            // which awsim does not model.
+            if attribute_name == "email"
+                && let Some(email) = real_value.as_deref()
+            {
+                let (subject, body) =
+                    super::email::verification_message(&pool_entry.extra_config, &code);
+                super::email::deliver(
+                    ctx,
+                    email,
+                    &subject,
+                    &body,
+                    "GetUserAttributeVerificationCode",
+                );
+            }
+            info!(username = %username, attribute_name = %attribute_name, "Cognito: attribute verification code sent");
             return Ok(json!({
                 "CodeDeliveryDetails": {
                     "AttributeName": attribute_name,

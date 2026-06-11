@@ -16,6 +16,7 @@ pub mod well_known;
 
 pub use identity::CognitoIdentityService;
 pub use oauth::CognitoOAuthState;
+pub use operations::email::EVENT_TYPE as EMAIL_EVENT_TYPE;
 pub use state::CognitoState;
 
 use std::collections::HashMap;

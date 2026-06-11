@@ -1692,6 +1692,43 @@ pub async fn handle_cognito_trigger(
     }
 }
 
+/// Deliver a Cognito outbound email (verification / reset code, invitation)
+/// into the SES service so it lands in the same sent-email store the SES
+/// console reads. awsim has no real mailer, so this is the inspection point.
+pub async fn handle_cognito_email(
+    services: &HashMap<String, Arc<dyn ServiceHandler>>,
+    event: &InternalEvent,
+) {
+    let Some(ses) = services.get("ses") else {
+        return;
+    };
+    let d = &event.detail;
+    let to = d["to"].as_str().unwrap_or("");
+    if to.is_empty() {
+        return;
+    }
+    let from = d["from"]
+        .as_str()
+        .unwrap_or("no-reply@verificationemail.com");
+    let subject = d["subject"].as_str().unwrap_or("");
+    let body = d["body"].as_str().unwrap_or("");
+    let message_type = d["messageType"].as_str().unwrap_or("");
+
+    let input = serde_json::json!({
+        "FromEmailAddress": from,
+        "Destination": { "ToAddresses": [to] },
+        "Content": { "Simple": {
+            "Subject": { "Data": subject },
+            "Body": { "Text": { "Data": body } }
+        }}
+    });
+    let ctx = RequestContext::new_with_account("ses", &event.region, &event.account_id);
+    match ses.handle("SendEmail", input, &ctx).await {
+        Ok(_) => info!(to, message_type, "Cognito email delivered via SES"),
+        Err(e) => warn!(to, error = %e.message, "Cognito email delivery via SES failed"),
+    }
+}
+
 #[cfg(test)]
 mod servicediscovery_dns_tests {
     use super::*;
@@ -1751,5 +1788,60 @@ mod servicediscovery_dns_tests {
             .collect();
         assert!(values.contains(&"10.0.0.5"));
         assert!(values.contains(&"10.0.0.6"));
+    }
+}
+
+#[cfg(test)]
+mod cognito_email_tests {
+    use super::*;
+    use awsim_core::events::InternalEvent;
+
+    #[tokio::test]
+    async fn cognito_email_lands_in_ses_sent_store() {
+        let mut services: HashMap<String, Arc<dyn ServiceHandler>> = HashMap::new();
+        let ses = Arc::new(awsim_ses::SesService::new());
+        services.insert("ses".to_string(), ses.clone());
+
+        let event = InternalEvent {
+            source: "cognito-idp".to_string(),
+            event_type: awsim_cognito::EMAIL_EVENT_TYPE.to_string(),
+            region: "us-east-1".to_string(),
+            account_id: "000000000000".to_string(),
+            detail: serde_json::json!({
+                "from": "no-reply@verificationemail.com",
+                "to": "user@example.com",
+                "subject": "Your verification code",
+                "body": "Your verification code is 123456",
+                "messageType": "ResendConfirmationCode",
+            }),
+        };
+        handle_cognito_email(&services, &event).await;
+
+        let sent = ses.list_sent_emails();
+        assert_eq!(sent.len(), 1, "one email recorded in SES");
+        let (_, _, email) = &sent[0];
+        assert!(email.to.contains(&"user@example.com".to_string()));
+        assert_eq!(email.subject.as_deref(), Some("Your verification code"));
+        assert_eq!(
+            email.body_text.as_deref(),
+            Some("Your verification code is 123456")
+        );
+    }
+
+    #[tokio::test]
+    async fn cognito_email_without_recipient_is_dropped() {
+        let mut services: HashMap<String, Arc<dyn ServiceHandler>> = HashMap::new();
+        let ses = Arc::new(awsim_ses::SesService::new());
+        services.insert("ses".to_string(), ses.clone());
+
+        let event = InternalEvent {
+            source: "cognito-idp".to_string(),
+            event_type: awsim_cognito::EMAIL_EVENT_TYPE.to_string(),
+            region: "us-east-1".to_string(),
+            account_id: "000000000000".to_string(),
+            detail: serde_json::json!({ "to": "", "subject": "x", "body": "y" }),
+        };
+        handle_cognito_email(&services, &event).await;
+        assert!(ses.list_sent_emails().is_empty());
     }
 }
