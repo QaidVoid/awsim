@@ -170,6 +170,7 @@ tower-http = { version = "0.6", features = [
 ] }
 
 quick-xml = { version = "0.37", features = ["serialize"] }
+flate2 = "1.1"
 saphyr = "0.0.6"
 # Serialization
 serde = { version = "1", features = ["derive"] }
