@@ -353,6 +353,17 @@ pub struct UserPool {
     /// empty arrays (after parse) reject as InvalidParameterException.
     #[serde(default)]
     pub sign_in_policy_first_auth_factors: Vec<String>,
+    /// Unix seconds of the last pool mutation; surfaced as LastModifiedDate.
+    #[serde(default)]
+    pub last_modified_date: u64,
+    /// Pool configuration blocks awsim stores and echoes verbatim rather than
+    /// modelling field-by-field (AdminCreateUserConfig, EmailConfiguration,
+    /// SmsConfiguration, DeviceConfiguration, UsernameConfiguration,
+    /// AccountRecoverySetting, VerificationMessageTemplate, DeletionProtection,
+    /// UserPoolAddOns, and the verification/SMS message strings). Keyed by the
+    /// AWS field name so DescribeUserPool round-trips them.
+    #[serde(default)]
+    pub extra_config: std::collections::HashMap<String, serde_json::Value>,
 }
 
 /// A Cognito User Pool App Client.

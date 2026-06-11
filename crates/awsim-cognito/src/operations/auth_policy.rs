@@ -315,9 +315,11 @@ mod tests {
             custom_auth_expected_answer: None,
             custom_auth_challenge_parameters: Default::default(),
             sign_in_policy_first_auth_factors: Vec::new(),
+            last_modified_date: 0,
+            extra_config: Default::default(),
         };
 
-        // No risk config — None.
+        // No risk config - None.
         assert!(compromised_credentials_action_for(&pool, None, "SIGN_IN").is_none());
 
         // Pool-level config that blocks SIGN_IN.

@@ -151,7 +151,17 @@ pub fn create_user_pool(
     let username_attributes = parse_string_list(&input["UsernameAttributes"]);
     let alias_attributes = parse_string_list(&input["AliasAttributes"]);
 
+    // UsernameAttributes and AliasAttributes are mutually exclusive in AWS.
+    if !username_attributes.is_empty() && !alias_attributes.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            "Only one of aliasAttributes or usernameAttributes can be set in a user pool.",
+        ));
+    }
+
     let lambda_config = parse_lambda_config(&input["LambdaConfig"]);
+    let tags = parse_tag_map(&input["UserPoolTags"]);
+    let extra_config = parse_extra_pool_config(input);
 
     let schema = build_initial_schema(&input["Schema"])?;
 
@@ -175,7 +185,7 @@ pub fn create_user_pool(
         domain: None,
         resource_servers: Vec::new(),
         identity_providers: Vec::new(),
-        tags: HashMap::new(),
+        tags,
         ui_customizations: HashMap::new(),
         managed_login_brandings: Vec::new(),
         risk_configurations: Vec::new(),
@@ -185,21 +195,15 @@ pub fn create_user_pool(
         custom_auth_expected_answer: None,
         custom_auth_challenge_parameters: HashMap::new(),
         sign_in_policy_first_auth_factors,
+        last_modified_date: now,
+        extra_config,
     };
 
     info!(pool_id = %pool_id, "Cognito: created user pool");
+    let response = json!({ "UserPool": pool_to_value(&pool) });
     state.user_pools.insert(pool_id.clone(), pool);
 
-    Ok(json!({
-        "UserPool": {
-            "Id": pool_id,
-            "Name": pool_name,
-            "Arn": arn,
-            "Status": "Active",
-            "CreationDate": now,
-            "LastModifiedDate": now
-        }
-    }))
+    Ok(response)
 }
 
 // ---------------------------------------------------------------------------
@@ -215,11 +219,17 @@ pub fn delete_user_pool(
         AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
     })?;
 
-    if state.user_pools.remove(pool_id).is_none() {
-        return Err(AwsError::service_not_found(
+    let removed = state.user_pools.remove(pool_id).ok_or_else(|| {
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool {pool_id} does not exist."),
-        ));
+        )
+    })?;
+
+    // Release any domain this pool claimed so the name can be reused and no
+    // longer resolves to a dead pool.
+    if let Some(domain) = &removed.1.domain {
+        state.domain_pool_map.remove(domain);
     }
 
     info!(pool_id = %pool_id, "Cognito: deleted user pool");
@@ -246,35 +256,70 @@ pub fn describe_user_pool(
         )
     })?;
 
-    let schema_attributes: Vec<Value> = pool.schema.iter().map(schema_attr_to_value).collect();
+    Ok(json!({ "UserPool": pool_to_value(&pool) }))
+}
 
-    Ok(json!({
-        "UserPool": {
-            "Id": pool.id,
-            "Name": pool.name,
-            "Arn": pool.arn,
-            "Status": "Active",
-            "CreationDate": pool.created_date,
-            "LastModifiedDate": pool.created_date,
-            "MfaConfiguration": pool.mfa_configuration,
-            "AutoVerifiedAttributes": pool.auto_verified_attributes,
-            "UsernameAttributes": pool.username_attributes,
-            "AliasAttributes": pool.alias_attributes,
-            "SchemaAttributes": schema_attributes,
-            "Policies": {
-                "PasswordPolicy": password_policy_to_value(&pool.policies),
-                "SignInPolicy": if pool.sign_in_policy_first_auth_factors.is_empty() {
-                    Value::Null
-                } else {
-                    json!({
-                        "AllowedFirstAuthFactors": pool.sign_in_policy_first_auth_factors,
-                    })
-                },
-            },
-            "Domain": pool.domain,
-            "EstimatedNumberOfUsers": pool.users.len()
+/// AWS LambdaConfig field names that carry a nested `{LambdaArn, LambdaVersion}`
+/// object on the wire (we store them flattened as `<base>` + `<base>Version`).
+const NESTED_LAMBDA_TRIGGERS: &[&str] =
+    &["PreTokenGeneration", "CustomEmailSender", "CustomSMSSender"];
+
+/// Reconstruct the wire-shape LambdaConfig from the flattened storage map.
+fn lambda_config_to_value(cfg: &HashMap<String, String>) -> Value {
+    let mut out = serde_json::Map::new();
+    for (k, v) in cfg {
+        if k.ends_with("Version") {
+            continue; // folded into its base trigger's nested object below
         }
-    }))
+        if NESTED_LAMBDA_TRIGGERS.contains(&k.as_str()) {
+            let mut nested = serde_json::Map::new();
+            nested.insert("LambdaArn".to_string(), Value::String(v.clone()));
+            if let Some(ver) = cfg.get(&format!("{k}Version")) {
+                nested.insert("LambdaVersion".to_string(), Value::String(ver.clone()));
+            }
+            out.insert(format!("{k}Config"), Value::Object(nested));
+        } else {
+            out.insert(k.clone(), Value::String(v.clone()));
+        }
+    }
+    Value::Object(out)
+}
+
+/// Build the full UserPoolType echoed by CreateUserPool / DescribeUserPool.
+fn pool_to_value(pool: &UserPool) -> Value {
+    let schema_attributes: Vec<Value> = pool.schema.iter().map(schema_attr_to_value).collect();
+    let mut obj = json!({
+        "Id": pool.id,
+        "Name": pool.name,
+        "Arn": pool.arn,
+        "Status": "Active",
+        "CreationDate": pool.created_date,
+        "LastModifiedDate": pool.last_modified_date,
+        "MfaConfiguration": pool.mfa_configuration,
+        "AutoVerifiedAttributes": pool.auto_verified_attributes,
+        "UsernameAttributes": pool.username_attributes,
+        "AliasAttributes": pool.alias_attributes,
+        "SchemaAttributes": schema_attributes,
+        "LambdaConfig": lambda_config_to_value(&pool.lambda_config),
+        "Policies": {
+            "PasswordPolicy": password_policy_to_value(&pool.policies),
+            "SignInPolicy": if pool.sign_in_policy_first_auth_factors.is_empty() {
+                Value::Null
+            } else {
+                json!({ "AllowedFirstAuthFactors": pool.sign_in_policy_first_auth_factors })
+            },
+        },
+        "UserPoolTags": pool.tags,
+        "Domain": pool.domain,
+        "EstimatedNumberOfUsers": pool.users.len()
+    });
+    // Echo the verbatim config blocks captured at create / update.
+    if let Some(map) = obj.as_object_mut() {
+        for (k, v) in &pool.extra_config {
+            map.insert(k.clone(), v.clone());
+        }
+    }
+    obj
 }
 
 // ---------------------------------------------------------------------------
@@ -342,6 +387,20 @@ pub fn update_user_pool(
         pool.lambda_config = parse_lambda_config(&input["LambdaConfig"]);
     }
 
+    if !input["UserPoolTags"].is_null() {
+        pool.tags = parse_tag_map(&input["UserPoolTags"]);
+    }
+
+    // Merge any supplied verbatim config blocks, leaving unspecified ones
+    // untouched.
+    for key in EXTRA_POOL_CONFIG_KEYS {
+        if !input[*key].is_null() {
+            pool.extra_config
+                .insert((*key).to_string(), input[*key].clone());
+        }
+    }
+
+    pool.last_modified_date = now_epoch();
     info!(pool_id = %pool_id, "Cognito: updated user pool");
     Ok(json!({}))
 }
@@ -1080,6 +1139,54 @@ fn parse_lambda_config(v: &Value) -> HashMap<String, String> {
     map
 }
 
+/// Parse a `{key: value}` string map (UserPoolTags).
+fn parse_tag_map(v: &Value) -> HashMap<String, String> {
+    v.as_object()
+        .map(|o| {
+            o.iter()
+                .filter_map(|(k, val)| val.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Pool configuration blocks awsim stores and echoes verbatim. Keep this in
+/// sync with the doc on `UserPool::extra_config`.
+const EXTRA_POOL_CONFIG_KEYS: &[&str] = &[
+    "AdminCreateUserConfig",
+    "EmailConfiguration",
+    "SmsConfiguration",
+    "DeviceConfiguration",
+    "UsernameConfiguration",
+    "AccountRecoverySetting",
+    "VerificationMessageTemplate",
+    "DeletionProtection",
+    "UserPoolAddOns",
+    "EmailVerificationMessage",
+    "EmailVerificationSubject",
+    "SmsVerificationMessage",
+    "SmsAuthenticationMessage",
+    "UserAttributeUpdateSettings",
+];
+
+/// Capture the verbatim config blocks present in a Create/Update request,
+/// filling in the AWS defaults AWS reports for an unset pool.
+fn parse_extra_pool_config(input: &Value) -> HashMap<String, Value> {
+    let mut map = HashMap::new();
+    for key in EXTRA_POOL_CONFIG_KEYS {
+        if !input[*key].is_null() {
+            map.insert((*key).to_string(), input[*key].clone());
+        }
+    }
+    map.entry("DeletionProtection".to_string())
+        .or_insert_with(|| Value::String("INACTIVE".to_string()));
+    map.entry("AdminCreateUserConfig".to_string())
+        .or_insert_with(
+            || json!({ "AllowAdminCreateUserOnly": false, "UnusedAccountValidityDays": 7 }),
+        );
+    map
+}
+
 fn parse_string_list(v: &Value) -> Vec<String> {
     v.as_array()
         .map(|a| {
@@ -1512,5 +1619,53 @@ mod tests {
             cfg.get("PreTokenGenerationVersion").map(String::as_str),
             Some("V2_0")
         );
+    }
+
+    #[test]
+    fn create_user_pool_round_trips_config_and_tags() {
+        let state = CognitoState::default();
+        let created = create_user_pool(
+            &state,
+            &json!({
+                "PoolName": "p",
+                "UserPoolTags": { "team": "auth" },
+                "DeletionProtection": "ACTIVE",
+                "AdminCreateUserConfig": { "AllowAdminCreateUserOnly": true },
+                "LambdaConfig": { "PreSignUp": "arn:fn:presignup" }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        // CreateUserPool returns the full pool object, not a stub.
+        assert_eq!(created["UserPool"]["UserPoolTags"]["team"], "auth");
+        assert_eq!(created["UserPool"]["DeletionProtection"], "ACTIVE");
+        assert_eq!(
+            created["UserPool"]["LambdaConfig"]["PreSignUp"],
+            "arn:fn:presignup"
+        );
+        let pool_id = created["UserPool"]["Id"].as_str().unwrap().to_string();
+        let resp = describe_user_pool(&state, &json!({ "UserPoolId": pool_id }), &ctx()).unwrap();
+        assert_eq!(resp["UserPool"]["UserPoolTags"]["team"], "auth");
+        assert_eq!(resp["UserPool"]["DeletionProtection"], "ACTIVE");
+        assert_eq!(
+            resp["UserPool"]["AdminCreateUserConfig"]["AllowAdminCreateUserOnly"],
+            true
+        );
+    }
+
+    #[test]
+    fn create_user_pool_rejects_username_and_alias_attributes_together() {
+        let state = CognitoState::default();
+        let err = create_user_pool(
+            &state,
+            &json!({
+                "PoolName": "p",
+                "UsernameAttributes": ["email"],
+                "AliasAttributes": ["phone_number"]
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
     }
 }
