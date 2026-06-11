@@ -1966,16 +1966,39 @@ async fn token(
                 );
             }
 
+            // client_credentials is machine-to-machine: it only issues the
+            // custom resource-server scopes the client is allowed. Standard
+            // OIDC scopes (openid/email/...) and any scope not in the client's
+            // AllowedOAuthScopes are rejected with invalid_scope, matching AWS.
+            const STANDARD_SCOPES: &[&str] = &[
+                "openid",
+                "email",
+                "phone",
+                "profile",
+                "aws.cognito.signin.user.admin",
+            ];
+            let is_custom_scope = |s: &str| s.contains('/') && !STANDARD_SCOPES.contains(&s);
+            let client_allowed = pool
+                .clients
+                .get(&effective_client_id)
+                .map(|c| c.allowed_oauth_scopes.clone())
+                .unwrap_or_default();
             let requested_scopes = parse_scopes(form.scope.as_deref().unwrap_or(""));
-            let effective_scopes = if let Some(client) = pool.clients.get(&effective_client_id) {
-                if client.allowed_oauth_scopes.is_empty() {
-                    requested_scopes
-                } else {
-                    requested_scopes
-                        .into_iter()
-                        .filter(|s| client.allowed_oauth_scopes.contains(s))
-                        .collect()
+            for s in &requested_scopes {
+                if !is_custom_scope(s) || !client_allowed.contains(s) {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_scope",
+                        &format!("{s} is not a valid scope for the client_credentials grant"),
+                    );
                 }
+            }
+            // No explicit scope: default to all custom scopes the client allows.
+            let effective_scopes: Vec<String> = if requested_scopes.is_empty() {
+                client_allowed
+                    .into_iter()
+                    .filter(|s| is_custom_scope(s))
+                    .collect()
             } else {
                 requested_scopes
             };
@@ -2223,18 +2246,76 @@ async fn userinfo(
         }
     };
 
+    // userInfo returns only the claims the access token's scopes grant. The
+    // admin scope (aws.cognito.signin.user.admin) returns every attribute;
+    // otherwise email/phone/profile each gate their own claim group.
+    let scopes = token_scopes(&token);
+    let has = |s: &str| scopes.iter().any(|x| x == s);
+
     let mut claims = json!({
         "sub": user.sub,
         "username": user.username,
     });
-
     if let Some(obj) = claims.as_object_mut() {
-        for (k, v) in &user.attributes {
-            obj.insert(k.clone(), Value::String(v.clone()));
+        if has("aws.cognito.signin.user.admin") {
+            for (k, v) in &user.attributes {
+                obj.insert(k.clone(), Value::String(v.clone()));
+            }
+        } else {
+            let mut allowed: Vec<&str> = Vec::new();
+            if has("email") {
+                allowed.extend(["email", "email_verified"]);
+            }
+            if has("phone") {
+                allowed.extend(["phone_number", "phone_number_verified"]);
+            }
+            if has("profile") {
+                allowed.extend([
+                    "name",
+                    "given_name",
+                    "family_name",
+                    "middle_name",
+                    "nickname",
+                    "preferred_username",
+                    "picture",
+                    "profile",
+                    "website",
+                    "gender",
+                    "birthdate",
+                    "zoneinfo",
+                    "locale",
+                    "updated_at",
+                    "address",
+                ]);
+            }
+            for attr in allowed {
+                if let Some(v) = user.attributes.get(attr) {
+                    obj.insert(attr.to_string(), Value::String(v.clone()));
+                }
+            }
         }
     }
 
     Json(claims).into_response()
+}
+
+/// Read the space-separated `scope` claim out of an access token's payload
+/// (best-effort: an unparsable token yields no scopes).
+fn token_scopes(token: &str) -> Vec<String> {
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    let Some(payload_seg) = token.split('.').nth(1) else {
+        return Vec::new();
+    };
+    let Ok(bytes) = URL_SAFE_NO_PAD.decode(payload_seg) else {
+        return Vec::new();
+    };
+    let Ok(payload) = serde_json::from_slice::<Value>(&bytes) else {
+        return Vec::new();
+    };
+    payload["scope"]
+        .as_str()
+        .map(|s| s.split_whitespace().map(String::from).collect())
+        .unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------
