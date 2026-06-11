@@ -46,7 +46,7 @@ fn password_policy_to_value(p: &PasswordPolicy) -> Value {
     })
 }
 
-fn client_to_value(client: &UserPoolClient, include_secret: bool) -> Value {
+fn client_to_value(client: &UserPoolClient) -> Value {
     let mut obj = json!({
         "UserPoolId": client.user_pool_id,
         "ClientName": client.client_name,
@@ -56,19 +56,31 @@ fn client_to_value(client: &UserPoolClient, include_secret: bool) -> Value {
         "LogoutURLs": client.logout_urls,
         "AllowedOAuthFlows": client.allowed_oauth_flows,
         "AllowedOAuthScopes": client.allowed_oauth_scopes,
+        "AllowedOAuthFlowsUserPoolClient": client.allowed_oauth_flows_user_pool_client,
         "SupportedIdentityProviders": client.supported_identity_providers,
         "AccessTokenValidity": client.access_token_validity,
         "IdTokenValidity": client.id_token_validity,
         "RefreshTokenValidity": client.refresh_token_validity,
+        "PreventUserExistenceErrors": client.prevent_user_existence_errors,
+        "EnableTokenRevocation": client.enable_token_revocation,
+        "AuthSessionValidity": client.auth_session_validity,
         "CreationDate": client.created_date,
-        "LastModifiedDate": client.created_date
+        "LastModifiedDate": client.last_modified_date
     });
     // SAFETY: obj was created by json!() macro above, which always produces an object.
     let map = obj
         .as_object_mut()
         .expect("json!() macro always produces an object");
-    if include_secret {
-        map.insert("ClientSecret".into(), json!(client.client_secret));
+    // AWS returns ClientSecret from Create, Describe, and Update for a
+    // confidential client; public clients simply have none.
+    if let Some(secret) = &client.client_secret {
+        map.insert("ClientSecret".into(), json!(secret));
+    }
+    if let Some(uri) = &client.default_redirect_uri {
+        map.insert("DefaultRedirectURI".into(), json!(uri));
+    }
+    if let Some(units) = &client.token_validity_units {
+        map.insert("TokenValidityUnits".into(), units.clone());
     }
     // Cognito only echoes Read/WriteAttributes when a custom set was
     // configured; an empty list means "the default set" and is omitted.
@@ -421,14 +433,19 @@ pub fn create_user_pool_client(
         AwsError::bad_request("InvalidParameterException", "ClientName is required")
     })?;
 
-    let explicit_auth_flows: Vec<String> = input["ExplicitAuthFlows"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
+    let explicit_auth_flows: Vec<String> = match input["ExplicitAuthFlows"].as_array() {
+        Some(a) => a
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
+        // An unset ExplicitAuthFlows defaults to the SRP + custom + refresh
+        // set, matching AWS (the password flows must be opted into).
+        None => vec![
+            "ALLOW_USER_SRP_AUTH".to_string(),
+            "ALLOW_CUSTOM_AUTH".to_string(),
+            "ALLOW_REFRESH_TOKEN_AUTH".to_string(),
+        ],
+    };
 
     let generate_secret = input["GenerateSecret"].as_bool().unwrap_or(false);
     let client_secret = if generate_secret {
@@ -504,6 +521,22 @@ pub fn create_user_pool_client(
     let id_token_validity = input["IdTokenValidity"].as_u64().unwrap_or(3600);
     let refresh_token_validity = input["RefreshTokenValidity"].as_u64().unwrap_or(2_592_000);
 
+    let prevent_user_existence_errors = input["PreventUserExistenceErrors"]
+        .as_str()
+        .unwrap_or("LEGACY")
+        .to_string();
+    let enable_token_revocation = input["EnableTokenRevocation"].as_bool().unwrap_or(true);
+    let auth_session_validity = input["AuthSessionValidity"].as_u64().unwrap_or(3) as u32;
+    let allowed_oauth_flows_user_pool_client = input["AllowedOAuthFlowsUserPoolClient"]
+        .as_bool()
+        .unwrap_or(false);
+    let default_redirect_uri = input["DefaultRedirectURI"].as_str().map(String::from);
+    let token_validity_units = if input["TokenValidityUnits"].is_object() {
+        Some(input["TokenValidityUnits"].clone())
+    } else {
+        None
+    };
+
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
@@ -534,9 +567,16 @@ pub fn create_user_pool_client(
         additional_client_secrets: Vec::new(),
         read_attributes,
         write_attributes,
+        prevent_user_existence_errors,
+        enable_token_revocation,
+        auth_session_validity,
+        allowed_oauth_flows_user_pool_client,
+        default_redirect_uri,
+        token_validity_units,
+        last_modified_date: now,
     };
 
-    let response = client_to_value(&client, true);
+    let response = client_to_value(&client);
     pool.clients.insert(client_id.clone(), client);
 
     info!(pool_id = %pool_id, client_id = %client_id, "Cognito: created user pool client");
@@ -574,7 +614,7 @@ pub fn describe_user_pool_client(
         )
     })?;
 
-    Ok(json!({ "UserPoolClient": client_to_value(client, false) }))
+    Ok(json!({ "UserPoolClient": client_to_value(client) }))
 }
 
 // ---------------------------------------------------------------------------
@@ -763,7 +803,27 @@ pub fn update_user_pool_client(
         client.write_attributes = write;
     }
 
-    let client_value = client_to_value(client, false);
+    if let Some(v) = input["PreventUserExistenceErrors"].as_str() {
+        client.prevent_user_existence_errors = v.to_string();
+    }
+    if let Some(v) = input["EnableTokenRevocation"].as_bool() {
+        client.enable_token_revocation = v;
+    }
+    if let Some(v) = input["AuthSessionValidity"].as_u64() {
+        client.auth_session_validity = v as u32;
+    }
+    if let Some(v) = input["AllowedOAuthFlowsUserPoolClient"].as_bool() {
+        client.allowed_oauth_flows_user_pool_client = v;
+    }
+    if let Some(v) = input["DefaultRedirectURI"].as_str() {
+        client.default_redirect_uri = Some(v.to_string());
+    }
+    if input["TokenValidityUnits"].is_object() {
+        client.token_validity_units = Some(input["TokenValidityUnits"].clone());
+    }
+    client.last_modified_date = now_epoch();
+
+    let client_value = client_to_value(client);
     info!(pool_id = %pool_id, client_id = %client_id, "Cognito: updated user pool client");
 
     Ok(json!({ "UserPoolClient": client_value }))
@@ -1651,6 +1711,47 @@ mod tests {
             resp["UserPool"]["AdminCreateUserConfig"]["AllowAdminCreateUserOnly"],
             true
         );
+    }
+
+    #[test]
+    fn client_describe_returns_secret_and_config_defaults() {
+        let state = CognitoState::default();
+        create_user_pool(&state, &json!({ "PoolName": "p" }), &ctx()).unwrap();
+        let pool_id = state.user_pools.iter().next().unwrap().id.clone();
+        let created = create_user_pool_client(
+            &state,
+            &json!({ "UserPoolId": pool_id, "ClientName": "c", "GenerateSecret": true }),
+            &ctx(),
+        )
+        .unwrap();
+        let client_id = created["UserPoolClient"]["ClientId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        // Defaults match AWS, and an unset ExplicitAuthFlows expands to the
+        // SRP/custom/refresh set.
+        assert_eq!(
+            created["UserPoolClient"]["PreventUserExistenceErrors"],
+            "LEGACY"
+        );
+        assert_eq!(created["UserPoolClient"]["EnableTokenRevocation"], true);
+        assert_eq!(created["UserPoolClient"]["AuthSessionValidity"], 3);
+        let flows: Vec<String> = created["UserPoolClient"]["ExplicitAuthFlows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert!(flows.contains(&"ALLOW_USER_SRP_AUTH".to_string()));
+        assert!(flows.contains(&"ALLOW_REFRESH_TOKEN_AUTH".to_string()));
+        // DescribeUserPoolClient returns the ClientSecret (not just Create).
+        let described = describe_user_pool_client(
+            &state,
+            &json!({ "UserPoolId": pool_id, "ClientId": client_id }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(described["UserPoolClient"]["ClientSecret"].is_string());
     }
 
     #[test]

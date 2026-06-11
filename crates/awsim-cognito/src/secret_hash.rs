@@ -157,6 +157,13 @@ mod tests {
             additional_client_secrets: Vec::new(),
             read_attributes: Vec::new(),
             write_attributes: Vec::new(),
+            prevent_user_existence_errors: "LEGACY".into(),
+            enable_token_revocation: true,
+            auth_session_validity: 3,
+            allowed_oauth_flows_user_pool_client: false,
+            default_redirect_uri: None,
+            token_validity_units: None,
+            last_modified_date: 0,
         }
     }
 
