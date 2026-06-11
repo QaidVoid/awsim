@@ -1250,6 +1250,7 @@ async fn authorize_post(
                 &group_pairs,
                 Some(&issuer_url),
                 token_validity.0,
+                None,
             );
             let id_tok = jwt::id_token(
                 &user.sub,
@@ -1264,6 +1265,7 @@ async fn authorize_post(
                 &group_pairs,
                 Some(&issuer_url),
                 token_validity.1,
+                None,
             );
 
             info!(
@@ -1673,6 +1675,7 @@ async fn token(
                 &group_pairs,
                 Some(&issuer_url),
                 validity.0,
+                None,
             );
             let id_tok = jwt::id_token(
                 &sub,
@@ -1687,6 +1690,7 @@ async fn token(
                 &group_pairs,
                 Some(&issuer_url),
                 validity.1,
+                None,
             );
             let refresh_tok = jwt::refresh_token(&sub);
 
@@ -1797,6 +1801,7 @@ async fn token(
                 &[],
                 Some(&issuer_url),
                 client_access_validity,
+                None,
             );
 
             info!(
@@ -1922,6 +1927,7 @@ async fn token(
                 &group_pairs,
                 Some(&issuer_url),
                 validity.0,
+                None,
             );
             let id_tok = jwt::id_token(
                 &user_sub,
@@ -1937,6 +1943,7 @@ async fn token(
                 &group_pairs,
                 Some(&issuer_url),
                 validity.1,
+                None,
             );
             // AWS Cognito intentionally does NOT issue a new refresh_token
             // on a refresh-grant exchange — the SPA keeps using the

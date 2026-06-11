@@ -13,6 +13,47 @@ pub struct GroupRolePair {
     pub precedence: Option<u32>,
 }
 
+/// Claim mutations produced by a PreTokenGeneration Lambda. `add` is applied as
+/// insert-or-override and `suppress` removes claims, after the base token has
+/// been assembled. Reserved protocol claims are never touched.
+pub struct ClaimOverrides<'a> {
+    pub add: &'a serde_json::Map<String, Value>,
+    pub suppress: &'a [String],
+}
+
+/// Claims a PreTokenGeneration Lambda may not override or suppress.
+const RESERVED_CLAIMS: &[&str] = &[
+    "acr",
+    "amr",
+    "aud",
+    "auth_time",
+    "azp",
+    "exp",
+    "iat",
+    "iss",
+    "jti",
+    "nbf",
+    "nonce",
+    "origin_jti",
+    "sub",
+    "token_use",
+];
+
+/// Apply a PreTokenGeneration Lambda's claim mutations to a token payload,
+/// skipping reserved protocol claims.
+fn apply_claim_overrides(obj: &mut serde_json::Map<String, Value>, overrides: &ClaimOverrides) {
+    for key in overrides.suppress {
+        if !RESERVED_CLAIMS.contains(&key.as_str()) {
+            obj.remove(key);
+        }
+    }
+    for (k, v) in overrides.add {
+        if !RESERVED_CLAIMS.contains(&k.as_str()) {
+            obj.insert(k.clone(), v.clone());
+        }
+    }
+}
+
 fn now_epoch() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -66,6 +107,7 @@ pub fn id_token(
     groups: &[GroupRolePair],
     issuer_override: Option<&str>,
     expires_in: u64,
+    overrides: Option<&ClaimOverrides>,
 ) -> String {
     let now = now_epoch();
 
@@ -201,6 +243,10 @@ pub fn id_token(
             .or_insert_with(|| Value::String(v.clone()));
     }
 
+    if let Some(ov) = overrides {
+        apply_claim_overrides(obj, ov);
+    }
+
     sign(&payload)
 }
 
@@ -221,6 +267,7 @@ pub fn access_token(
     groups: &[GroupRolePair],
     issuer_override: Option<&str>,
     expires_in: u64,
+    overrides: Option<&ClaimOverrides>,
 ) -> String {
     let now = now_epoch();
     let scope_str = if scopes.is_empty() {
@@ -257,6 +304,16 @@ pub fn access_token(
             .as_object_mut()
             .expect("json!() always produces an object")
             .insert("cognito:groups".to_string(), Value::Array(group_names));
+    }
+
+    if let Some(ov) = overrides {
+        // SAFETY: payload was created by json!() macro above, which always produces a JSON object.
+        apply_claim_overrides(
+            payload
+                .as_object_mut()
+                .expect("json!() always produces an object"),
+            ov,
+        );
     }
 
     sign(&payload)
@@ -356,6 +413,7 @@ mod tests {
             &[],
             None,
             3600,
+            None,
         );
         let claims = verify_access_token(&token).expect("token verifies under real RS256");
         assert_eq!(claims.username, "alice");
@@ -391,6 +449,7 @@ mod tests {
             &[],
             None,
             3600,
+            None,
         );
         assert!(verify_access_token(&id).is_none());
     }
@@ -421,6 +480,7 @@ mod tests {
             &[],
             None,
             3600,
+            None,
         );
         let c = decode_claims(&id);
         // ID tokens carry no scope claim, but do carry origin_jti + jti.
@@ -431,7 +491,18 @@ mod tests {
         assert_eq!(c["email_verified"], serde_json::json!(true));
 
         // SDK-flow access tokens use the fixed admin scope and carry origin_jti.
-        let access = access_token("s", "us-east-1", "p", "c", "alice", &[], &[], None, 3600);
+        let access = access_token(
+            "s",
+            "us-east-1",
+            "p",
+            "c",
+            "alice",
+            &[],
+            &[],
+            None,
+            3600,
+            None,
+        );
         let ac = decode_claims(&access);
         assert_eq!(ac["scope"], "aws.cognito.signin.user.admin");
         assert!(ac["origin_jti"].is_string());
@@ -460,6 +531,7 @@ mod tests {
             &[],
             None,
             3600,
+            None,
         );
         let c = decode_claims(&tok);
         assert_eq!(c["email"], "e@x.com");
@@ -482,6 +554,7 @@ mod tests {
             &[],
             None,
             3600,
+            None,
         );
         let c = decode_claims(&tok);
         assert_eq!(c["email"], "e@x.com");
