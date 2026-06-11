@@ -978,8 +978,12 @@ pub fn list_users(
     let mut users: Vec<CognitoUser> = pool.users.values().cloned().collect();
     users.sort_by(|a, b| a.username.cmp(&b.username));
 
-    // Apply Filter if provided
-    if let Some(filter_str) = input["Filter"].as_str() {
+    // Apply Filter if provided. Cognito only supports `=` and `^=`; anything
+    // else (notably `!=`) is rejected rather than silently mis-parsed.
+    if let Some(filter_str) = input["Filter"].as_str()
+        && !filter_str.trim().is_empty()
+    {
+        validate_cognito_filter(filter_str)?;
         users.retain(|u| evaluate_cognito_filter(u, filter_str));
     }
 
@@ -1000,6 +1004,29 @@ pub fn list_users(
 ///
 /// Cognito filter format: `attribute operator "value"`
 /// Operators: `=` (exact match), `^=` (starts with)
+/// Reject a ListUsers filter using an operator Cognito does not support.
+/// Only `=` and `^=` are valid; `!=` and a bare attribute (no operator) are
+/// InvalidParameterException, matching the service.
+fn validate_cognito_filter(filter: &str) -> Result<(), AwsError> {
+    if filter.contains("^=") {
+        return Ok(());
+    }
+    // A `=` that is preceded by `!` is the unsupported `!=` operator.
+    if let Some(idx) = filter.find('=') {
+        if filter[..idx].trim_end().ends_with('!') {
+            return Err(AwsError::bad_request(
+                "InvalidParameterException",
+                "Invalid filter: the != operator is not supported.",
+            ));
+        }
+        return Ok(());
+    }
+    Err(AwsError::bad_request(
+        "InvalidParameterException",
+        "Invalid filter: expected attribute = \"value\".",
+    ))
+}
+
 fn evaluate_cognito_filter(user: &CognitoUser, filter: &str) -> bool {
     // Determine operator and split
     let (attr_name, operator, value) = if let Some(idx) = filter.find("^=") {
@@ -1488,8 +1515,16 @@ pub fn admin_reset_user_password(
     })?;
 
     user.status = "RESET_REQUIRED".to_string();
+    // AWS delivers a reset code with this call so the user can complete
+    // ConfirmForgotPassword immediately; stash one under the forgot-password
+    // key (matching what ForgotPassword writes) rather than dead-ending.
+    let code = generate_reset_code();
+    user.pending_verifications
+        .insert(FORGOT_PASSWORD_KEY.to_string(), code.clone());
+    user.pending_verifications_issued
+        .insert(FORGOT_PASSWORD_KEY.to_string(), now_epoch());
     user.last_modified_date = now_epoch();
-    info!(username = %username, pool_id = %pool_id, "Cognito: admin reset user password");
+    info!(username = %username, pool_id = %pool_id, code = %code, "Cognito: admin reset user password");
     Ok(json!({}))
 }
 
@@ -2791,6 +2826,36 @@ mod tests {
             &ctx(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn admin_reset_user_password_stores_reset_code() {
+        let (state, pool_id) = schema_fixture();
+        make_u1(&state, &pool_id);
+        admin_reset_user_password(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Username": "u1" }),
+            &ctx(),
+        )
+        .unwrap();
+        let pool = state.user_pools.get(&pool_id).unwrap();
+        let user = pool.users.get("u1").unwrap();
+        assert_eq!(user.status, "RESET_REQUIRED");
+        // A reset code is now available so ConfirmForgotPassword can proceed.
+        assert!(user.pending_verifications.contains_key(FORGOT_PASSWORD_KEY));
+    }
+
+    #[test]
+    fn list_users_rejects_not_equals_filter() {
+        let (state, pool_id) = schema_fixture();
+        make_u1(&state, &pool_id);
+        let err = list_users(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Filter": "email != \"x@y.com\"" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
     }
 
     #[test]
