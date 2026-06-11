@@ -181,7 +181,7 @@ pub fn user_to_value(user: &CognitoUser) -> Value {
     if user.totp_verified {
         mfa_settings.push("SOFTWARE_TOKEN_MFA");
     }
-    if user.mfa_enabled && user.attributes.contains_key("phone_number") {
+    if user.sms_mfa_enabled && user.attributes.contains_key("phone_number") {
         mfa_settings.push("SMS_MFA");
     }
     let preferred = user.mfa_preferred.clone().unwrap_or_default();
@@ -228,7 +228,8 @@ fn make_user(
         code_locked_until_secs: None,
         revoked_refresh_tokens: Vec::new(),
         signed_out_at: None,
-        mfa_enabled: false,
+        sms_mfa_enabled: false,
+        software_token_mfa_enabled: false,
         mfa_preferred: None,
         totp_secret: None,
         totp_verified: false,
@@ -2227,7 +2228,8 @@ mod tests {
             code_locked_until_secs: None,
             revoked_refresh_tokens: Vec::new(),
             signed_out_at: None,
-            mfa_enabled: false,
+            sms_mfa_enabled: false,
+            software_token_mfa_enabled: false,
             mfa_preferred: None,
             totp_secret: None,
             totp_verified: false,

@@ -496,8 +496,13 @@ pub struct CognitoUser {
     /// fresh sign-in (which mints a newer token) keeps working.
     #[serde(default)]
     pub signed_out_at: Option<u64>,
-    /// Whether MFA is enabled for this user.
-    pub mfa_enabled: bool,
+    /// Whether SMS MFA is enabled for this user. Cognito tracks each factor
+    /// independently, so disabling one must not affect the other.
+    #[serde(default, alias = "mfa_enabled")]
+    pub sms_mfa_enabled: bool,
+    /// Whether software-token (TOTP) MFA is enabled for this user.
+    #[serde(default)]
+    pub software_token_mfa_enabled: bool,
     /// Preferred MFA method: "SOFTWARE_TOKEN_MFA" or "SMS_MFA"
     pub mfa_preferred: Option<String>,
     /// Base32-encoded TOTP secret.

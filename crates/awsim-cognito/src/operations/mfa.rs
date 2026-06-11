@@ -74,14 +74,38 @@ pub fn set_user_pool_mfa_config(
         pool.software_token_mfa_enabled = enabled;
     }
 
+    // SMS and email MFA config are stored verbatim so GetUserPoolMfaConfig
+    // round-trips them (awsim does not model SMS/email delivery itself).
+    for key in ["SmsMfaConfiguration", "EmailMfaConfiguration"] {
+        if !input[key].is_null() {
+            pool.extra_config
+                .insert(key.to_string(), input[key].clone());
+        }
+    }
+
     info!(pool_id = %pool_id, mfa = %pool.mfa_configuration, "Cognito: set user pool MFA config");
 
-    Ok(json!({
+    Ok(user_pool_mfa_config_value(&pool))
+}
+
+/// Build the GetUserPoolMfaConfig / SetUserPoolMfaConfig response, echoing the
+/// software-token state plus any stored SMS / email MFA config (defaulting to
+/// AWS's empty `SmsMfaConfiguration`).
+fn user_pool_mfa_config_value(pool: &crate::state::UserPool) -> Value {
+    let sms = pool
+        .extra_config
+        .get("SmsMfaConfiguration")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let mut out = json!({
         "MfaConfiguration": pool.mfa_configuration,
-        "SoftwareTokenMfaConfiguration": {
-            "Enabled": pool.software_token_mfa_enabled
-        }
-    }))
+        "SoftwareTokenMfaConfiguration": { "Enabled": pool.software_token_mfa_enabled },
+        "SmsMfaConfiguration": sms,
+    });
+    if let Some(email) = pool.extra_config.get("EmailMfaConfiguration") {
+        out["EmailMfaConfiguration"] = email.clone();
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -104,12 +128,7 @@ pub fn get_user_pool_mfa_config(
         )
     })?;
 
-    Ok(json!({
-        "MfaConfiguration": pool.mfa_configuration,
-        "SoftwareTokenMfaConfiguration": {
-            "Enabled": pool.software_token_mfa_enabled
-        }
-    }))
+    Ok(user_pool_mfa_config_value(&pool))
 }
 
 // ---------------------------------------------------------------------------
@@ -247,7 +266,7 @@ pub fn set_user_mfa_preference(
     let username = username_from_access_token(access_token)
         .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid Access Token"))?;
 
-    apply_mfa_preference(state, &username, input);
+    apply_mfa_preference(state, &username, input)?;
 
     info!(username = %username, "Cognito: set user MFA preference");
     Ok(json!({}))
@@ -276,11 +295,14 @@ pub fn admin_set_user_mfa_preference(
         )
     })?;
 
-    let user = pool.users.get_mut(username).ok_or_else(|| {
+    let username = super::users::resolve_username(&pool, username).ok_or_else(|| {
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
+    })?;
+    let user = pool.users.get_mut(&username).ok_or_else(|| {
         AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
-    apply_mfa_settings_to_user(user, input);
+    apply_mfa_settings_to_user(user, input)?;
 
     info!(username = %username, pool_id = %pool_id, "Cognito: admin set user MFA preference");
     Ok(json!({}))
@@ -290,36 +312,63 @@ pub fn admin_set_user_mfa_preference(
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn apply_mfa_preference(state: &CognitoState, username: &str, input: &Value) {
+fn apply_mfa_preference(
+    state: &CognitoState,
+    username: &str,
+    input: &Value,
+) -> Result<(), AwsError> {
     for mut pool_entry in state.user_pools.iter_mut() {
         if let Some(user) = pool_entry.users.get_mut(username) {
-            apply_mfa_settings_to_user(user, input);
-            break;
+            return apply_mfa_settings_to_user(user, input);
         }
     }
+    Err(AwsError::service_not_found(
+        "UserNotFoundException",
+        "User does not exist.",
+    ))
 }
 
-fn apply_mfa_settings_to_user(user: &mut crate::state::CognitoUser, input: &Value) {
+/// Apply SMS / software-token MFA settings independently. Each factor's
+/// `Enabled` flag is honoured on its own (disabling one never affects the
+/// other), the preference is cleared when its method is disabled, and asking
+/// to prefer a method that is not enabled is rejected the way Cognito does.
+fn apply_mfa_settings_to_user(
+    user: &mut crate::state::CognitoUser,
+    input: &Value,
+) -> Result<(), AwsError> {
     let swt = &input["SoftwareTokenMfaSettings"];
     let sms = &input["SMSMfaSettings"];
 
     if let Some(enabled) = swt["Enabled"].as_bool() {
-        user.mfa_enabled = enabled;
-        if let Some(preferred) = swt["PreferredMfa"].as_bool()
-            && preferred
-        {
-            user.mfa_preferred = Some("SOFTWARE_TOKEN_MFA".to_string());
+        user.software_token_mfa_enabled = enabled;
+        if !enabled && user.mfa_preferred.as_deref() == Some("SOFTWARE_TOKEN_MFA") {
+            user.mfa_preferred = None;
+        }
+    }
+    if let Some(enabled) = sms["Enabled"].as_bool() {
+        user.sms_mfa_enabled = enabled;
+        if !enabled && user.mfa_preferred.as_deref() == Some("SMS_MFA") {
+            user.mfa_preferred = None;
         }
     }
 
-    if let Some(enabled) = sms["Enabled"].as_bool()
-        && enabled
-    {
-        user.mfa_enabled = true;
-        if let Some(preferred) = sms["PreferredMfa"].as_bool()
-            && preferred
-        {
-            user.mfa_preferred = Some("SMS_MFA".to_string());
+    if swt["PreferredMfa"].as_bool() == Some(true) {
+        if !user.software_token_mfa_enabled {
+            return Err(AwsError::bad_request(
+                "InvalidParameterException",
+                "Software Token MFA cannot be preferred without being enabled.",
+            ));
         }
+        user.mfa_preferred = Some("SOFTWARE_TOKEN_MFA".to_string());
     }
+    if sms["PreferredMfa"].as_bool() == Some(true) {
+        if !user.sms_mfa_enabled {
+            return Err(AwsError::bad_request(
+                "InvalidParameterException",
+                "SMS MFA cannot be preferred without being enabled.",
+            ));
+        }
+        user.mfa_preferred = Some("SMS_MFA".to_string());
+    }
+    Ok(())
 }

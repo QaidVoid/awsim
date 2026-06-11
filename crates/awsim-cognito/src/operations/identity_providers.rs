@@ -14,6 +14,16 @@ fn now_epoch() -> u64 {
         .as_secs()
 }
 
+/// The ProviderType values Cognito accepts for CreateIdentityProvider.
+const VALID_PROVIDER_TYPES: &[&str] = &[
+    "SAML",
+    "Facebook",
+    "Google",
+    "LoginWithAmazon",
+    "SignInWithApple",
+    "OIDC",
+];
+
 fn idp_to_value(idp: &IdentityProvider) -> Value {
     json!({
         "UserPoolId": idp.user_pool_id,
@@ -57,6 +67,12 @@ pub fn create_identity_provider(
     let provider_type = input["ProviderType"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "ProviderType is required")
     })?;
+    if !VALID_PROVIDER_TYPES.contains(&provider_type) {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            format!("Invalid ProviderType: {provider_type}"),
+        ));
+    }
 
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
@@ -85,6 +101,20 @@ pub fn create_identity_provider(
                 .collect()
         })
         .unwrap_or_default();
+
+    // IdpIdentifiers must be globally unique within the pool.
+    for id in &idp_identifiers {
+        if pool
+            .identity_providers
+            .iter()
+            .any(|idp| idp.idp_identifiers.iter().any(|e| e == id))
+        {
+            return Err(AwsError::bad_request(
+                "DuplicateProviderException",
+                format!("IdpIdentifier {id} is already in use."),
+            ));
+        }
+    }
 
     let idp = IdentityProvider {
         provider_name: provider_name.to_string(),
@@ -306,17 +336,16 @@ pub fn get_identity_provider_by_identifier(
         )
     })?;
 
+    // Cognito matches only registered IdpIdentifiers here, not the provider
+    // name.
     let idp = pool
         .identity_providers
         .iter()
-        .find(|idp| {
-            idp.idp_identifiers.iter().any(|id| id == idp_identifier)
-                || idp.provider_name == idp_identifier
-        })
+        .find(|idp| idp.idp_identifiers.iter().any(|id| id == idp_identifier))
         .ok_or_else(|| {
             AwsError::service_not_found(
                 "ResourceNotFoundException",
-                format!("Identity provider not found for identifier: {idp_identifier}"),
+                format!("Identity provider with identifier {idp_identifier} does not exist."),
             )
         })?;
 
@@ -454,4 +483,73 @@ pub fn admin_disable_provider_for_user(
 
     info!(pool_id = %pool_id, provider = %provider_name, "Cognito: disabled provider for user");
     Ok(json!({}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::operations::pools::create_user_pool;
+    use serde_json::json;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("cognito-idp", "us-east-1")
+    }
+
+    fn pool() -> (CognitoState, String) {
+        let state = CognitoState::default();
+        create_user_pool(&state, &json!({ "PoolName": "p" }), &ctx()).unwrap();
+        let id = state.user_pools.iter().next().unwrap().id.clone();
+        (state, id)
+    }
+
+    #[test]
+    fn create_identity_provider_rejects_invalid_type() {
+        let (state, pool_id) = pool();
+        let err = create_identity_provider(
+            &state,
+            &json!({ "UserPoolId": pool_id, "ProviderName": "X", "ProviderType": "Banana" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+    }
+
+    #[test]
+    fn create_identity_provider_rejects_duplicate_identifier() {
+        let (state, pool_id) = pool();
+        create_identity_provider(
+            &state,
+            &json!({ "UserPoolId": pool_id, "ProviderName": "G", "ProviderType": "Google",
+                     "IdpIdentifiers": ["shared"] }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = create_identity_provider(
+            &state,
+            &json!({ "UserPoolId": pool_id, "ProviderName": "O", "ProviderType": "OIDC",
+                     "IdpIdentifiers": ["shared"] }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "DuplicateProviderException");
+    }
+
+    #[test]
+    fn get_by_identifier_does_not_match_provider_name() {
+        let (state, pool_id) = pool();
+        create_identity_provider(
+            &state,
+            &json!({ "UserPoolId": pool_id, "ProviderName": "Google", "ProviderType": "Google" }),
+            &ctx(),
+        )
+        .unwrap();
+        // No IdpIdentifiers set: looking up by the provider name must miss.
+        let err = get_identity_provider_by_identifier(
+            &state,
+            &json!({ "UserPoolId": pool_id, "IdpIdentifier": "Google" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ResourceNotFoundException");
+    }
 }
