@@ -127,6 +127,81 @@ fn validate_client_attributes(
     Ok(())
 }
 
+/// Built-in identity providers always available to a user pool client.
+const BUILTIN_IDPS: &[&str] = &[
+    "COGNITO",
+    "Google",
+    "Facebook",
+    "LoginWithAmazon",
+    "SignInWithApple",
+];
+
+/// Standard OAuth scopes Cognito accepts without a resource server.
+const STANDARD_OAUTH_SCOPES: &[&str] = &[
+    "openid",
+    "email",
+    "phone",
+    "profile",
+    "aws.cognito.signin.user.admin",
+];
+
+/// Validate a client's OAuth-related fields against the pool. Callback /
+/// logout URLs must be https (or http://localhost for development),
+/// SupportedIdentityProviders must resolve to a built-in or a configured
+/// provider, and AllowedOAuthScopes must be a standard scope or a declared
+/// resource-server scope.
+fn validate_client_oauth(
+    pool: &UserPool,
+    callback_urls: &[String],
+    logout_urls: &[String],
+    allowed_oauth_scopes: &[String],
+    supported_identity_providers: &[String],
+) -> Result<(), AwsError> {
+    let url_ok = |u: &str| {
+        u.starts_with("https://")
+            || u.starts_with("http://localhost")
+            || u.starts_with("http://127.0.0.1")
+    };
+    for u in callback_urls.iter().chain(logout_urls.iter()) {
+        if !url_ok(u) {
+            return Err(AwsError::bad_request(
+                "InvalidParameterException",
+                format!("Redirect URI {u} must use https (or localhost for development)."),
+            ));
+        }
+    }
+
+    for idp in supported_identity_providers {
+        let known = BUILTIN_IDPS.contains(&idp.as_str())
+            || pool
+                .identity_providers
+                .iter()
+                .any(|p| &p.provider_name == idp);
+        if !known {
+            return Err(AwsError::bad_request(
+                "InvalidParameterException",
+                format!("The provider {idp} does not exist for the user pool."),
+            ));
+        }
+    }
+
+    for scope in allowed_oauth_scopes {
+        let standard = STANDARD_OAUTH_SCOPES.contains(&scope.as_str());
+        let resource = scope.split_once('/').is_some_and(|(rs_id, name)| {
+            pool.resource_servers
+                .iter()
+                .any(|rs| rs.identifier == rs_id && rs.scopes.iter().any(|s| s.scope_name == name))
+        });
+        if !standard && !resource {
+            return Err(AwsError::bad_request(
+                "ScopeDoesNotExistException",
+                format!("Scope {scope} does not exist."),
+            ));
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // CreateUserPool
 // ---------------------------------------------------------------------------
@@ -573,6 +648,13 @@ pub fn create_user_pool_client(
     })?;
 
     validate_client_attributes(&pool, &read_attributes, &write_attributes)?;
+    validate_client_oauth(
+        &pool,
+        &callback_urls,
+        &logout_urls,
+        &allowed_oauth_scopes,
+        &supported_identity_providers,
+    )?;
 
     let client_id = random_alnum(26);
     let now = now_epoch();
@@ -776,6 +858,25 @@ pub fn update_user_pool_client(
             write_update.as_deref().unwrap_or(&[]),
         )?;
     }
+
+    // Validate any OAuth-related fields present in the update against the pool.
+    let parse_list = |key: &str| -> Vec<String> {
+        input[key]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    validate_client_oauth(
+        &pool,
+        &parse_list("CallbackURLs"),
+        &parse_list("LogoutURLs"),
+        &parse_list("AllowedOAuthScopes"),
+        &parse_list("SupportedIdentityProviders"),
+    )?;
 
     let client = pool.clients.get_mut(client_id).ok_or_else(|| {
         AwsError::service_not_found(
@@ -1835,6 +1936,36 @@ mod tests {
         )
         .unwrap();
         assert!(described["UserPoolClient"]["ClientSecret"].is_string());
+    }
+
+    #[test]
+    fn create_client_rejects_unknown_idp_and_bad_callback_and_scope() {
+        let state = CognitoState::default();
+        create_user_pool(&state, &json!({ "PoolName": "p" }), &ctx()).unwrap();
+        let pool_id = state.user_pools.iter().next().unwrap().id.clone();
+        let mk = |body: Value| create_user_pool_client(&state, &body, &ctx());
+
+        let err = mk(json!({ "UserPoolId": pool_id, "ClientName": "c",
+                             "SupportedIdentityProviders": ["Nope"] }))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+
+        let err = mk(json!({ "UserPoolId": pool_id, "ClientName": "c",
+                             "CallbackURLs": ["http://evil.example.com/cb"] }))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
+
+        let err = mk(json!({ "UserPoolId": pool_id, "ClientName": "c",
+                             "AllowedOAuthScopes": ["my-rs/read"] }))
+        .unwrap_err();
+        assert_eq!(err.code, "ScopeDoesNotExistException");
+
+        // A built-in IdP, https callback, and standard scope are accepted.
+        mk(json!({ "UserPoolId": pool_id, "ClientName": "c",
+                   "SupportedIdentityProviders": ["COGNITO"],
+                   "CallbackURLs": ["https://app.example.com/cb", "http://localhost:3000/cb"],
+                   "AllowedOAuthScopes": ["openid", "email"] }))
+        .unwrap();
     }
 
     #[test]
