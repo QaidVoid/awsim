@@ -46,9 +46,65 @@ pub(crate) fn resolve_username(pool: &UserPool, identifier: &str) -> Option<Stri
     if pool.users.contains_key(identifier) {
         return Some(identifier.to_string());
     }
-    pool.users
+    if let Some(name) = pool
+        .users
         .iter()
         .find_map(|(name, user)| (user.sub == identifier).then(|| name.clone()))
+    {
+        return Some(name);
+    }
+    // Real AWS also accepts an alias (email / phone_number / preferred_username)
+    // as the Username on the admin and code APIs.
+    resolve_via_attributes(pool, identifier)
+}
+
+/// Match an identifier against a pool's alias and username attributes,
+/// honouring Cognito's verified requirement: `email` / `phone_number` aliases
+/// resolve only when the matching `<attr>_verified` flag is "true", while
+/// `preferred_username` is always usable. Returns the stored user-pool key.
+fn resolve_via_attributes(pool: &UserPool, input: &str) -> Option<String> {
+    let mut aliases: Vec<&String> = Vec::new();
+    for a in pool
+        .alias_attributes
+        .iter()
+        .chain(pool.username_attributes.iter())
+    {
+        if !aliases.contains(&a) {
+            aliases.push(a);
+        }
+    }
+    for alias in aliases {
+        let case_insensitive = matches!(alias.as_str(), "email" | "preferred_username");
+        for (key, user) in pool.users.iter() {
+            let Some(stored) = user.attributes.get(alias) else {
+                continue;
+            };
+            let matches = if case_insensitive {
+                stored.eq_ignore_ascii_case(input)
+            } else {
+                stored == input
+            };
+            if !matches {
+                continue;
+            }
+            let verified_ok = match alias.as_str() {
+                "email" => {
+                    user.attributes.get("email_verified").map(String::as_str) == Some("true")
+                }
+                "phone_number" => {
+                    user.attributes
+                        .get("phone_number_verified")
+                        .map(String::as_str)
+                        == Some("true")
+                }
+                _ => true,
+            };
+            if verified_ok {
+                return Some(key.clone());
+            }
+        }
+    }
+    None
 }
 
 /// Default validity window for confirmation / reset codes, matching real
@@ -371,35 +427,15 @@ fn ensure_attribute_unique(
 /// Resolve a sign-in identifier (Username from `InitiateAuth` /
 /// `AdminInitiateAuth` / hosted UI) to the actual user-pool key.
 ///
-/// First tries a literal match against `pool.users`. If that misses and
-/// the pool has `AliasAttributes` configured, scans users for one whose
-/// matching attribute equals the input (case-insensitive for `email` and
-/// `preferred_username`). Returns `None` if no user is found by either
-/// route.
+/// Tries a literal match against `pool.users` first, then resolves via the
+/// pool's alias / username attributes. `email` and `phone_number` aliases
+/// only resolve when the matching attribute is verified, so an unverified
+/// (potentially squatted) address can't be used to sign in.
 pub fn resolve_username_for_signin(pool: &UserPool, input: &str) -> Option<String> {
     if pool.users.contains_key(input) {
         return Some(input.to_string());
     }
-    if pool.alias_attributes.is_empty() {
-        return None;
-    }
-    for alias in &pool.alias_attributes {
-        let case_insensitive = matches!(alias.as_str(), "email" | "preferred_username");
-        for (key, user) in pool.users.iter() {
-            let Some(stored) = user.attributes.get(alias) else {
-                continue;
-            };
-            let matches = if case_insensitive {
-                stored.eq_ignore_ascii_case(input)
-            } else {
-                stored == input
-            };
-            if matches {
-                return Some(key.clone());
-            }
-        }
-    }
-    None
+    resolve_via_attributes(pool, input)
 }
 
 fn looks_like_email(s: &str) -> bool {
@@ -552,9 +588,12 @@ pub fn confirm_sign_up(
         )
     })?;
 
+    let username = resolve_username(&pool, username).ok_or_else(|| {
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
+    })?;
     let code_key = format!("{pool_id}:{username}");
     let auto_verified = pool.auto_verified_attributes.clone();
-    let user = pool.users.get_mut(username).ok_or_else(|| {
+    let user = pool.users.get_mut(&username).ok_or_else(|| {
         AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
     check_code_rate_limit(user)?;
@@ -1091,7 +1130,10 @@ pub fn forgot_password(
             )
         })?;
         let lambda_arn = pool.lambda_config.get("CustomMessage").cloned();
-        let user = pool.users.get_mut(username).ok_or_else(|| {
+        let resolved = resolve_username(&pool, username).ok_or_else(|| {
+            AwsError::service_not_found("UserNotFoundException", "User does not exist.")
+        })?;
+        let user = pool.users.get_mut(&resolved).ok_or_else(|| {
             AwsError::service_not_found("UserNotFoundException", "User does not exist.")
         })?;
         user.pending_verifications
@@ -1189,7 +1231,10 @@ pub fn confirm_forgot_password(
     })?;
     super::auth_policy::validate_password(&pool.policies, password)?;
 
-    let user = pool.users.get_mut(username).ok_or_else(|| {
+    let username = resolve_username(&pool, username).ok_or_else(|| {
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
+    })?;
+    let user = pool.users.get_mut(&username).ok_or_else(|| {
         AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
     check_code_rate_limit(user)?;
@@ -1232,7 +1277,7 @@ pub fn confirm_forgot_password(
     user.pending_verifications_issued
         .remove(FORGOT_PASSWORD_KEY);
     user.password_hash = crate::password::hash(password)?;
-    let (s, v) = crate::password::srp_material(&pool_id, username, password);
+    let (s, v) = crate::password::srp_material(&pool_id, &username, password);
     user.srp_salt = Some(s);
     user.srp_verifier = Some(v);
     user.status = "CONFIRMED".to_string();
@@ -1786,12 +1831,9 @@ pub fn resend_confirmation_code(
             format!("User pool {pool_id} does not exist."),
         )
     })?;
-    if !pool.users.contains_key(username) {
-        return Err(AwsError::service_not_found(
-            "UserNotFoundException",
-            "User does not exist.",
-        ));
-    }
+    let username = resolve_username(&pool, username).ok_or_else(|| {
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
+    })?;
 
     let code = format!("{:06}", rand::random::<u32>() % 1_000_000);
     let key = format!("{pool_id}:{username}");
@@ -2749,6 +2791,62 @@ mod tests {
             &ctx(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn admin_get_user_resolves_verified_email_alias() {
+        // AliasAttributes=email pool: a user keyed by username with a
+        // verified email can be fetched by that email; an unverified one
+        // cannot.
+        let state = CognitoState::default();
+        create_user_pool(
+            &state,
+            &json!({ "PoolName": "p", "AliasAttributes": ["email"] }),
+            &ctx(),
+        )
+        .unwrap();
+        let pool_id = state.user_pools.iter().next().unwrap().id.clone();
+        admin_create_user(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "user-uuid",
+                "MessageAction": "SUPPRESS",
+                "UserAttributes": [
+                    { "Name": "email", "Value": "dave@example.com" },
+                    { "Name": "email_verified", "Value": "true" }
+                ]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let by_email = admin_get_user(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Username": "dave@example.com" }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(by_email["Username"], "user-uuid");
+
+        // A second user with an unverified email is not resolvable by it.
+        admin_create_user(
+            &state,
+            &json!({
+                "UserPoolId": pool_id,
+                "Username": "user2-uuid",
+                "MessageAction": "SUPPRESS",
+                "UserAttributes": [{ "Name": "email", "Value": "unverified@example.com" }]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = admin_get_user(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Username": "unverified@example.com" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "UserNotFoundException");
     }
 
     #[test]
