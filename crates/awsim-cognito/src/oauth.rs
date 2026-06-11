@@ -294,6 +294,28 @@ fn build_oauth_query(pairs: &[(&str, &str)]) -> String {
         .join("&")
 }
 
+/// The non-COGNITO identity providers a client offers on the hosted UI, so the
+/// login page can render "Continue with <IdP>" buttons.
+fn client_supported_idps(
+    oauth_state: &CognitoOAuthState,
+    pool_id: &str,
+    client_id: &str,
+) -> Vec<String> {
+    oauth_state
+        .cognito
+        .user_pools
+        .get(pool_id)
+        .and_then(|p| {
+            p.clients
+                .get(client_id)
+                .map(|c| c.supported_identity_providers.clone())
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| !p.eq_ignore_ascii_case("COGNITO"))
+        .collect()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn login_page_html(
     pool_id: &str,
@@ -307,6 +329,7 @@ fn login_page_html(
     code_challenge_method: &str,
     error_msg: Option<&str>,
     prefill_username: Option<&str>,
+    idps: &[String],
 ) -> Response {
     let error_html = error_msg
         .map(|e| format!(r#"<div class="error">{}</div>"#, escape_html(e)))
@@ -337,18 +360,51 @@ fn login_page_html(
     ]);
     let forgot_query_e = escape_html(&forgot_query);
 
+    // "Continue with <IdP>" buttons for each federated provider the client
+    // supports, each linking to the authorize endpoint with identity_provider
+    // set so the federation round-trip lands back on the app's redirect_uri.
+    let idp_section = if idps.is_empty() {
+        String::new()
+    } else {
+        let buttons: String = idps
+            .iter()
+            .map(|name| {
+                let query = if forgot_query.is_empty() {
+                    format!("identity_provider={}", urlencoding(name))
+                } else {
+                    format!("{forgot_query}&identity_provider={}", urlencoding(name))
+                };
+                format!(
+                    r#"<a class="idp-btn" href="/cognito/{pool_id_e}/oauth2/authorize?{}">Continue with {}</a>"#,
+                    escape_html(&query),
+                    escape_html(name)
+                )
+            })
+            .collect();
+        format!(r#"<div class="idps">{buttons}</div><div class="divider"><span>or</span></div>"#)
+    };
+
     let html = format!(
         r#"<!DOCTYPE html>
-<html><head><title>AWSim Login</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AWSim Login</title>
 <style>
-body {{ font-family: sans-serif; background: #18181b; color: #e4e4e7; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }}
-.card {{ background: #27272a; border: 1px solid #3f3f46; border-radius: 12px; padding: 32px; width: 360px; }}
+* {{ box-sizing: border-box; }}
+body {{ font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: #18181b; color: #e4e4e7; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 16px; }}
+.card {{ background: #27272a; border: 1px solid #3f3f46; border-radius: 12px; padding: 32px; width: 100%; max-width: 360px; }}
 h2 {{ margin-top: 0; color: #fb923c; }}
-input {{ width: 100%; padding: 10px; margin: 8px 0; background: #18181b; border: 1px solid #3f3f46; border-radius: 6px; color: #e4e4e7; box-sizing: border-box; }}
+input {{ width: 100%; padding: 10px; margin: 8px 0; background: #18181b; border: 1px solid #3f3f46; border-radius: 6px; color: #e4e4e7; }}
+input:focus {{ outline: none; border-color: #ea580c; }}
 button {{ width: 100%; padding: 10px; background: #ea580c; border: none; border-radius: 6px; color: white; font-weight: bold; cursor: pointer; margin-top: 12px; }}
 button:hover {{ background: #f97316; }}
 .pool {{ color: #71717a; font-size: 12px; margin-bottom: 16px; }}
 .error {{ background: #450a0a; border: 1px solid #991b1b; border-radius: 6px; padding: 10px; margin-bottom: 12px; color: #fca5a5; font-size: 14px; }}
+.idps {{ display: flex; flex-direction: column; gap: 8px; }}
+.idp-btn {{ display: block; padding: 10px; text-align: center; background: #18181b; border: 1px solid #3f3f46; border-radius: 6px; color: #e4e4e7; text-decoration: none; font-size: 14px; }}
+.idp-btn:hover {{ border-color: #ea580c; }}
+.divider {{ display: flex; align-items: center; text-align: center; color: #71717a; font-size: 12px; margin: 16px 0 4px; }}
+.divider::before, .divider::after {{ content: ""; flex: 1; border-bottom: 1px solid #3f3f46; }}
+.divider span {{ padding: 0 10px; }}
 .links {{ margin-top: 16px; font-size: 13px; text-align: center; }}
 .links a {{ color: #fb923c; text-decoration: none; }}
 .links a:hover {{ text-decoration: underline; }}
@@ -358,6 +414,7 @@ button:hover {{ background: #f97316; }}
 <h2>Sign In</h2>
 <div class="pool">Pool: {pool_id_e}</div>
 {error_html}
+{idp_section}
 <form method="POST" action="/cognito/{pool_id_e}/oauth2/authorize">
 <input type="hidden" name="response_type" value="{response_type_e}">
 <input type="hidden" name="client_id" value="{client_id_e}">
@@ -779,6 +836,7 @@ async fn authorize_get(
         .await;
     }
 
+    let idps = client_supported_idps(&oauth_state, &pool_id, &params.client_id);
     login_page_html(
         &pool_id,
         &params.response_type,
@@ -791,6 +849,7 @@ async fn authorize_get(
         params.code_challenge_method.as_deref().unwrap_or(""),
         None,
         None,
+        &idps,
     )
 }
 
@@ -1113,6 +1172,9 @@ async fn authorize_post(
     let nonce = form.nonce.clone();
     let code_challenge = form.code_challenge.clone();
     let code_challenge_method = form.code_challenge_method.clone();
+    // Federated providers for this client, for the login page's IdP buttons
+    // on any re-render below.
+    let idps = client_supported_idps(&oauth_state, &pool_id, &client_id);
 
     let username = match &form.username {
         Some(u) if !u.is_empty() => u.clone(),
@@ -1129,6 +1191,7 @@ async fn authorize_post(
                 code_challenge_method.as_deref().unwrap_or(""),
                 Some("Username is required"),
                 None,
+                &idps,
             );
         }
     };
@@ -1180,6 +1243,7 @@ async fn authorize_post(
                 code_challenge_method.as_deref().unwrap_or(""),
                 Some("Invalid username or password"),
                 Some(&username),
+                &idps,
             );
         }
     };
@@ -1198,6 +1262,7 @@ async fn authorize_post(
             code_challenge_method.as_deref().unwrap_or(""),
             Some("Invalid username or password"),
             Some(&username),
+            &idps,
         );
     }
 
@@ -1214,6 +1279,7 @@ async fn authorize_post(
             code_challenge_method.as_deref().unwrap_or(""),
             Some("User account is disabled"),
             Some(&username),
+            &idps,
         );
     }
 
@@ -1230,6 +1296,7 @@ async fn authorize_post(
             code_challenge_method.as_deref().unwrap_or(""),
             Some("User is not confirmed"),
             Some(&username),
+            &idps,
         );
     }
 
@@ -1251,6 +1318,7 @@ async fn authorize_post(
                 "Password reset required — finish the forgot-password flow or have an admin run AdminSetUserPassword to clear the reset state.",
             ),
             Some(&username),
+            &idps,
         );
     }
 
@@ -1330,6 +1398,7 @@ async fn authorize_post(
                     code_challenge_method.as_deref().unwrap_or(""),
                     Some(&e.message),
                     Some(&username),
+                    &idps,
                 );
             }
         };
