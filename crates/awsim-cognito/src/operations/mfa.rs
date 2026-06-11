@@ -46,6 +46,47 @@ fn username_from_access_token(access_token: &str) -> Option<String> {
     crate::jwt::extract_username_from_access_token(access_token)
 }
 
+/// Resolve the (pool_id, username) a software-token request targets, from
+/// either its AccessToken (the token's client_id pins the pool) or its
+/// Session (the MFA session stores the pool). Scoping to a single pool avoids
+/// mutating a same-named user in a different pool.
+fn resolve_token_target(state: &CognitoState, input: &Value) -> Result<(String, String), AwsError> {
+    if let Some(token) = input["AccessToken"].as_str() {
+        let claims = crate::jwt::verify_access_token(token).ok_or_else(|| {
+            AwsError::bad_request("NotAuthorizedException", "Invalid Access Token")
+        })?;
+        // The token's client_id is unique to one pool; find it.
+        let pool_id = state
+            .user_pools
+            .iter()
+            .find(|p| p.clients.contains_key(&claims.client_id))
+            .map(|p| p.id.clone())
+            // Fall back to the pool that actually holds the user when the
+            // token carried no resolvable client_id (older/hand-rolled tokens).
+            .or_else(|| {
+                state
+                    .user_pools
+                    .iter()
+                    .find(|p| p.users.contains_key(&claims.username))
+                    .map(|p| p.id.clone())
+            })
+            .ok_or_else(|| {
+                AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
+            })?;
+        Ok((pool_id, claims.username))
+    } else if let Some(session) = input["Session"].as_str() {
+        let entry = state.mfa_sessions.get(session).ok_or_else(|| {
+            AwsError::bad_request("NotAuthorizedException", "Invalid session for the user.")
+        })?;
+        Ok((entry.pool_id.clone(), entry.username.clone()))
+    } else {
+        Err(AwsError::bad_request(
+            "InvalidParameterException",
+            "Either AccessToken or Session is required",
+        ))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SetUserPoolMfaConfig
 // ---------------------------------------------------------------------------
@@ -140,41 +181,21 @@ pub fn associate_software_token(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    // Resolve username from AccessToken or Session
-    let username = if let Some(token) = input["AccessToken"].as_str() {
-        username_from_access_token(token).ok_or_else(|| {
-            AwsError::bad_request("NotAuthorizedException", "Invalid Access Token")
-        })?
-    } else if let Some(_session) = input["Session"].as_str() {
-        // Session-based flow: session stores pool_id+username in MFA session map.
-        // For dev emulator we look it up from the session store on CognitoState.
-        let session = input["Session"].as_str().unwrap_or("");
-        state
-            .mfa_sessions
-            .get(session)
-            .map(|e| e.username.clone())
-            .ok_or_else(|| {
-                AwsError::bad_request("NotAuthorizedException", "Invalid session for the user.")
-            })?
-    } else {
-        return Err(AwsError::bad_request(
-            "InvalidParameterException",
-            "Either AccessToken or Session is required",
-        ));
-    };
+    let (pool_id, username) = resolve_token_target(state, input)?;
 
     let secret = generate_totp_secret();
     let session = Uuid::new_v4().to_string();
 
-    // Store the secret on the user (not yet verified)
-    for mut pool_entry in state.user_pools.iter_mut() {
-        if let Some(user) = pool_entry.users.get_mut(&username) {
-            user.totp_secret = Some(secret.clone());
-            break;
-        }
-    }
+    // Store the secret on the resolved user (not yet verified).
+    let mut pool = state.user_pools.get_mut(&pool_id).ok_or_else(|| {
+        AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
+    })?;
+    let user = pool.users.get_mut(&username).ok_or_else(|| {
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
+    })?;
+    user.totp_secret = Some(secret.clone());
 
-    info!(username = %username, "Cognito: associated software token");
+    info!(username = %username, pool_id = %pool_id, "Cognito: associated software token");
 
     Ok(json!({
         "SecretCode": secret,
@@ -202,52 +223,39 @@ pub fn verify_software_token(
         ));
     }
 
-    let username = if let Some(token) = input["AccessToken"].as_str() {
-        username_from_access_token(token).ok_or_else(|| {
-            AwsError::bad_request("NotAuthorizedException", "Invalid Access Token")
-        })?
-    } else if let Some(session) = input["Session"].as_str() {
-        state
-            .mfa_sessions
-            .get(session)
-            .map(|e| e.username.clone())
-            .ok_or_else(|| {
-                AwsError::bad_request("NotAuthorizedException", "Invalid session for the user.")
-            })?
-    } else {
-        return Err(AwsError::bad_request(
-            "InvalidParameterException",
-            "Either AccessToken or Session is required",
-        ));
-    };
+    let (pool_id, username) = resolve_token_target(state, input)?;
 
     // Verify the supplied code against the user's TOTP secret. Without a
     // secret this call is meaningless: AssociateSoftwareToken must have run
     // first.
-    for mut pool_entry in state.user_pools.iter_mut() {
-        if let Some(user) = pool_entry.users.get_mut(&username) {
-            let secret = user.totp_secret.clone().ok_or_else(|| {
-                AwsError::bad_request(
-                    "EnableSoftwareTokenMFAException",
-                    "No software token associated for this user",
-                )
-            })?;
-            if !awsim_core::totp::verify_str(&secret, user_code, 1) {
-                return Err(AwsError::bad_request(
-                    "EnableSoftwareTokenMFAException",
-                    "Code mismatch",
-                ));
-            }
-            user.totp_verified = true;
-            info!(username = %username, "Cognito: software token verified");
-            return Ok(json!({ "Status": "SUCCESS" }));
-        }
+    let mut pool = state.user_pools.get_mut(&pool_id).ok_or_else(|| {
+        AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
+    })?;
+    let user = pool.users.get_mut(&username).ok_or_else(|| {
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
+    })?;
+    let secret = user.totp_secret.clone().ok_or_else(|| {
+        AwsError::bad_request(
+            "EnableSoftwareTokenMFAException",
+            "No software token associated for this user",
+        )
+    })?;
+    if !awsim_core::totp::verify_str(&secret, user_code, 1) {
+        return Err(AwsError::bad_request(
+            "EnableSoftwareTokenMFAException",
+            "Code mismatch",
+        ));
     }
+    user.totp_verified = true;
+    info!(username = %username, pool_id = %pool_id, "Cognito: software token verified");
 
-    Err(AwsError::service_not_found(
-        "UserNotFoundException",
-        "User does not exist.",
-    ))
+    // AWS returns a Session continuation token so the caller can proceed
+    // through the rest of the auth flow; echo the one supplied or mint a new.
+    let session = input["Session"]
+        .as_str()
+        .map(String::from)
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    Ok(json!({ "Status": "SUCCESS", "Session": session }))
 }
 
 // ---------------------------------------------------------------------------

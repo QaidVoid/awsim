@@ -32,9 +32,10 @@ impl TokenValidity {
     }
 }
 
-/// MFA / SRP challenge sessions live this long before the server forgets
-/// them, matching Cognito's 5-minute default `auth_session_validity`.
-const SESSION_VALIDITY_SECS: u64 = 5 * 60;
+/// MFA / SRP / custom-auth challenge sessions live this long before the
+/// server forgets them. Cognito's default `AuthSessionValidity` is 3 minutes;
+/// a per-client override is not yet applied to the session window.
+const SESSION_VALIDITY_SECS: u64 = 3 * 60;
 
 fn now_epoch() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -71,7 +72,8 @@ enum MfaChallenge {
     /// EMAIL_OTP: a code was stashed; carry the masked destination back.
     EmailOtp { destination: String },
     /// SELECT_MFA_TYPE: multiple factors are enabled with no clear preference.
-    Select,
+    /// Carries the concrete factors the user may choose from.
+    Select { methods: Vec<String> },
     /// SOFTWARE_TOKEN_MFA (the default).
     SoftwareToken,
 }
@@ -151,8 +153,19 @@ fn issue_mfa_challenge(user: &mut CognitoUser) -> Option<MfaChallenge> {
         // one factor is on, otherwise fall back to whichever single factor is
         // configured, defaulting to software-token.
         _ => {
-            if software && sms {
-                Some(MfaChallenge::Select)
+            let email = email_factor_enabled(user);
+            let mut methods = Vec::new();
+            if software {
+                methods.push("SOFTWARE_TOKEN_MFA".to_string());
+            }
+            if sms {
+                methods.push("SMS_MFA".to_string());
+            }
+            if email {
+                methods.push("EMAIL_OTP".to_string());
+            }
+            if methods.len() > 1 {
+                Some(MfaChallenge::Select { methods })
             } else if sms {
                 let code = generate_mfa_code();
                 let destination = user
@@ -221,12 +234,12 @@ fn mfa_challenge_response(
                 "AttributeName": "email",
             }
         }),
-        MfaChallenge::Select => json!({
+        MfaChallenge::Select { methods } => json!({
             "ChallengeName": "SELECT_MFA_TYPE",
             "Session": session_id,
             "ChallengeParameters": {
                 "USER_ID_FOR_SRP": username,
-                "MFAS_CAN_CHOOSE": "[\"SMS_MFA\",\"SOFTWARE_TOKEN_MFA\"]",
+                "MFAS_CAN_CHOOSE": serde_json::to_string(&methods).unwrap_or_else(|_| "[]".to_string()),
             }
         }),
         MfaChallenge::SoftwareToken => json!({
@@ -2904,14 +2917,14 @@ mod session_expiry_tests {
 
     #[test]
     fn session_within_window_is_valid() {
-        // 4 minutes old, well inside the 5-minute cap.
-        assert!(session_still_valid(now_epoch() - 4 * 60));
+        // 2 minutes old, inside the 3-minute cap.
+        assert!(session_still_valid(now_epoch() - 2 * 60));
     }
 
     #[test]
     fn session_past_window_is_expired() {
-        // 6 minutes old.
-        assert!(!session_still_valid(now_epoch() - 6 * 60));
+        // 4 minutes old, past the 3-minute cap.
+        assert!(!session_still_valid(now_epoch() - 4 * 60));
     }
 }
 
