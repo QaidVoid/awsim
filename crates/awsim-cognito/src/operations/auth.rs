@@ -1092,6 +1092,32 @@ fn auth_flow_allowed(client: &UserPoolClient, auth_flow: &str) -> bool {
 // InitiateAuth
 // ---------------------------------------------------------------------------
 
+/// Whether the client masks user-existence (PreventUserExistenceErrors).
+fn client_masks_existence(state: &CognitoState, pool_id: &str, client_id: &str) -> bool {
+    state
+        .user_pools
+        .get(pool_id)
+        .and_then(|p| {
+            p.clients.get(client_id).map(|c| {
+                c.prevent_user_existence_errors
+                    .eq_ignore_ascii_case("ENABLED")
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// The error to surface when a user can't be found during a public sign-in
+/// flow. With PreventUserExistenceErrors=ENABLED, AWS hides whether the
+/// account exists by returning the same NotAuthorizedException a wrong
+/// password yields; otherwise it returns UserNotFoundException.
+fn user_lookup_error(masks_existence: bool) -> AwsError {
+    if masks_existence {
+        AwsError::bad_request("NotAuthorizedException", "Incorrect username or password.")
+    } else {
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
+    }
+}
+
 pub fn initiate_auth(
     state: &CognitoState,
     input: &Value,
@@ -1156,13 +1182,15 @@ pub fn initiate_auth(
                 params["SECRET_HASH"].as_str(),
                 raw_username,
             )?;
+            // PreventUserExistenceErrors: a missing user is reported the same
+            // way a wrong password is, so the response never reveals existence.
+            let masks = client_masks_existence(state, &pool_id, client_id);
             let username = {
                 let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
                     AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
                 })?;
-                super::users::resolve_username_for_signin(&pool, raw_username).ok_or_else(|| {
-                    AwsError::service_not_found("UserNotFoundException", "User does not exist.")
-                })?
+                super::users::resolve_username_for_signin(&pool, raw_username)
+                    .ok_or_else(|| user_lookup_error(masks))?
             };
             let username = username.as_str();
 
@@ -1197,9 +1225,10 @@ pub fn initiate_auth(
                 );
                 let compromised = super::auth_policy::is_compromised_password(password);
 
-                let user = pool.users.get_mut(username).ok_or_else(|| {
-                    AwsError::service_not_found("UserNotFoundException", "User does not exist.")
-                })?;
+                let user = pool
+                    .users
+                    .get_mut(username)
+                    .ok_or_else(|| user_lookup_error(masks))?;
                 if !user.enabled {
                     return Err(AwsError::bad_request(
                         "NotAuthorizedException",
@@ -2232,17 +2261,17 @@ fn start_srp_challenge(
         ));
     }
 
+    let masks = client_masks_existence(state, pool_id, client_id);
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
     })?;
     let resolved_username = super::users::resolve_username_for_signin(&pool, raw_username)
-        .ok_or_else(|| {
-            AwsError::service_not_found("UserNotFoundException", "User does not exist.")
-        })?;
+        .ok_or_else(|| user_lookup_error(masks))?;
 
-    let user = pool.users.get(&resolved_username).ok_or_else(|| {
-        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
-    })?;
+    let user = pool
+        .users
+        .get(&resolved_username)
+        .ok_or_else(|| user_lookup_error(masks))?;
     if !user.enabled {
         return Err(AwsError::bad_request(
             "NotAuthorizedException",
@@ -4372,6 +4401,53 @@ mod auth_flow_tests {
         assert_eq!(claims["sub"], "real-sub", "sub is protected");
         assert!(claims["iss"].is_string(), "iss cannot be suppressed");
         assert_eq!(claims["custom_ok"], "yes");
+    }
+
+    fn pool_with_prevent(flag: &str) -> (CognitoState, String) {
+        let state = CognitoState::default();
+        let pool = pools::create_user_pool(&state, &json!({ "PoolName": "p" }), &ctx()).unwrap();
+        let pool_id = pool["UserPool"]["Id"].as_str().unwrap().to_string();
+        let client = pools::create_user_pool_client(
+            &state,
+            &json!({ "UserPoolId": pool_id, "ClientName": "c",
+                     "ExplicitAuthFlows": ["ALLOW_USER_PASSWORD_AUTH"],
+                     "PreventUserExistenceErrors": flag }),
+            &ctx(),
+        )
+        .unwrap();
+        let client_id = client["UserPoolClient"]["ClientId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        (state, client_id)
+    }
+
+    #[test]
+    fn initiate_auth_masks_user_existence_when_enabled() {
+        let (state, client_id) = pool_with_prevent("ENABLED");
+        let err = initiate_auth(
+            &state,
+            &json!({ "ClientId": client_id, "AuthFlow": "USER_PASSWORD_AUTH",
+                     "AuthParameters": { "USERNAME": "ghost", "PASSWORD": "whatever" } }),
+            &ctx(),
+        )
+        .unwrap_err();
+        // Existence is hidden: same error a wrong password would yield.
+        assert_eq!(err.code, "NotAuthorizedException");
+        assert!(err.message.contains("Incorrect username or password"));
+    }
+
+    #[test]
+    fn initiate_auth_reveals_user_existence_when_legacy() {
+        let (state, client_id) = pool_with_prevent("LEGACY");
+        let err = initiate_auth(
+            &state,
+            &json!({ "ClientId": client_id, "AuthFlow": "USER_PASSWORD_AUTH",
+                     "AuthParameters": { "USERNAME": "ghost", "PASSWORD": "whatever" } }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "UserNotFoundException");
     }
 
     struct CustomAuthMock;
