@@ -2750,6 +2750,7 @@ mod tests {
             &[],
             None,
             3600,
+            None,
         )
     }
 

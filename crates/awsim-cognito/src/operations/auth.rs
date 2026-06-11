@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use awsim_core::{AwsError, InternalEvent, LambdaInvoker, RequestContext};
 use serde_json::{Value, json};
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::jwt::{self, GroupRolePair};
@@ -452,6 +452,15 @@ fn verify_code_mfa(
         &crate::operations::users::client_read_set(&pool, client_id).unwrap_or_default(),
         &pairs,
         &validity,
+        pretoken_overrides(
+            state,
+            &pool,
+            &user.username,
+            &user.attributes,
+            client_id,
+            &pairs,
+        )
+        .as_ref(),
     );
     drop(pool);
 
@@ -540,6 +549,15 @@ fn complete_software_token_mfa(
         &crate::operations::users::client_read_set(&pool, client_id).unwrap_or_default(),
         &pairs,
         &validity,
+        pretoken_overrides(
+            state,
+            &pool,
+            &user.username,
+            &user.attributes,
+            client_id,
+            &pairs,
+        )
+        .as_ref(),
     );
     drop(pool);
     state.mfa_sessions.remove(session_id);
@@ -625,6 +643,15 @@ fn complete_mfa_setup(
         &crate::operations::users::client_read_set(&pool, client_id).unwrap_or_default(),
         &pairs,
         &validity,
+        pretoken_overrides(
+            state,
+            &pool,
+            &user.username,
+            &user.attributes,
+            client_id,
+            &pairs,
+        )
+        .as_ref(),
     );
     drop(pool);
     state.mfa_sessions.remove(session_id);
@@ -674,6 +701,171 @@ fn group_role_pairs(pool: &UserPool, user_groups: &[String]) -> Vec<GroupRolePai
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Claim and group mutations a PreTokenGeneration Lambda asked for, resolved
+/// into the form the token builders consume. `groups`, when set, fully replaces
+/// the user's computed group membership.
+#[derive(Default)]
+pub struct PreTokenOverrides {
+    id_add: serde_json::Map<String, Value>,
+    id_suppress: Vec<String>,
+    access_add: serde_json::Map<String, Value>,
+    access_suppress: Vec<String>,
+    groups: Option<Vec<GroupRolePair>>,
+}
+
+/// Run the pool's PreTokenGeneration Lambda (if one is configured and an
+/// invoker is wired) and translate its response into `PreTokenOverrides`.
+///
+/// Returns `None` when there is nothing to apply. A Lambda that errors or
+/// returns an unusable shape is logged and treated as no-override so a
+/// misbehaving trigger cannot lock users out of an emulator login.
+fn pretoken_overrides(
+    state: &CognitoState,
+    pool: &UserPool,
+    username: &str,
+    attributes: &std::collections::HashMap<String, String>,
+    client_id: &str,
+    groups: &[GroupRolePair],
+) -> Option<PreTokenOverrides> {
+    let arn = pool.lambda_config.get("PreTokenGeneration")?.clone();
+    let invoker = state.lambda_invoker.get().cloned()?;
+    let (account, region) = account_region_from_arn(&pool.arn);
+
+    let attrs_obj: serde_json::Map<String, Value> = attributes
+        .iter()
+        .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+        .collect();
+    let group_config = json!({
+        "groupsToOverride": groups.iter().map(|g| g.group_name.clone()).collect::<Vec<_>>(),
+        "iamRolesToOverride": groups.iter().filter_map(|g| g.role_arn.clone()).collect::<Vec<_>>(),
+        "preferredRole": Value::Null,
+    });
+    let event = json!({
+        "version": "1",
+        "triggerSource": "TokenGeneration_Authentication",
+        "region": region,
+        "userPoolId": pool.id,
+        "userName": username,
+        "callerContext": { "awsSdkVersion": "aws-sdk-unknown", "clientId": client_id },
+        "request": {
+            "userAttributes": attrs_obj,
+            "groupConfiguration": group_config,
+        },
+        "response": {},
+    });
+
+    let resp = match invoker.invoke(&arn, &event, &account, &region) {
+        Ok(r) => r,
+        Err(e) => {
+            warn!(arn = %arn, error = %e.message, "Cognito: PreTokenGeneration invocation failed; issuing tokens without overrides");
+            return None;
+        }
+    };
+    parse_pretoken_response(&resp["response"])
+}
+
+/// Parse the `response` block of a PreTokenGeneration Lambda. Supports both the
+/// V1 `claimsOverrideDetails` shape and the V2
+/// `claimsAndScopeOverrideDetails` shape (separate ID / access token blocks).
+fn parse_pretoken_response(response: &Value) -> Option<PreTokenOverrides> {
+    let mut out = PreTokenOverrides::default();
+    let mut any = false;
+
+    // Group override is shared across both response shapes.
+    let group_details = response
+        .get("claimsAndScopeOverrideDetails")
+        .and_then(|v| v.get("groupOverrideDetails"))
+        .or_else(|| {
+            response
+                .get("claimsOverrideDetails")
+                .and_then(|v| v.get("groupOverrideDetails"))
+        });
+    if let Some(gd) = group_details {
+        let names: Vec<String> = string_array(gd.get("groupsToOverride"));
+        let roles: Vec<String> = string_array(gd.get("iamRolesToOverride"));
+        let preferred = gd.get("preferredRole").and_then(|v| v.as_str());
+        if !names.is_empty() || !roles.is_empty() || preferred.is_some() {
+            out.groups = Some(
+                names
+                    .iter()
+                    .enumerate()
+                    .map(|(i, name)| GroupRolePair {
+                        group_name: name.clone(),
+                        role_arn: roles.get(i).cloned(),
+                        precedence: None,
+                    })
+                    .collect(),
+            );
+            if let Some(role) = preferred {
+                out.id_add
+                    .insert("cognito:preferred_role".to_string(), json!(role));
+            }
+            any = true;
+        }
+    }
+
+    if let Some(v2) = response.get("claimsAndScopeOverrideDetails") {
+        if let Some(id_gen) = v2.get("idTokenGeneration") {
+            any |= take_claims(id_gen, &mut out.id_add, &mut out.id_suppress);
+        }
+        if let Some(acc_gen) = v2.get("accessTokenGeneration") {
+            any |= take_claims(acc_gen, &mut out.access_add, &mut out.access_suppress);
+        }
+    } else if let Some(v1) = response.get("claimsOverrideDetails") {
+        // V1 claim overrides apply to the ID token only.
+        any |= take_claims(v1, &mut out.id_add, &mut out.id_suppress);
+    }
+
+    any.then_some(out)
+}
+
+/// Pull `claimsToAddOrOverride` / `claimsToSuppress` out of a token-generation
+/// block into the given accumulators. Returns whether anything was found.
+fn take_claims(
+    block: &Value,
+    add: &mut serde_json::Map<String, Value>,
+    suppress: &mut Vec<String>,
+) -> bool {
+    let mut found = false;
+    if let Some(obj) = block
+        .get("claimsToAddOrOverride")
+        .and_then(|v| v.as_object())
+    {
+        for (k, v) in obj {
+            add.insert(k.clone(), v.clone());
+        }
+        found |= !obj.is_empty();
+    }
+    let supp = string_array(block.get("claimsToSuppress"));
+    if !supp.is_empty() {
+        suppress.extend(supp);
+        found = true;
+    }
+    found
+}
+
+/// Collect a JSON array of strings, ignoring non-string entries.
+fn string_array(v: Option<&Value>) -> Vec<String> {
+    v.and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|e| e.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Extract `(account, region)` from a Cognito user pool ARN
+/// (`arn:aws:cognito-idp:{region}:{account}:userpool/{id}`), falling back to
+/// empty strings if the ARN is malformed.
+fn account_region_from_arn(arn: &str) -> (String, String) {
+    let parts: Vec<&str> = arn.split(':').collect();
+    let region = parts.get(3).copied().unwrap_or("").to_string();
+    let account = parts.get(4).copied().unwrap_or("").to_string();
+    (account, region)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn build_auth_result_pub(
     user_sub: &str,
     username: &str,
@@ -683,6 +875,7 @@ pub fn build_auth_result_pub(
     attributes: &std::collections::HashMap<String, String>,
     read_attributes: &[String],
     groups: &[GroupRolePair],
+    pretoken: Option<&PreTokenOverrides>,
 ) -> Value {
     let validity = TokenValidity::defaults();
     build_auth_result_with_validity(
@@ -695,6 +888,7 @@ pub fn build_auth_result_pub(
         read_attributes,
         groups,
         &validity,
+        pretoken,
     )
 }
 
@@ -709,6 +903,7 @@ fn build_auth_result_with_validity(
     read_attributes: &[String],
     groups: &[GroupRolePair],
     validity: &TokenValidity,
+    pretoken: Option<&PreTokenOverrides>,
 ) -> Value {
     build_auth_result_inner(
         user_sub,
@@ -721,6 +916,7 @@ fn build_auth_result_with_validity(
         groups,
         validity,
         true,
+        pretoken,
     )
 }
 
@@ -736,12 +932,25 @@ fn build_auth_result_inner(
     groups: &[GroupRolePair],
     validity: &TokenValidity,
     include_refresh: bool,
+    pretoken: Option<&PreTokenOverrides>,
 ) -> Value {
     let default_scopes: Vec<String> = vec![
         "openid".to_string(),
         "email".to_string(),
         "profile".to_string(),
     ];
+    // A PreTokenGeneration Lambda may replace the user's group membership and
+    // inject or suppress claims independently on the ID and access tokens.
+    let effective_groups: &[GroupRolePair] =
+        pretoken.and_then(|p| p.groups.as_deref()).unwrap_or(groups);
+    let id_overrides = pretoken.map(|p| jwt::ClaimOverrides {
+        add: &p.id_add,
+        suppress: &p.id_suppress,
+    });
+    let access_overrides = pretoken.map(|p| jwt::ClaimOverrides {
+        add: &p.access_add,
+        suppress: &p.access_suppress,
+    });
     let id_tok = jwt::id_token(
         user_sub,
         region,
@@ -752,9 +961,10 @@ fn build_auth_result_inner(
         read_attributes,
         &default_scopes,
         None,
-        groups,
+        effective_groups,
         None,
         validity.id,
+        id_overrides.as_ref(),
     );
     // The ID token uses `default_scopes` only to gate which attribute claims
     // appear. Access tokens minted by the SDK auth flows carry the fixed scope
@@ -767,9 +977,10 @@ fn build_auth_result_inner(
         client_id,
         username,
         &[],
-        groups,
+        effective_groups,
         None,
         validity.access,
+        access_overrides.as_ref(),
     );
 
     let mut auth_result = json!({
@@ -802,6 +1013,7 @@ fn build_auth_result_validity(
     read_attributes: &[String],
     groups: &[GroupRolePair],
     validity: &TokenValidity,
+    pretoken: Option<&PreTokenOverrides>,
 ) -> Value {
     build_auth_result_with_validity(
         user_sub,
@@ -813,6 +1025,7 @@ fn build_auth_result_validity(
         read_attributes,
         groups,
         validity,
+        pretoken,
     )
 }
 
@@ -1141,6 +1354,15 @@ pub fn initiate_auth(
                 &crate::operations::users::client_read_set(&pool, client_id).unwrap_or_default(),
                 &pairs,
                 &validity,
+                pretoken_overrides(
+                    state,
+                    &pool,
+                    &user.username,
+                    &user.attributes,
+                    client_id,
+                    &pairs,
+                )
+                .as_ref(),
             );
 
             info!(username = %username, "Cognito: InitiateAuth success");
@@ -1224,6 +1446,15 @@ fn refresh_token_auth(
         &pairs,
         &validity,
         false,
+        pretoken_overrides(
+            state,
+            &pool,
+            &user.username,
+            &user.attributes,
+            client_id,
+            &pairs,
+        )
+        .as_ref(),
     ))
 }
 
@@ -1504,6 +1735,15 @@ pub fn admin_initiate_auth(
                 &crate::operations::users::client_read_set(&pool, client_id).unwrap_or_default(),
                 &pairs,
                 &validity,
+                pretoken_overrides(
+                    state,
+                    &pool,
+                    &user.username,
+                    &user.attributes,
+                    client_id,
+                    &pairs,
+                )
+                .as_ref(),
             );
 
             info!(username = %username, pool_id = %pool_id, "Cognito: AdminInitiateAuth success");
@@ -1621,6 +1861,8 @@ pub fn respond_to_auth_challenge(
                 &crate::operations::users::client_read_set(&pool, client_id).unwrap_or_default(),
                 &pairs,
                 &validity,
+                pretoken_overrides(state, &pool, username, &user_attributes, client_id, &pairs)
+                    .as_ref(),
             );
 
             drop(pool);
@@ -1809,6 +2051,8 @@ pub fn admin_respond_to_auth_challenge(
                 &crate::operations::users::client_read_set(&pool, client_id).unwrap_or_default(),
                 &pairs,
                 &validity,
+                pretoken_overrides(state, &pool, username, &user_attributes, client_id, &pairs)
+                    .as_ref(),
             );
 
             drop(pool);
@@ -1904,6 +2148,15 @@ pub fn get_tokens_from_refresh_token(
         &user.attributes,
         &crate::operations::users::client_read_set(&pool, client_id).unwrap_or_default(),
         &pairs,
+        pretoken_overrides(
+            state,
+            &pool,
+            &user.username,
+            &user.attributes,
+            client_id,
+            &pairs,
+        )
+        .as_ref(),
     ))
 }
 
@@ -2174,6 +2427,15 @@ fn verify_srp_password(
         &crate::operations::users::client_read_set(&pool, client_id).unwrap_or_default(),
         &pairs,
         &validity,
+        pretoken_overrides(
+            state,
+            &pool,
+            &user.username,
+            &user.attributes,
+            client_id,
+            &pairs,
+        )
+        .as_ref(),
     );
     drop(pool);
     state.srp_sessions.remove(session_id);
@@ -2517,7 +2779,7 @@ fn start_custom_auth_lambda(
     }
     if response["issueTokens"].as_bool() == Some(true) {
         // Zero-round bypass: tokens issued without any challenge.
-        return build_custom_auth_tokens(pool, region, pool_id, client_id, &user);
+        return build_custom_auth_tokens(state, pool, region, pool_id, client_id, &user);
     }
     if response["challengeName"].as_str() != Some("CUSTOM_CHALLENGE") {
         return Err(AwsError::bad_request(
@@ -2569,6 +2831,7 @@ fn start_custom_auth_lambda(
 
 /// Mint the final AuthenticationResult for a completed CUSTOM_AUTH flow.
 fn build_custom_auth_tokens(
+    state: &CognitoState,
     pool: &UserPool,
     region: &str,
     pool_id: &str,
@@ -2591,6 +2854,15 @@ fn build_custom_auth_tokens(
         &crate::operations::users::client_read_set(pool, client_id).unwrap_or_default(),
         &pairs,
         &validity,
+        pretoken_overrides(
+            state,
+            pool,
+            &user.username,
+            &user.attributes,
+            client_id,
+            &pairs,
+        )
+        .as_ref(),
     ))
 }
 
@@ -2705,6 +2977,15 @@ fn verify_custom_auth_response(
         &crate::operations::users::client_read_set(&pool, client_id).unwrap_or_default(),
         &pairs,
         &validity,
+        pretoken_overrides(
+            state,
+            &pool,
+            &user.username,
+            &user.attributes,
+            client_id,
+            &pairs,
+        )
+        .as_ref(),
     );
     drop(pool);
     state.mfa_sessions.remove(session_id);
@@ -2847,7 +3128,7 @@ fn verify_custom_auth_lambda(
     // issueTokens is honoured before the attempt cap, so a success on the
     // final permitted round still wins.
     if response["issueTokens"].as_bool() == Some(true) {
-        let result = build_custom_auth_tokens(&pool, region, pool_id, client_id, &user)?;
+        let result = build_custom_auth_tokens(state, &pool, region, pool_id, client_id, &user)?;
         drop(pool);
         state.custom_auth_sessions.remove(session_id);
         info!(username = %session.username, "Cognito: CUSTOM_AUTH (lambda) success");
@@ -3966,6 +4247,133 @@ mod auth_flow_tests {
 
     /// Mock invoker implementing an OTP-style custom-auth flow: the answer
     /// "1234" is correct; up to three rounds before failing.
+    fn decode_jwt_payload(token: &str) -> Value {
+        use base64::Engine as _;
+        let seg = token.split('.').nth(1).expect("jwt has a payload");
+        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(seg)
+            .expect("payload is base64url");
+        serde_json::from_slice(&bytes).expect("payload is JSON")
+    }
+
+    struct PreTokenMock;
+    impl awsim_core::LambdaInvoker for PreTokenMock {
+        fn invoke(
+            &self,
+            _function: &str,
+            payload: &Value,
+            _account: &str,
+            _region: &str,
+        ) -> Result<Value, AwsError> {
+            assert!(
+                payload["triggerSource"]
+                    .as_str()
+                    .unwrap_or("")
+                    .starts_with("TokenGeneration"),
+                "PreTokenGeneration triggerSource"
+            );
+            Ok(json!({ "response": { "claimsOverrideDetails": {
+                "claimsToAddOrOverride": { "tier": "gold" },
+                "claimsToSuppress": ["email"],
+                "groupOverrideDetails": {
+                    "groupsToOverride": ["admins"],
+                    "iamRolesToOverride": [],
+                    "preferredRole": null
+                }
+            }}}))
+        }
+    }
+
+    #[test]
+    fn pretoken_generation_overrides_claims_and_groups() {
+        let (state, pool_id, client_id) =
+            setup(&["ALLOW_USER_PASSWORD_AUTH"], "OFF", "pria", "Passw0rd!");
+        {
+            let mut pool = state.user_pools.get_mut(&pool_id).unwrap();
+            pool.lambda_config.insert(
+                "PreTokenGeneration".to_string(),
+                "arn:fn:PreTokenGeneration".to_string(),
+            );
+            // An email attribute so the suppression has something to remove.
+            pool.users
+                .get_mut("pria")
+                .unwrap()
+                .attributes
+                .insert("email".to_string(), "pria@example.com".to_string());
+        }
+        state.lambda_invoker.set(std::sync::Arc::new(PreTokenMock));
+
+        let res = initiate_auth(
+            &state,
+            &json!({ "ClientId": client_id, "AuthFlow": "USER_PASSWORD_AUTH",
+                     "AuthParameters": { "USERNAME": "pria", "PASSWORD": "Passw0rd!" } }),
+            &ctx(),
+        )
+        .unwrap();
+        let id = res["AuthenticationResult"]["IdToken"].as_str().unwrap();
+        let claims = decode_jwt_payload(id);
+        assert_eq!(claims["tier"], "gold", "added claim present");
+        assert!(
+            claims.get("email").is_none(),
+            "suppressed claim must be removed"
+        );
+        assert_eq!(
+            claims["cognito:groups"],
+            json!(["admins"]),
+            "group override applied"
+        );
+    }
+
+    #[test]
+    fn pretoken_v2_response_splits_id_and_access_claims() {
+        let resp = json!({ "claimsAndScopeOverrideDetails": {
+            "idTokenGeneration": {
+                "claimsToAddOrOverride": { "id_only": "1" },
+                "claimsToSuppress": ["drop_id"]
+            },
+            "accessTokenGeneration": {
+                "claimsToAddOrOverride": { "acc_only": "2" },
+                "claimsToSuppress": ["drop_acc"]
+            }
+        }});
+        let ov = parse_pretoken_response(&resp).expect("overrides parsed");
+        assert_eq!(ov.id_add.get("id_only").unwrap(), "1");
+        assert_eq!(ov.id_suppress, vec!["drop_id".to_string()]);
+        assert_eq!(ov.access_add.get("acc_only").unwrap(), "2");
+        assert_eq!(ov.access_suppress, vec!["drop_acc".to_string()]);
+    }
+
+    #[test]
+    fn pretoken_cannot_override_reserved_claims() {
+        // A Lambda trying to spoof `sub` must not succeed.
+        let mut add = serde_json::Map::new();
+        add.insert("sub".to_string(), json!("spoofed"));
+        add.insert("custom_ok".to_string(), json!("yes"));
+        let attrs = std::collections::HashMap::new();
+        let tok = jwt::id_token(
+            "real-sub",
+            "us-east-1",
+            "p",
+            "c",
+            "alice",
+            &attrs,
+            &[],
+            &["openid".to_string()],
+            None,
+            &[],
+            None,
+            3600,
+            Some(&jwt::ClaimOverrides {
+                add: &add,
+                suppress: &["iss".to_string()],
+            }),
+        );
+        let claims = decode_jwt_payload(&tok);
+        assert_eq!(claims["sub"], "real-sub", "sub is protected");
+        assert!(claims["iss"].is_string(), "iss cannot be suppressed");
+        assert_eq!(claims["custom_ok"], "yes");
+    }
+
     struct CustomAuthMock;
     impl awsim_core::LambdaInvoker for CustomAuthMock {
         fn invoke(
