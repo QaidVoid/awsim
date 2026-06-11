@@ -8,6 +8,7 @@
 		adminRemoveUserFromGroup,
 		adminUpdateUserAttributes,
 		adminListUserAuthEvents,
+		adminSetUserMfaPreference,
 		listGroups,
 		type CognitoUser,
 		type CognitoGroup,
@@ -47,6 +48,12 @@
 	let newAttrValue = $state('');
 	let addGroupOpen = $state(false);
 
+	// MFA editor state, seeded from the loaded user.
+	let mfaSwt = $state(false);
+	let mfaSms = $state(false);
+	let mfaPreferred = $state<'' | 'SOFTWARE_TOKEN_MFA' | 'SMS_MFA'>('');
+	let mfaSaving = $state(false);
+
 	const availableGroups = $derived(
 		allGroups.filter((g) => !groups.some((existing) => existing.name === g.name))
 	);
@@ -77,6 +84,9 @@
 			user = u;
 			groups = g;
 			allGroups = all;
+			mfaSwt = u.mfaSettings.includes('SOFTWARE_TOKEN_MFA');
+			mfaSms = u.mfaSettings.includes('SMS_MFA');
+			mfaPreferred = (u.preferredMfa as typeof mfaPreferred) || '';
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to load user');
 		} finally {
@@ -168,6 +178,29 @@
 			await load();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Remove failed');
+		}
+	}
+
+	// A factor can only be preferred while it is enabled.
+	$effect(() => {
+		if (mfaPreferred === 'SOFTWARE_TOKEN_MFA' && !mfaSwt) mfaPreferred = '';
+		if (mfaPreferred === 'SMS_MFA' && !mfaSms) mfaPreferred = '';
+	});
+
+	async function saveMfa() {
+		mfaSaving = true;
+		try {
+			await adminSetUserMfaPreference(poolId, username, {
+				softwareTokenEnabled: mfaSwt,
+				smsEnabled: mfaSms,
+				preferred: mfaPreferred || null
+			});
+			toast.success('MFA preferences updated');
+			await load();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'MFA update failed');
+		} finally {
+			mfaSaving = false;
 		}
 	}
 </script>
@@ -323,6 +356,40 @@
 					{/each}
 				</div>
 			{/if}
+		</div>
+
+		<div>
+			<div class="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+				MFA
+			</div>
+			<div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+				<label class="flex items-center gap-1.5">
+					<input type="checkbox" class="size-3.5" bind:checked={mfaSwt} />
+					TOTP
+				</label>
+				<label class="flex items-center gap-1.5">
+					<input type="checkbox" class="size-3.5" bind:checked={mfaSms} />
+					SMS
+				</label>
+				<label class="flex items-center gap-1.5 text-xs text-muted-foreground">
+					Preferred
+					<select
+						bind:value={mfaPreferred}
+						class="h-7 rounded border border-input bg-background px-1.5 text-xs text-foreground"
+					>
+						<option value="">none</option>
+						{#if mfaSwt}<option value="SOFTWARE_TOKEN_MFA">TOTP</option>{/if}
+						{#if mfaSms}<option value="SMS_MFA">SMS</option>{/if}
+					</select>
+				</label>
+				<Button size="xs" onclick={saveMfa} disabled={mfaSaving}>
+					{#if mfaSaving}<Loader2 class="size-3 animate-spin" />{/if}
+					Save MFA
+				</Button>
+			</div>
+			<p class="mt-1 text-[11px] text-muted-foreground">
+				Disabling both factors clears MFA. A factor must be enabled to be preferred.
+			</p>
 		</div>
 
 		<div>
