@@ -46,7 +46,7 @@ fn password_policy_to_value(p: &PasswordPolicy) -> Value {
     })
 }
 
-fn client_to_value(client: &UserPoolClient, include_secret: bool) -> Value {
+fn client_to_value(client: &UserPoolClient) -> Value {
     let mut obj = json!({
         "UserPoolId": client.user_pool_id,
         "ClientName": client.client_name,
@@ -56,19 +56,31 @@ fn client_to_value(client: &UserPoolClient, include_secret: bool) -> Value {
         "LogoutURLs": client.logout_urls,
         "AllowedOAuthFlows": client.allowed_oauth_flows,
         "AllowedOAuthScopes": client.allowed_oauth_scopes,
+        "AllowedOAuthFlowsUserPoolClient": client.allowed_oauth_flows_user_pool_client,
         "SupportedIdentityProviders": client.supported_identity_providers,
         "AccessTokenValidity": client.access_token_validity,
         "IdTokenValidity": client.id_token_validity,
         "RefreshTokenValidity": client.refresh_token_validity,
+        "PreventUserExistenceErrors": client.prevent_user_existence_errors,
+        "EnableTokenRevocation": client.enable_token_revocation,
+        "AuthSessionValidity": client.auth_session_validity,
         "CreationDate": client.created_date,
-        "LastModifiedDate": client.created_date
+        "LastModifiedDate": client.last_modified_date
     });
     // SAFETY: obj was created by json!() macro above, which always produces an object.
     let map = obj
         .as_object_mut()
         .expect("json!() macro always produces an object");
-    if include_secret {
-        map.insert("ClientSecret".into(), json!(client.client_secret));
+    // AWS returns ClientSecret from Create, Describe, and Update for a
+    // confidential client; public clients simply have none.
+    if let Some(secret) = &client.client_secret {
+        map.insert("ClientSecret".into(), json!(secret));
+    }
+    if let Some(uri) = &client.default_redirect_uri {
+        map.insert("DefaultRedirectURI".into(), json!(uri));
+    }
+    if let Some(units) = &client.token_validity_units {
+        map.insert("TokenValidityUnits".into(), units.clone());
     }
     // Cognito only echoes Read/WriteAttributes when a custom set was
     // configured; an empty list means "the default set" and is omitted.
@@ -151,7 +163,17 @@ pub fn create_user_pool(
     let username_attributes = parse_string_list(&input["UsernameAttributes"]);
     let alias_attributes = parse_string_list(&input["AliasAttributes"]);
 
+    // UsernameAttributes and AliasAttributes are mutually exclusive in AWS.
+    if !username_attributes.is_empty() && !alias_attributes.is_empty() {
+        return Err(AwsError::bad_request(
+            "InvalidParameterException",
+            "Only one of aliasAttributes or usernameAttributes can be set in a user pool.",
+        ));
+    }
+
     let lambda_config = parse_lambda_config(&input["LambdaConfig"]);
+    let tags = parse_tag_map(&input["UserPoolTags"]);
+    let extra_config = parse_extra_pool_config(input);
 
     let schema = build_initial_schema(&input["Schema"])?;
 
@@ -175,7 +197,7 @@ pub fn create_user_pool(
         domain: None,
         resource_servers: Vec::new(),
         identity_providers: Vec::new(),
-        tags: HashMap::new(),
+        tags,
         ui_customizations: HashMap::new(),
         managed_login_brandings: Vec::new(),
         risk_configurations: Vec::new(),
@@ -185,21 +207,15 @@ pub fn create_user_pool(
         custom_auth_expected_answer: None,
         custom_auth_challenge_parameters: HashMap::new(),
         sign_in_policy_first_auth_factors,
+        last_modified_date: now,
+        extra_config,
     };
 
     info!(pool_id = %pool_id, "Cognito: created user pool");
+    let response = json!({ "UserPool": pool_to_value(&pool) });
     state.user_pools.insert(pool_id.clone(), pool);
 
-    Ok(json!({
-        "UserPool": {
-            "Id": pool_id,
-            "Name": pool_name,
-            "Arn": arn,
-            "Status": "Active",
-            "CreationDate": now,
-            "LastModifiedDate": now
-        }
-    }))
+    Ok(response)
 }
 
 // ---------------------------------------------------------------------------
@@ -215,11 +231,17 @@ pub fn delete_user_pool(
         AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
     })?;
 
-    if state.user_pools.remove(pool_id).is_none() {
-        return Err(AwsError::service_not_found(
+    let removed = state.user_pools.remove(pool_id).ok_or_else(|| {
+        AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool {pool_id} does not exist."),
-        ));
+        )
+    })?;
+
+    // Release any domain this pool claimed so the name can be reused and no
+    // longer resolves to a dead pool.
+    if let Some(domain) = &removed.1.domain {
+        state.domain_pool_map.remove(domain);
     }
 
     info!(pool_id = %pool_id, "Cognito: deleted user pool");
@@ -246,35 +268,70 @@ pub fn describe_user_pool(
         )
     })?;
 
-    let schema_attributes: Vec<Value> = pool.schema.iter().map(schema_attr_to_value).collect();
+    Ok(json!({ "UserPool": pool_to_value(&pool) }))
+}
 
-    Ok(json!({
-        "UserPool": {
-            "Id": pool.id,
-            "Name": pool.name,
-            "Arn": pool.arn,
-            "Status": "Active",
-            "CreationDate": pool.created_date,
-            "LastModifiedDate": pool.created_date,
-            "MfaConfiguration": pool.mfa_configuration,
-            "AutoVerifiedAttributes": pool.auto_verified_attributes,
-            "UsernameAttributes": pool.username_attributes,
-            "AliasAttributes": pool.alias_attributes,
-            "SchemaAttributes": schema_attributes,
-            "Policies": {
-                "PasswordPolicy": password_policy_to_value(&pool.policies),
-                "SignInPolicy": if pool.sign_in_policy_first_auth_factors.is_empty() {
-                    Value::Null
-                } else {
-                    json!({
-                        "AllowedFirstAuthFactors": pool.sign_in_policy_first_auth_factors,
-                    })
-                },
-            },
-            "Domain": pool.domain,
-            "EstimatedNumberOfUsers": pool.users.len()
+/// AWS LambdaConfig field names that carry a nested `{LambdaArn, LambdaVersion}`
+/// object on the wire (we store them flattened as `<base>` + `<base>Version`).
+const NESTED_LAMBDA_TRIGGERS: &[&str] =
+    &["PreTokenGeneration", "CustomEmailSender", "CustomSMSSender"];
+
+/// Reconstruct the wire-shape LambdaConfig from the flattened storage map.
+fn lambda_config_to_value(cfg: &HashMap<String, String>) -> Value {
+    let mut out = serde_json::Map::new();
+    for (k, v) in cfg {
+        if k.ends_with("Version") {
+            continue; // folded into its base trigger's nested object below
         }
-    }))
+        if NESTED_LAMBDA_TRIGGERS.contains(&k.as_str()) {
+            let mut nested = serde_json::Map::new();
+            nested.insert("LambdaArn".to_string(), Value::String(v.clone()));
+            if let Some(ver) = cfg.get(&format!("{k}Version")) {
+                nested.insert("LambdaVersion".to_string(), Value::String(ver.clone()));
+            }
+            out.insert(format!("{k}Config"), Value::Object(nested));
+        } else {
+            out.insert(k.clone(), Value::String(v.clone()));
+        }
+    }
+    Value::Object(out)
+}
+
+/// Build the full UserPoolType echoed by CreateUserPool / DescribeUserPool.
+fn pool_to_value(pool: &UserPool) -> Value {
+    let schema_attributes: Vec<Value> = pool.schema.iter().map(schema_attr_to_value).collect();
+    let mut obj = json!({
+        "Id": pool.id,
+        "Name": pool.name,
+        "Arn": pool.arn,
+        "Status": "Active",
+        "CreationDate": pool.created_date,
+        "LastModifiedDate": pool.last_modified_date,
+        "MfaConfiguration": pool.mfa_configuration,
+        "AutoVerifiedAttributes": pool.auto_verified_attributes,
+        "UsernameAttributes": pool.username_attributes,
+        "AliasAttributes": pool.alias_attributes,
+        "SchemaAttributes": schema_attributes,
+        "LambdaConfig": lambda_config_to_value(&pool.lambda_config),
+        "Policies": {
+            "PasswordPolicy": password_policy_to_value(&pool.policies),
+            "SignInPolicy": if pool.sign_in_policy_first_auth_factors.is_empty() {
+                Value::Null
+            } else {
+                json!({ "AllowedFirstAuthFactors": pool.sign_in_policy_first_auth_factors })
+            },
+        },
+        "UserPoolTags": pool.tags,
+        "Domain": pool.domain,
+        "EstimatedNumberOfUsers": pool.users.len()
+    });
+    // Echo the verbatim config blocks captured at create / update.
+    if let Some(map) = obj.as_object_mut() {
+        for (k, v) in &pool.extra_config {
+            map.insert(k.clone(), v.clone());
+        }
+    }
+    obj
 }
 
 // ---------------------------------------------------------------------------
@@ -283,24 +340,48 @@ pub fn describe_user_pool(
 
 pub fn list_user_pools(
     state: &CognitoState,
-    _input: &Value,
+    input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let pools: Vec<Value> = state
+    use awsim_core::pagination::{cap_max_results, paginate};
+
+    let mut pools: Vec<(String, String, u64, u64)> = state
         .user_pools
         .iter()
         .map(|e| {
+            (
+                e.id.clone(),
+                e.name.clone(),
+                e.created_date,
+                e.last_modified_date,
+            )
+        })
+        .collect();
+    pools.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let limit = cap_max_results(input["MaxResults"].as_i64(), 60, 60);
+    let token = input["NextToken"].as_str();
+    let page = paginate(pools, limit, token, |p| p.0.clone())?;
+
+    let user_pools: Vec<Value> = page
+        .items
+        .iter()
+        .map(|(id, name, created, modified)| {
             json!({
-                "Id": e.id,
-                "Name": e.name,
+                "Id": id,
+                "Name": name,
                 "Status": "Active",
-                "CreationDate": e.created_date,
-                "LastModifiedDate": e.created_date
+                "CreationDate": created,
+                "LastModifiedDate": modified
             })
         })
         .collect();
 
-    Ok(json!({ "UserPools": pools }))
+    let mut resp = json!({ "UserPools": user_pools });
+    if let Some(next) = page.next_token {
+        resp["NextToken"] = json!(next);
+    }
+    Ok(resp)
 }
 
 // ---------------------------------------------------------------------------
@@ -342,6 +423,20 @@ pub fn update_user_pool(
         pool.lambda_config = parse_lambda_config(&input["LambdaConfig"]);
     }
 
+    if !input["UserPoolTags"].is_null() {
+        pool.tags = parse_tag_map(&input["UserPoolTags"]);
+    }
+
+    // Merge any supplied verbatim config blocks, leaving unspecified ones
+    // untouched.
+    for key in EXTRA_POOL_CONFIG_KEYS {
+        if !input[*key].is_null() {
+            pool.extra_config
+                .insert((*key).to_string(), input[*key].clone());
+        }
+    }
+
+    pool.last_modified_date = now_epoch();
     info!(pool_id = %pool_id, "Cognito: updated user pool");
     Ok(json!({}))
 }
@@ -362,14 +457,19 @@ pub fn create_user_pool_client(
         AwsError::bad_request("InvalidParameterException", "ClientName is required")
     })?;
 
-    let explicit_auth_flows: Vec<String> = input["ExplicitAuthFlows"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
+    let explicit_auth_flows: Vec<String> = match input["ExplicitAuthFlows"].as_array() {
+        Some(a) => a
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
+        // An unset ExplicitAuthFlows defaults to the SRP + custom + refresh
+        // set, matching AWS (the password flows must be opted into).
+        None => vec![
+            "ALLOW_USER_SRP_AUTH".to_string(),
+            "ALLOW_CUSTOM_AUTH".to_string(),
+            "ALLOW_REFRESH_TOKEN_AUTH".to_string(),
+        ],
+    };
 
     let generate_secret = input["GenerateSecret"].as_bool().unwrap_or(false);
     let client_secret = if generate_secret {
@@ -445,6 +545,22 @@ pub fn create_user_pool_client(
     let id_token_validity = input["IdTokenValidity"].as_u64().unwrap_or(3600);
     let refresh_token_validity = input["RefreshTokenValidity"].as_u64().unwrap_or(2_592_000);
 
+    let prevent_user_existence_errors = input["PreventUserExistenceErrors"]
+        .as_str()
+        .unwrap_or("LEGACY")
+        .to_string();
+    let enable_token_revocation = input["EnableTokenRevocation"].as_bool().unwrap_or(true);
+    let auth_session_validity = input["AuthSessionValidity"].as_u64().unwrap_or(3) as u32;
+    let allowed_oauth_flows_user_pool_client = input["AllowedOAuthFlowsUserPoolClient"]
+        .as_bool()
+        .unwrap_or(false);
+    let default_redirect_uri = input["DefaultRedirectURI"].as_str().map(String::from);
+    let token_validity_units = if input["TokenValidityUnits"].is_object() {
+        Some(input["TokenValidityUnits"].clone())
+    } else {
+        None
+    };
+
     let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
@@ -475,9 +591,16 @@ pub fn create_user_pool_client(
         additional_client_secrets: Vec::new(),
         read_attributes,
         write_attributes,
+        prevent_user_existence_errors,
+        enable_token_revocation,
+        auth_session_validity,
+        allowed_oauth_flows_user_pool_client,
+        default_redirect_uri,
+        token_validity_units,
+        last_modified_date: now,
     };
 
-    let response = client_to_value(&client, true);
+    let response = client_to_value(&client);
     pool.clients.insert(client_id.clone(), client);
 
     info!(pool_id = %pool_id, client_id = %client_id, "Cognito: created user pool client");
@@ -515,7 +638,7 @@ pub fn describe_user_pool_client(
         )
     })?;
 
-    Ok(json!({ "UserPoolClient": client_to_value(client, false) }))
+    Ok(json!({ "UserPoolClient": client_to_value(client) }))
 }
 
 // ---------------------------------------------------------------------------
@@ -565,7 +688,7 @@ pub fn list_user_pool_clients(
         AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
     })?;
 
-    let max_results = input["MaxResults"].as_u64().unwrap_or(60) as usize;
+    use awsim_core::pagination::{cap_max_results, paginate};
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
@@ -574,20 +697,36 @@ pub fn list_user_pool_clients(
         )
     })?;
 
-    let clients: Vec<Value> = pool
+    let mut clients: Vec<(String, String, String)> = pool
         .clients
         .values()
-        .take(max_results)
         .map(|c| {
-            json!({
-                "ClientId": c.client_id,
-                "ClientName": c.client_name,
-                "UserPoolId": c.user_pool_id
-            })
+            (
+                c.client_id.clone(),
+                c.client_name.clone(),
+                c.user_pool_id.clone(),
+            )
+        })
+        .collect();
+    clients.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let limit = cap_max_results(input["MaxResults"].as_i64(), 60, 60);
+    let token = input["NextToken"].as_str();
+    let page = paginate(clients, limit, token, |c| c.0.clone())?;
+
+    let client_values: Vec<Value> = page
+        .items
+        .iter()
+        .map(|(id, name, pool_id)| {
+            json!({ "ClientId": id, "ClientName": name, "UserPoolId": pool_id })
         })
         .collect();
 
-    Ok(json!({ "UserPoolClients": clients }))
+    let mut resp = json!({ "UserPoolClients": client_values });
+    if let Some(next) = page.next_token {
+        resp["NextToken"] = json!(next);
+    }
+    Ok(resp)
 }
 
 // ---------------------------------------------------------------------------
@@ -704,7 +843,27 @@ pub fn update_user_pool_client(
         client.write_attributes = write;
     }
 
-    let client_value = client_to_value(client, false);
+    if let Some(v) = input["PreventUserExistenceErrors"].as_str() {
+        client.prevent_user_existence_errors = v.to_string();
+    }
+    if let Some(v) = input["EnableTokenRevocation"].as_bool() {
+        client.enable_token_revocation = v;
+    }
+    if let Some(v) = input["AuthSessionValidity"].as_u64() {
+        client.auth_session_validity = v as u32;
+    }
+    if let Some(v) = input["AllowedOAuthFlowsUserPoolClient"].as_bool() {
+        client.allowed_oauth_flows_user_pool_client = v;
+    }
+    if let Some(v) = input["DefaultRedirectURI"].as_str() {
+        client.default_redirect_uri = Some(v.to_string());
+    }
+    if input["TokenValidityUnits"].is_object() {
+        client.token_validity_units = Some(input["TokenValidityUnits"].clone());
+    }
+    client.last_modified_date = now_epoch();
+
+    let client_value = client_to_value(client);
     info!(pool_id = %pool_id, client_id = %client_id, "Cognito: updated user pool client");
 
     Ok(json!({ "UserPoolClient": client_value }))
@@ -1077,6 +1236,54 @@ fn parse_lambda_config(v: &Value) -> HashMap<String, String> {
             }
         }
     }
+    map
+}
+
+/// Parse a `{key: value}` string map (UserPoolTags).
+fn parse_tag_map(v: &Value) -> HashMap<String, String> {
+    v.as_object()
+        .map(|o| {
+            o.iter()
+                .filter_map(|(k, val)| val.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Pool configuration blocks awsim stores and echoes verbatim. Keep this in
+/// sync with the doc on `UserPool::extra_config`.
+const EXTRA_POOL_CONFIG_KEYS: &[&str] = &[
+    "AdminCreateUserConfig",
+    "EmailConfiguration",
+    "SmsConfiguration",
+    "DeviceConfiguration",
+    "UsernameConfiguration",
+    "AccountRecoverySetting",
+    "VerificationMessageTemplate",
+    "DeletionProtection",
+    "UserPoolAddOns",
+    "EmailVerificationMessage",
+    "EmailVerificationSubject",
+    "SmsVerificationMessage",
+    "SmsAuthenticationMessage",
+    "UserAttributeUpdateSettings",
+];
+
+/// Capture the verbatim config blocks present in a Create/Update request,
+/// filling in the AWS defaults AWS reports for an unset pool.
+fn parse_extra_pool_config(input: &Value) -> HashMap<String, Value> {
+    let mut map = HashMap::new();
+    for key in EXTRA_POOL_CONFIG_KEYS {
+        if !input[*key].is_null() {
+            map.insert((*key).to_string(), input[*key].clone());
+        }
+    }
+    map.entry("DeletionProtection".to_string())
+        .or_insert_with(|| Value::String("INACTIVE".to_string()));
+    map.entry("AdminCreateUserConfig".to_string())
+        .or_insert_with(
+            || json!({ "AllowAdminCreateUserOnly": false, "UnusedAccountValidityDays": 7 }),
+        );
     map
 }
 
@@ -1512,5 +1719,113 @@ mod tests {
             cfg.get("PreTokenGenerationVersion").map(String::as_str),
             Some("V2_0")
         );
+    }
+
+    #[test]
+    fn create_user_pool_round_trips_config_and_tags() {
+        let state = CognitoState::default();
+        let created = create_user_pool(
+            &state,
+            &json!({
+                "PoolName": "p",
+                "UserPoolTags": { "team": "auth" },
+                "DeletionProtection": "ACTIVE",
+                "AdminCreateUserConfig": { "AllowAdminCreateUserOnly": true },
+                "LambdaConfig": { "PreSignUp": "arn:fn:presignup" }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        // CreateUserPool returns the full pool object, not a stub.
+        assert_eq!(created["UserPool"]["UserPoolTags"]["team"], "auth");
+        assert_eq!(created["UserPool"]["DeletionProtection"], "ACTIVE");
+        assert_eq!(
+            created["UserPool"]["LambdaConfig"]["PreSignUp"],
+            "arn:fn:presignup"
+        );
+        let pool_id = created["UserPool"]["Id"].as_str().unwrap().to_string();
+        let resp = describe_user_pool(&state, &json!({ "UserPoolId": pool_id }), &ctx()).unwrap();
+        assert_eq!(resp["UserPool"]["UserPoolTags"]["team"], "auth");
+        assert_eq!(resp["UserPool"]["DeletionProtection"], "ACTIVE");
+        assert_eq!(
+            resp["UserPool"]["AdminCreateUserConfig"]["AllowAdminCreateUserOnly"],
+            true
+        );
+    }
+
+    #[test]
+    fn list_user_pools_paginates() {
+        let state = CognitoState::default();
+        for i in 0..3 {
+            create_user_pool(&state, &json!({ "PoolName": format!("p{i}") }), &ctx()).unwrap();
+        }
+        let first = list_user_pools(&state, &json!({ "MaxResults": 2 }), &ctx()).unwrap();
+        assert_eq!(first["UserPools"].as_array().unwrap().len(), 2);
+        let next = first["NextToken"].as_str().expect("more pages");
+        let second = list_user_pools(
+            &state,
+            &json!({ "MaxResults": 2, "NextToken": next }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(second["UserPools"].as_array().unwrap().len(), 1);
+        assert!(second["NextToken"].is_null());
+    }
+
+    #[test]
+    fn client_describe_returns_secret_and_config_defaults() {
+        let state = CognitoState::default();
+        create_user_pool(&state, &json!({ "PoolName": "p" }), &ctx()).unwrap();
+        let pool_id = state.user_pools.iter().next().unwrap().id.clone();
+        let created = create_user_pool_client(
+            &state,
+            &json!({ "UserPoolId": pool_id, "ClientName": "c", "GenerateSecret": true }),
+            &ctx(),
+        )
+        .unwrap();
+        let client_id = created["UserPoolClient"]["ClientId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        // Defaults match AWS, and an unset ExplicitAuthFlows expands to the
+        // SRP/custom/refresh set.
+        assert_eq!(
+            created["UserPoolClient"]["PreventUserExistenceErrors"],
+            "LEGACY"
+        );
+        assert_eq!(created["UserPoolClient"]["EnableTokenRevocation"], true);
+        assert_eq!(created["UserPoolClient"]["AuthSessionValidity"], 3);
+        let flows: Vec<String> = created["UserPoolClient"]["ExplicitAuthFlows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert!(flows.contains(&"ALLOW_USER_SRP_AUTH".to_string()));
+        assert!(flows.contains(&"ALLOW_REFRESH_TOKEN_AUTH".to_string()));
+        // DescribeUserPoolClient returns the ClientSecret (not just Create).
+        let described = describe_user_pool_client(
+            &state,
+            &json!({ "UserPoolId": pool_id, "ClientId": client_id }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(described["UserPoolClient"]["ClientSecret"].is_string());
+    }
+
+    #[test]
+    fn create_user_pool_rejects_username_and_alias_attributes_together() {
+        let state = CognitoState::default();
+        let err = create_user_pool(
+            &state,
+            &json!({
+                "PoolName": "p",
+                "UsernameAttributes": ["email"],
+                "AliasAttributes": ["phone_number"]
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterException");
     }
 }
