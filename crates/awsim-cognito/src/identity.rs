@@ -50,6 +50,15 @@ pub struct IdentityPool {
     pub tags: HashMap<String, String>,
     /// provider_name → PrincipalTagMapping
     pub principal_tag_maps: HashMap<String, PrincipalTagMapping>,
+    /// `AllowClassicFlow` (basic GetOpenIdToken + AssumeRoleWithWebIdentity).
+    #[serde(default)]
+    pub allow_classic_flow: bool,
+    /// `OpenIdConnectProviderARNs` configured for the pool.
+    #[serde(default)]
+    pub open_id_connect_provider_arns: Vec<String>,
+    /// `SamlProviderARNs` configured for the pool.
+    #[serde(default)]
+    pub saml_provider_arns: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -61,8 +70,9 @@ pub struct Identity {
     pub logins: Vec<String>,
     /// Provider name → token map (used by UnlinkIdentity).
     pub login_tokens: HashMap<String, String>,
-    pub creation_date: String,
-    pub last_modified_date: String,
+    /// Epoch seconds; cognito-identity reports these as numbers.
+    pub creation_date: f64,
+    pub last_modified_date: f64,
     /// For developer identities: developer user identifiers.
     pub developer_user_identifiers: Vec<String>,
 }
@@ -235,6 +245,15 @@ fn now_iso8601() -> String {
     unix_to_iso8601(secs)
 }
 
+/// Current Unix time in epoch seconds, for the identity timestamp fields
+/// cognito-identity reports as numbers.
+fn now_epoch_f64() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as f64
+}
+
 fn expiration_epoch(duration_secs: u64) -> f64 {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -357,6 +376,10 @@ fn create_identity_pool(
         .unwrap_or_default();
 
     let developer_provider_name = input["DeveloperProviderName"].as_str().map(String::from);
+    let allow_classic_flow = input["AllowClassicFlow"].as_bool().unwrap_or(false);
+    let open_id_connect_provider_arns = parse_str_list(&input["OpenIdConnectProviderARNs"]);
+    let saml_provider_arns = parse_str_list(&input["SamlProviderARNs"]);
+    let tags = parse_str_map(&input["IdentityPoolTags"]);
 
     let created_date = now_iso8601();
 
@@ -364,50 +387,23 @@ fn create_identity_pool(
         id: pool_id.clone(),
         name: name.to_string(),
         allow_unauthenticated,
-        cognito_identity_providers: providers.clone(),
-        supported_login_providers: supported_login_providers.clone(),
+        cognito_identity_providers: providers,
+        supported_login_providers,
         roles: HashMap::new(),
         role_mappings: HashMap::new(),
-        developer_provider_name: developer_provider_name.clone(),
-        created_date: created_date.clone(),
-        tags: HashMap::new(),
+        developer_provider_name,
+        created_date,
+        tags,
         principal_tag_maps: HashMap::new(),
+        allow_classic_flow,
+        open_id_connect_provider_arns,
+        saml_provider_arns,
     };
 
+    // CreateIdentityPool returns the full pool object, same shape as Describe.
+    let response = pool_to_json(&pool);
     state.pools.insert(pool_id.clone(), pool);
-
-    let providers_json: Vec<Value> = providers
-        .iter()
-        .map(|p| {
-            json!({
-                "ClientId": p.client_id,
-                "ProviderName": p.provider_name,
-                "ServerSideTokenCheck": p.server_side_token_check,
-            })
-        })
-        .collect();
-
-    let slp_json: Value = supported_login_providers
-        .iter()
-        .fold(json!({}), |mut acc, (k, v)| {
-            acc[k] = Value::String(v.clone());
-            acc
-        });
-
-    let mut resp = json!({
-        "IdentityPoolId":                    pool_id,
-        "IdentityPoolName":                  name,
-        "AllowUnauthenticatedIdentities":    allow_unauthenticated,
-        "CognitoIdentityProviders":          providers_json,
-        "SupportedLoginProviders":           slp_json,
-        "CreationDate":                      created_date,
-    });
-
-    if let Some(dpn) = developer_provider_name {
-        resp["DeveloperProviderName"] = Value::String(dpn);
-    }
-
-    Ok(resp)
+    Ok(response)
 }
 
 /// DeleteIdentityPool
@@ -474,27 +470,48 @@ fn update_identity_pool(state: &IdentityPoolState, input: &Value) -> Result<Valu
     if let Some(dpn) = input["DeveloperProviderName"].as_str() {
         pool.developer_provider_name = Some(dpn.to_string());
     }
+    if let Some(allow) = input["AllowClassicFlow"].as_bool() {
+        pool.allow_classic_flow = allow;
+    }
+    if !input["OpenIdConnectProviderARNs"].is_null() {
+        pool.open_id_connect_provider_arns = parse_str_list(&input["OpenIdConnectProviderARNs"]);
+    }
+    if !input["SamlProviderARNs"].is_null() {
+        pool.saml_provider_arns = parse_str_list(&input["SamlProviderARNs"]);
+    }
+    if !input["IdentityPoolTags"].is_null() {
+        pool.tags = parse_str_map(&input["IdentityPoolTags"]);
+    }
 
     Ok(pool_to_json(&pool))
 }
 
 /// ListIdentityPools
 fn list_identity_pools(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsError> {
-    let max_results = input["MaxResults"].as_u64().unwrap_or(60) as usize;
+    use awsim_core::pagination::{cap_max_results, paginate};
 
-    let pools: Vec<Value> = state
+    let mut pools: Vec<(String, String)> = state
         .pools
         .iter()
-        .take(max_results)
-        .map(|e| {
-            json!({
-                "IdentityPoolId":   e.value().id,
-                "IdentityPoolName": e.value().name,
-            })
-        })
+        .map(|e| (e.value().id.clone(), e.value().name.clone()))
+        .collect();
+    pools.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let limit = cap_max_results(input["MaxResults"].as_i64(), 60, 60);
+    let token = input["NextToken"].as_str();
+    let page = paginate(pools, limit, token, |p| p.0.clone())?;
+
+    let identity_pools: Vec<Value> = page
+        .items
+        .iter()
+        .map(|(id, name)| json!({ "IdentityPoolId": id, "IdentityPoolName": name }))
         .collect();
 
-    Ok(json!({ "IdentityPools": pools }))
+    let mut resp = json!({ "IdentityPools": identity_pools });
+    if let Some(next) = page.next_token {
+        resp["NextToken"] = json!(next);
+    }
+    Ok(resp)
 }
 
 /// GetId — get or create an identity for the caller.
@@ -556,7 +573,7 @@ fn get_id(
 
     let identity_id = format!("{}:{}", ctx.region, uuid::Uuid::new_v4());
 
-    let now = now_iso8601();
+    let now = now_epoch_f64();
     let identity = Identity {
         identity_id: identity_id.clone(),
         pool_id: pool_id.to_string(),
@@ -568,7 +585,7 @@ fn get_id(
                     .collect()
             })
             .unwrap_or_default(),
-        creation_date: now.clone(),
+        creation_date: now,
         last_modified_date: now,
         developer_user_identifiers: vec![],
     };
@@ -1001,7 +1018,7 @@ fn get_open_id_token_for_developer_identity(
             .identities
             .entry(identity_id.clone())
             .or_insert_with(|| {
-                let now = now_iso8601();
+                let now = now_epoch_f64();
                 Identity {
                     identity_id: identity_id.clone(),
                     pool_id: pool_id_owned,
@@ -1010,7 +1027,7 @@ fn get_open_id_token_for_developer_identity(
                         .iter()
                         .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
                         .collect(),
-                    creation_date: now.clone(),
+                    creation_date: now,
                     last_modified_date: now,
                     developer_user_identifiers: vec![],
                 }
@@ -1304,7 +1321,7 @@ fn merge_developer_identities(
     };
 
     {
-        let now = now_iso8601();
+        let now = now_epoch_f64();
         let pool_id_owned = pool_id.to_string();
         let mut dest = state
             .identities
@@ -1314,8 +1331,8 @@ fn merge_developer_identities(
                 pool_id: pool_id_owned,
                 logins: vec![dev_provider.to_string()],
                 login_tokens: HashMap::new(),
-                creation_date: now.clone(),
-                last_modified_date: now.clone(),
+                creation_date: now,
+                last_modified_date: now,
                 developer_user_identifiers: vec![dest_id.to_string()],
             });
 
@@ -1362,7 +1379,7 @@ fn unlink_developer_identity(state: &IdentityPoolState, input: &Value) -> Result
     identity
         .developer_user_identifiers
         .retain(|d| d != dev_user_identifier);
-    identity.last_modified_date = now_iso8601();
+    identity.last_modified_date = now_epoch_f64();
 
     Ok(json!({}))
 }
@@ -1392,7 +1409,7 @@ fn unlink_identity(state: &IdentityPoolState, input: &Value) -> Result<Value, Aw
     for p in &providers_to_remove {
         identity.login_tokens.remove(*p);
     }
-    identity.last_modified_date = now_iso8601();
+    identity.last_modified_date = now_epoch_f64();
 
     Ok(json!({}))
 }
@@ -1637,19 +1654,23 @@ fn pool_to_json(pool: &IdentityPool) -> Value {
                 acc
             });
 
-    let roles_json: Value = pool.roles.iter().fold(json!({}), |mut acc, (k, v)| {
+    let tags_json: Value = pool.tags.iter().fold(json!({}), |mut acc, (k, v)| {
         acc[k] = Value::String(v.clone());
         acc
     });
 
+    // Note: DescribeIdentityPool does not return the assigned roles (that is
+    // GetIdentityPoolRoles); only the pool configuration is echoed.
     let mut resp = json!({
         "IdentityPoolId":                    pool.id,
         "IdentityPoolName":                  pool.name,
         "AllowUnauthenticatedIdentities":    pool.allow_unauthenticated,
+        "AllowClassicFlow":                  pool.allow_classic_flow,
         "CognitoIdentityProviders":          providers_json,
         "SupportedLoginProviders":           slp_json,
-        "Roles":                             roles_json,
-        "CreationDate":                      pool.created_date,
+        "OpenIdConnectProviderARNs":         pool.open_id_connect_provider_arns,
+        "SamlProviderARNs":                  pool.saml_provider_arns,
+        "IdentityPoolTags":                  tags_json,
     });
 
     if let Some(dpn) = &pool.developer_provider_name {
@@ -1657,6 +1678,28 @@ fn pool_to_json(pool: &IdentityPool) -> Value {
     }
 
     resp
+}
+
+/// Parse a JSON string-array into a Vec.
+fn parse_str_list(v: &Value) -> Vec<String> {
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Parse a JSON `{key: value}` string map.
+fn parse_str_map(v: &Value) -> HashMap<String, String> {
+    v.as_object()
+        .map(|o| {
+            o.iter()
+                .filter_map(|(k, val)| val.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------
@@ -1674,6 +1717,54 @@ mod tests {
 
     fn make_state() -> IdentityPoolState {
         IdentityPoolState::default()
+    }
+
+    #[test]
+    fn identity_pool_round_trips_extended_fields() {
+        let state = make_state();
+        let ctx = make_ctx();
+        let created = create_identity_pool(
+            &state,
+            &json!({
+                "IdentityPoolName": "p",
+                "AllowUnauthenticatedIdentities": false,
+                "AllowClassicFlow": true,
+                "SamlProviderARNs": ["arn:aws:iam::000000000000:saml-provider/X"],
+                "IdentityPoolTags": { "team": "auth" }
+            }),
+            &ctx,
+        )
+        .unwrap();
+        assert_eq!(created["AllowClassicFlow"], true);
+        assert_eq!(created["IdentityPoolTags"]["team"], "auth");
+        // The non-AWS "Roles" key is no longer leaked into Describe.
+        let pool_id = created["IdentityPoolId"].as_str().unwrap().to_string();
+        let desc = describe_identity_pool(&state, &json!({ "IdentityPoolId": pool_id })).unwrap();
+        assert!(desc.get("Roles").is_none());
+        assert_eq!(
+            desc["SamlProviderARNs"][0],
+            "arn:aws:iam::000000000000:saml-provider/X"
+        );
+    }
+
+    #[test]
+    fn list_identity_pools_paginates() {
+        let state = make_state();
+        let ctx = make_ctx();
+        for i in 0..3 {
+            create_identity_pool(
+                &state,
+                &json!({ "IdentityPoolName": format!("p{i}") }),
+                &ctx,
+            )
+            .unwrap();
+        }
+        let first = list_identity_pools(&state, &json!({ "MaxResults": 2 })).unwrap();
+        assert_eq!(first["IdentityPools"].as_array().unwrap().len(), 2);
+        let next = first["NextToken"].as_str().expect("more pages");
+        let second =
+            list_identity_pools(&state, &json!({ "MaxResults": 2, "NextToken": next })).unwrap();
+        assert_eq!(second["IdentityPools"].as_array().unwrap().len(), 1);
     }
 
     #[test]
@@ -2444,8 +2535,9 @@ mod tests {
 
         let desc = describe_identity(&state, &json!({ "IdentityId": identity_id })).unwrap();
         assert_eq!(desc["IdentityId"], identity_id);
-        assert!(desc["CreationDate"].as_str().is_some());
-        assert!(desc["LastModifiedDate"].as_str().is_some());
+        // cognito-identity reports these as epoch-seconds numbers.
+        assert!(desc["CreationDate"].as_f64().is_some());
+        assert!(desc["LastModifiedDate"].as_f64().is_some());
     }
 
     #[test]
@@ -2783,8 +2875,8 @@ mod tests {
                 pool_id: pool_id.to_string(),
                 logins: Vec::new(),
                 login_tokens: HashMap::new(),
-                creation_date: "0".to_string(),
-                last_modified_date: "0".to_string(),
+                creation_date: 0.0,
+                last_modified_date: 0.0,
                 developer_user_identifiers: Vec::new(),
             },
         );
