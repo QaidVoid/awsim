@@ -8,10 +8,17 @@ use crate::state::CognitoState;
 // CreateUserPoolDomain
 // ---------------------------------------------------------------------------
 
+/// The region a pool belongs to, encoded as the prefix of its id
+/// (`{region}_{suffix}`). The hosted-UI CloudFront hostname uses the pool's
+/// region, not the caller's request region.
+fn pool_region(pool_id: &str) -> &str {
+    pool_id.split('_').next().unwrap_or(pool_id)
+}
+
 pub fn create_user_pool_domain(
     state: &CognitoState,
     input: &Value,
-    ctx: &RequestContext,
+    _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
@@ -42,7 +49,7 @@ pub fn create_user_pool_domain(
     info!(domain = %domain, pool_id = %pool_id, "Cognito: created user pool domain");
 
     Ok(json!({
-        "CloudFrontDomain": format!("{domain}.auth.{}.amazoncognito.com", ctx.region)
+        "CloudFrontDomain": format!("{domain}.auth.{}.amazoncognito.com", pool_region(pool_id))
     }))
 }
 
@@ -76,8 +83,10 @@ pub fn describe_user_pool_domain(
             "DomainDescription": {
                 "Domain": domain,
                 "UserPoolId": pool.id,
-                "AWSAccountId": "",
-                "CloudFrontDistribution": format!("{domain}.auth.{}.amazoncognito.com", ctx.region),
+                "AWSAccountId": ctx.account_id,
+                "S3Bucket": "",
+                "CloudFrontDistribution": format!("{domain}.auth.{}.amazoncognito.com", pool_region(&pool.id)),
+                "CustomDomainConfig": {},
                 "Status": "ACTIVE",
                 "Version": "1"
             }
@@ -124,7 +133,7 @@ pub fn delete_user_pool_domain(
 pub fn update_user_pool_domain(
     state: &CognitoState,
     input: &Value,
-    ctx: &RequestContext,
+    _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let pool_id = input["UserPoolId"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "UserPoolId is required")
@@ -165,6 +174,36 @@ pub fn update_user_pool_domain(
 
     info!(domain = %domain, pool_id = %pool_id, "Cognito: updated user pool domain");
     Ok(json!({
-        "CloudFrontDomain": format!("{domain}.auth.{}.amazoncognito.com", ctx.region)
+        "CloudFrontDomain": format!("{domain}.auth.{}.amazoncognito.com", pool_region(pool_id))
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::operations::pools::create_user_pool;
+    use serde_json::json;
+
+    #[test]
+    fn domain_cloudfront_uses_pool_region_not_request_region() {
+        let state = CognitoState::default();
+        // Pool created in eu-west-1.
+        let create_ctx = RequestContext::new("cognito-idp", "eu-west-1");
+        create_user_pool(&state, &json!({ "PoolName": "p" }), &create_ctx).unwrap();
+        let pool_id = state.user_pools.iter().next().unwrap().id.clone();
+        create_user_pool_domain(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Domain": "myapp" }),
+            &create_ctx,
+        )
+        .unwrap();
+        // Describe from a different request region: hostname keeps eu-west-1.
+        let other_ctx = RequestContext::new("cognito-idp", "us-east-1");
+        let resp =
+            describe_user_pool_domain(&state, &json!({ "Domain": "myapp" }), &other_ctx).unwrap();
+        assert_eq!(
+            resp["DomainDescription"]["CloudFrontDistribution"],
+            "myapp.auth.eu-west-1.amazoncognito.com"
+        );
+    }
 }
