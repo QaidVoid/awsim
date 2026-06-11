@@ -927,9 +927,10 @@ fn generate_credentials_for_role(role_arn: &str, _identity_id: &str) -> Value {
         "AccessKeyId":  access_key,
         "SecretKey":    secret_key,
         "SessionToken": session_token,
-        // GetCredentialsForIdentity reports Expiration in epoch
-        // milliseconds, unlike the STS session expiry which is seconds.
-        "Expiration":   expiration_epoch(3600) * 1000.0,
+        // cognito-identity reports Expiration as epoch *seconds* (a double),
+        // like the rest of the JSON protocol; emitting milliseconds made
+        // SDKs treat the creds as effectively never-expiring.
+        "Expiration":   expiration_epoch(3600),
     })
 }
 
@@ -2734,7 +2735,7 @@ mod tests {
     }
 
     #[test]
-    fn get_credentials_expiration_is_milliseconds() {
+    fn get_credentials_expiration_is_epoch_seconds() {
         let state = make_state();
         let ctx = make_ctx();
         let create = create_identity_pool(
@@ -2766,9 +2767,12 @@ mod tests {
         )
         .unwrap();
 
-        // Epoch milliseconds are > 1e12 (epoch seconds are ~1.7e9).
+        // cognito-identity reports epoch seconds (~1.7e9), not milliseconds.
         let exp = creds["Credentials"]["Expiration"].as_f64().unwrap();
-        assert!(exp > 1e12, "expected ms-scale expiration, got {exp}");
+        assert!(
+            (1e9..1e12).contains(&exp),
+            "expected epoch-seconds expiration, got {exp}"
+        );
     }
 
     fn insert_identity(state: &IdentityPoolState, pool_id: &str, identity_id: &str) {

@@ -1513,11 +1513,17 @@ async fn token(
                 );
             }
 
-            let effective_client_id = if client_id.is_empty() {
-                entry.client_id.clone()
-            } else {
-                client_id.clone()
-            };
+            // The client_id presented at the token endpoint must match the one
+            // the authorization code was issued to; a different client cannot
+            // redeem another client's code.
+            if !client_id.is_empty() && client_id != entry.client_id {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_grant",
+                    "client_id mismatch.",
+                );
+            }
+            let effective_client_id = entry.client_id.clone();
 
             // Validate redirect_uri if provided.
             if let Some(req_redirect) = &form.redirect_uri
@@ -1830,24 +1836,47 @@ async fn token(
                 }
             };
 
-            let user = pool
+            // The token must resolve to a real user; a forged or unknown
+            // token is rejected rather than minting tokens for "unknown".
+            let user = match pool
                 .users
                 .values()
                 .find(|u| u.sub == sub || refresh_tok.contains(&u.sub))
-                .cloned();
-
-            let (user_sub, username, attributes, group_pairs) = match user {
-                Some(ref u) => {
-                    let pairs = user_group_role_pairs(&pool, &u.groups);
-                    (
-                        u.sub.clone(),
-                        u.username.clone(),
-                        u.attributes.clone(),
-                        pairs,
-                    )
+                .cloned()
+            {
+                Some(u) => u,
+                None => {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_grant",
+                        "Invalid Refresh Token.",
+                    );
                 }
-                None => (sub.clone(), sub.clone(), HashMap::new(), vec![]),
             };
+
+            // Honour revocation and a global sign-out that predates the token.
+            if user
+                .revoked_refresh_tokens
+                .iter()
+                .any(|t| t == &refresh_tok)
+                || user.signed_out_at.is_some_and(|t| {
+                    jwt::refresh_token_issued_at(&refresh_tok).is_none_or(|issued| issued < t)
+                })
+            {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_grant",
+                    "Refresh Token has been revoked",
+                );
+            }
+
+            let pairs = user_group_role_pairs(&pool, &user.groups);
+            let (user_sub, username, attributes, group_pairs) = (
+                user.sub.clone(),
+                user.username.clone(),
+                user.attributes.clone(),
+                pairs,
+            );
 
             let effective_client_id = if client_id.is_empty() {
                 "unknown-client".to_string()
