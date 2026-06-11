@@ -70,8 +70,9 @@ pub struct Identity {
     pub logins: Vec<String>,
     /// Provider name → token map (used by UnlinkIdentity).
     pub login_tokens: HashMap<String, String>,
-    pub creation_date: String,
-    pub last_modified_date: String,
+    /// Epoch seconds; cognito-identity reports these as numbers.
+    pub creation_date: f64,
+    pub last_modified_date: f64,
     /// For developer identities: developer user identifiers.
     pub developer_user_identifiers: Vec<String>,
 }
@@ -242,6 +243,15 @@ fn now_iso8601() -> String {
         .unwrap_or_default()
         .as_secs();
     unix_to_iso8601(secs)
+}
+
+/// Current Unix time in epoch seconds, for the identity timestamp fields
+/// cognito-identity reports as numbers.
+fn now_epoch_f64() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as f64
 }
 
 fn expiration_epoch(duration_secs: u64) -> f64 {
@@ -563,7 +573,7 @@ fn get_id(
 
     let identity_id = format!("{}:{}", ctx.region, uuid::Uuid::new_v4());
 
-    let now = now_iso8601();
+    let now = now_epoch_f64();
     let identity = Identity {
         identity_id: identity_id.clone(),
         pool_id: pool_id.to_string(),
@@ -575,7 +585,7 @@ fn get_id(
                     .collect()
             })
             .unwrap_or_default(),
-        creation_date: now.clone(),
+        creation_date: now,
         last_modified_date: now,
         developer_user_identifiers: vec![],
     };
@@ -1008,7 +1018,7 @@ fn get_open_id_token_for_developer_identity(
             .identities
             .entry(identity_id.clone())
             .or_insert_with(|| {
-                let now = now_iso8601();
+                let now = now_epoch_f64();
                 Identity {
                     identity_id: identity_id.clone(),
                     pool_id: pool_id_owned,
@@ -1017,7 +1027,7 @@ fn get_open_id_token_for_developer_identity(
                         .iter()
                         .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
                         .collect(),
-                    creation_date: now.clone(),
+                    creation_date: now,
                     last_modified_date: now,
                     developer_user_identifiers: vec![],
                 }
@@ -1311,7 +1321,7 @@ fn merge_developer_identities(
     };
 
     {
-        let now = now_iso8601();
+        let now = now_epoch_f64();
         let pool_id_owned = pool_id.to_string();
         let mut dest = state
             .identities
@@ -1321,8 +1331,8 @@ fn merge_developer_identities(
                 pool_id: pool_id_owned,
                 logins: vec![dev_provider.to_string()],
                 login_tokens: HashMap::new(),
-                creation_date: now.clone(),
-                last_modified_date: now.clone(),
+                creation_date: now,
+                last_modified_date: now,
                 developer_user_identifiers: vec![dest_id.to_string()],
             });
 
@@ -1369,7 +1379,7 @@ fn unlink_developer_identity(state: &IdentityPoolState, input: &Value) -> Result
     identity
         .developer_user_identifiers
         .retain(|d| d != dev_user_identifier);
-    identity.last_modified_date = now_iso8601();
+    identity.last_modified_date = now_epoch_f64();
 
     Ok(json!({}))
 }
@@ -1399,7 +1409,7 @@ fn unlink_identity(state: &IdentityPoolState, input: &Value) -> Result<Value, Aw
     for p in &providers_to_remove {
         identity.login_tokens.remove(*p);
     }
-    identity.last_modified_date = now_iso8601();
+    identity.last_modified_date = now_epoch_f64();
 
     Ok(json!({}))
 }
@@ -2525,8 +2535,9 @@ mod tests {
 
         let desc = describe_identity(&state, &json!({ "IdentityId": identity_id })).unwrap();
         assert_eq!(desc["IdentityId"], identity_id);
-        assert!(desc["CreationDate"].as_str().is_some());
-        assert!(desc["LastModifiedDate"].as_str().is_some());
+        // cognito-identity reports these as epoch-seconds numbers.
+        assert!(desc["CreationDate"].as_f64().is_some());
+        assert!(desc["LastModifiedDate"].as_f64().is_some());
     }
 
     #[test]
@@ -2864,8 +2875,8 @@ mod tests {
                 pool_id: pool_id.to_string(),
                 logins: Vec::new(),
                 login_tokens: HashMap::new(),
-                creation_date: "0".to_string(),
-                last_modified_date: "0".to_string(),
+                creation_date: 0.0,
+                last_modified_date: 0.0,
                 developer_user_identifiers: Vec::new(),
             },
         );
