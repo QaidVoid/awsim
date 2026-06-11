@@ -74,14 +74,38 @@ pub fn set_user_pool_mfa_config(
         pool.software_token_mfa_enabled = enabled;
     }
 
+    // SMS and email MFA config are stored verbatim so GetUserPoolMfaConfig
+    // round-trips them (awsim does not model SMS/email delivery itself).
+    for key in ["SmsMfaConfiguration", "EmailMfaConfiguration"] {
+        if !input[key].is_null() {
+            pool.extra_config
+                .insert(key.to_string(), input[key].clone());
+        }
+    }
+
     info!(pool_id = %pool_id, mfa = %pool.mfa_configuration, "Cognito: set user pool MFA config");
 
-    Ok(json!({
+    Ok(user_pool_mfa_config_value(&pool))
+}
+
+/// Build the GetUserPoolMfaConfig / SetUserPoolMfaConfig response, echoing the
+/// software-token state plus any stored SMS / email MFA config (defaulting to
+/// AWS's empty `SmsMfaConfiguration`).
+fn user_pool_mfa_config_value(pool: &crate::state::UserPool) -> Value {
+    let sms = pool
+        .extra_config
+        .get("SmsMfaConfiguration")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let mut out = json!({
         "MfaConfiguration": pool.mfa_configuration,
-        "SoftwareTokenMfaConfiguration": {
-            "Enabled": pool.software_token_mfa_enabled
-        }
-    }))
+        "SoftwareTokenMfaConfiguration": { "Enabled": pool.software_token_mfa_enabled },
+        "SmsMfaConfiguration": sms,
+    });
+    if let Some(email) = pool.extra_config.get("EmailMfaConfiguration") {
+        out["EmailMfaConfiguration"] = email.clone();
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -104,12 +128,7 @@ pub fn get_user_pool_mfa_config(
         )
     })?;
 
-    Ok(json!({
-        "MfaConfiguration": pool.mfa_configuration,
-        "SoftwareTokenMfaConfiguration": {
-            "Enabled": pool.software_token_mfa_enabled
-        }
-    }))
+    Ok(user_pool_mfa_config_value(&pool))
 }
 
 // ---------------------------------------------------------------------------
