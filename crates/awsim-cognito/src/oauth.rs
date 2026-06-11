@@ -722,6 +722,17 @@ async fn authorize_get(
             .into_response();
     }
 
+    // The client must exist on the pool.
+    if let Some(pool_ref) = oauth_state.cognito.user_pools.get(&pool_id)
+        && !pool_ref.clients.contains_key(&params.client_id)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("Client {} not found.", params.client_id),
+        )
+            .into_response();
+    }
+
     // Validate redirect_uri against client's callback_urls.
     if let Some(pool_ref) = oauth_state.cognito.user_pools.get(&pool_id)
         && let Some(client) = pool_ref.clients.get(&params.client_id)
