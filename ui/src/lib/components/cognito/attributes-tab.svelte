@@ -166,7 +166,10 @@
 		error = null;
 		try {
 			await addCustomAttributes(pool!.id, [payload]);
-			toast.success(`Added custom:${trimmed}`);
+			toast.success(`Added custom:${trimmed}`, {
+				description:
+					'App clients using the AWS default (unrestricted) can use it right away. Clients with explicit attribute permissions need it granted on the App clients tab.'
+			});
 			addOpen = false;
 			await onRefresh();
 		} catch (e) {
