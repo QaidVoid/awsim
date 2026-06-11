@@ -168,6 +168,23 @@ fn record_code_success(user: &mut CognitoUser) {
     user.code_locked_until_secs = None;
 }
 
+/// Mask an email the way Cognito does in CodeDeliveryDetails, e.g.
+/// `jane@example.com` -> `j***@e***.com`. Non-email or empty input is
+/// returned masked as best-effort.
+fn mask_email(email: &str) -> String {
+    match email.split_once('@') {
+        Some((local, domain)) if !local.is_empty() && !domain.is_empty() => {
+            let local_first = local.chars().next().unwrap();
+            let dom_first = domain.chars().next().unwrap();
+            match domain.rsplit_once('.') {
+                Some((_, tld)) => format!("{local_first}***@{dom_first}***.{tld}"),
+                None => format!("{local_first}***@{dom_first}***"),
+            }
+        }
+        _ => "***".to_string(),
+    }
+}
+
 pub fn user_to_value(user: &CognitoUser) -> Value {
     let attributes: Vec<Value> = user
         .attributes
@@ -178,7 +195,7 @@ pub fn user_to_value(user: &CognitoUser) -> Value {
     // Surface the user's enrolled MFA methods and preference, derived from the
     // per-user MFA state, the way AdminGetUser / GetUser report them.
     let mut mfa_settings: Vec<&str> = Vec::new();
-    if user.totp_verified {
+    if user.software_token_mfa_enabled {
         mfa_settings.push("SOFTWARE_TOKEN_MFA");
     }
     if user.sms_mfa_enabled && user.attributes.contains_key("phone_number") {
@@ -186,6 +203,9 @@ pub fn user_to_value(user: &CognitoUser) -> Value {
     }
     let preferred = user.mfa_preferred.clone().unwrap_or_default();
 
+    // This is the UserType shape (ListUsers / AdminCreateUser / group lists),
+    // which uses `Attributes`. AdminGetUser / GetUser report `UserAttributes`
+    // and build that key themselves.
     json!({
         "Username": user.username,
         "UserStatus": user.status,
@@ -193,7 +213,6 @@ pub fn user_to_value(user: &CognitoUser) -> Value {
         "UserCreateDate": user.created_date,
         "UserLastModifiedDate": user.last_modified_date,
         "Attributes": &attributes,
-        "UserAttributes": &attributes,
         "UserMFASettingList": mfa_settings,
         "PreferredMfaSetting": preferred
     })
@@ -534,18 +553,25 @@ pub fn sign_up(
         invoke_trigger(ctx, "CustomMessage_SignUp", arn, &trigger_event);
     }
 
+    let email_dest = user.attributes.get("email").map(|e| mask_email(e));
+
     info!(username = %username, pool_id = %pool.id, "Cognito: user signed up");
     pool.users.insert(username.to_string(), user);
 
-    Ok(json!({
+    let mut resp = json!({
         "UserSub": sub,
         "UserConfirmed": false,
-        "CodeDeliveryDetails": {
+    });
+    // Only report delivery when there is an email to verify, with a masked
+    // destination rather than a bare "***".
+    if let Some(dest) = email_dest {
+        resp["CodeDeliveryDetails"] = json!({
             "AttributeName": "email",
             "DeliveryMedium": "EMAIL",
-            "Destination": "***"
-        }
-    }))
+            "Destination": dest,
+        });
+    }
+    Ok(resp)
 }
 
 // ---------------------------------------------------------------------------
@@ -888,7 +914,15 @@ pub fn admin_get_user(
         AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
-    Ok(user_to_value(user))
+    // AdminGetUser's response shape uses `UserAttributes`, not the UserType
+    // `Attributes` member.
+    let mut out = user_to_value(user);
+    if let Some(map) = out.as_object_mut()
+        && let Some(attrs) = map.remove("Attributes")
+    {
+        map.insert("UserAttributes".to_string(), attrs);
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -1871,6 +1905,13 @@ pub fn resend_confirmation_code(
         AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
+    let dest = pool
+        .users
+        .get(&username)
+        .and_then(|u| u.attributes.get("email"))
+        .map(|e| mask_email(e))
+        .unwrap_or_else(|| "***".to_string());
+
     let code = format!("{:06}", rand::random::<u32>() % 1_000_000);
     let key = format!("{pool_id}:{username}");
     state.confirmation_codes.insert(key.clone(), code.clone());
@@ -1881,7 +1922,7 @@ pub fn resend_confirmation_code(
         "CodeDeliveryDetails": {
             "AttributeName": "email",
             "DeliveryMedium": "EMAIL",
-            "Destination": "***"
+            "Destination": dest
         }
     }))
 }
@@ -1919,12 +1960,17 @@ pub fn get_user_attribute_verification_code(
                 .insert(attribute_name.to_string(), code.clone());
             user.pending_verifications_issued
                 .insert(attribute_name.to_string(), now_epoch());
+            let dest = user
+                .attributes
+                .get(attribute_name)
+                .map(|v| mask_email(v))
+                .unwrap_or_else(|| "***".to_string());
             info!(username = %username, attribute_name = %attribute_name, code = %code, "Cognito: attribute verification code sent");
             return Ok(json!({
                 "CodeDeliveryDetails": {
                     "AttributeName": attribute_name,
                     "DeliveryMedium": "EMAIL",
-                    "Destination": "***"
+                    "Destination": dest
                 }
             }));
         }
@@ -2924,6 +2970,28 @@ mod tests {
     }
 
     #[test]
+    fn mask_email_matches_cognito_shape() {
+        assert_eq!(mask_email("jane@example.com"), "j***@e***.com");
+        assert_eq!(mask_email("x@y.io"), "x***@y***.io");
+        assert_eq!(mask_email("garbage"), "***");
+    }
+
+    #[test]
+    fn admin_get_user_uses_user_attributes_key() {
+        let (state, pool_id) = schema_fixture();
+        make_u1(&state, &pool_id);
+        let got = admin_get_user(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Username": "u1" }),
+            &ctx(),
+        )
+        .unwrap();
+        // AdminGetUser uses UserAttributes, not the UserType Attributes member.
+        assert!(got.get("UserAttributes").is_some());
+        assert!(got.get("Attributes").is_none());
+    }
+
+    #[test]
     fn admin_get_user_reports_mfa_fields() {
         let (state, pool_id) = schema_fixture();
         make_u1(&state, &pool_id);
@@ -2941,6 +3009,7 @@ mod tests {
             let mut pool = state.user_pools.get_mut(&pool_id).unwrap();
             let user = pool.users.get_mut("u1").unwrap();
             user.totp_verified = true;
+            user.software_token_mfa_enabled = true;
             user.mfa_preferred = Some("SOFTWARE_TOKEN_MFA".to_string());
         }
         let after = admin_get_user(

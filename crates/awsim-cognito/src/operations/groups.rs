@@ -24,15 +24,25 @@ fn now_epoch() -> u64 {
 }
 
 fn group_to_value(g: &CognitoGroup) -> Value {
-    json!({
+    let mut v = json!({
         "GroupName": g.group_name,
         "UserPoolId": g.user_pool_id,
-        "Description": g.description,
-        "RoleArn": g.role_arn,
-        "Precedence": g.precedence,
         "CreationDate": g.created_date,
         "LastModifiedDate": g.created_date
-    })
+    });
+    // Cognito omits Description / RoleArn / Precedence when they were never
+    // set, rather than returning explicit nulls.
+    let map = v.as_object_mut().expect("json!() produces an object");
+    if let Some(d) = &g.description {
+        map.insert("Description".into(), json!(d));
+    }
+    if let Some(r) = &g.role_arn {
+        map.insert("RoleArn".into(), json!(r));
+    }
+    if let Some(p) = g.precedence {
+        map.insert("Precedence".into(), json!(p));
+    }
+    v
 }
 
 // ---------------------------------------------------------------------------
@@ -406,7 +416,7 @@ pub fn list_users_in_group(
         AwsError::bad_request("InvalidParameterException", "GroupName is required")
     })?;
 
-    let limit = input["Limit"].as_u64().unwrap_or(60) as usize;
+    use awsim_core::pagination::{cap_max_results, paginate};
 
     let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
@@ -422,13 +432,22 @@ pub fn list_users_in_group(
         ));
     }
 
-    let users: Vec<Value> = pool
+    // Stable ordering so the NextToken cursor is meaningful across pages.
+    let mut members: Vec<&crate::state::CognitoUser> = pool
         .users
         .values()
         .filter(|u| u.groups.contains(&group_name.to_string()))
-        .take(limit)
-        .map(user_to_value)
         .collect();
+    members.sort_by(|a, b| a.username.cmp(&b.username));
 
-    Ok(json!({ "Users": users }))
+    let limit = cap_max_results(input["Limit"].as_i64(), 60, 60);
+    let token = input["NextToken"].as_str();
+    let page = paginate(members, limit, token, |u| u.username.clone())?;
+
+    let users: Vec<Value> = page.items.iter().map(|u| user_to_value(u)).collect();
+    let mut resp = json!({ "Users": users });
+    if let Some(next) = page.next_token {
+        resp["NextToken"] = json!(next);
+    }
+    Ok(resp)
 }
