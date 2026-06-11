@@ -434,6 +434,8 @@ pub struct CognitoUser {
     pub enabled: bool,
     pub groups: Vec<String>,
     pub created_date: u64,
+    /// Unix seconds of the last mutation; surfaced as UserLastModifiedDate.
+    pub last_modified_date: u64,
     /// Pending verification codes, keyed by attribute name.
     pub pending_verifications: HashMap<String, String>,
     /// Issue time (Unix seconds) for each entry in `pending_verifications`,

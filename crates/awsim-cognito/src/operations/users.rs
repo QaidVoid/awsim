@@ -119,14 +119,27 @@ pub fn user_to_value(user: &CognitoUser) -> Value {
         .map(|(k, v)| json!({"Name": k, "Value": v}))
         .collect();
 
+    // Surface the user's enrolled MFA methods and preference, derived from the
+    // per-user MFA state, the way AdminGetUser / GetUser report them.
+    let mut mfa_settings: Vec<&str> = Vec::new();
+    if user.totp_verified {
+        mfa_settings.push("SOFTWARE_TOKEN_MFA");
+    }
+    if user.mfa_enabled && user.attributes.contains_key("phone_number") {
+        mfa_settings.push("SMS_MFA");
+    }
+    let preferred = user.mfa_preferred.clone().unwrap_or_default();
+
     json!({
         "Username": user.username,
         "UserStatus": user.status,
         "Enabled": user.enabled,
         "UserCreateDate": user.created_date,
-        "UserLastModifiedDate": user.created_date,
+        "UserLastModifiedDate": user.last_modified_date,
         "Attributes": &attributes,
-        "UserAttributes": &attributes
+        "UserAttributes": &attributes,
+        "UserMFASettingList": mfa_settings,
+        "PreferredMfaSetting": preferred
     })
 }
 
@@ -152,6 +165,7 @@ fn make_user(
         enabled: true,
         groups: Vec::new(),
         created_date: now_epoch(),
+        last_modified_date: now_epoch(),
         pending_verifications: HashMap::new(),
         pending_verifications_issued: HashMap::new(),
         code_failed_attempts: 0,
@@ -589,6 +603,7 @@ pub fn confirm_sign_up(
     let _ = state.confirmation_codes_issued.remove(&code_key);
 
     user.status = "CONFIRMED".to_string();
+    user.last_modified_date = now_epoch();
     // AutoVerifiedAttributes on the pool flips the matching
     // `<attr>_verified` flag the moment the user confirms sign-up.
     // Without this the user is CONFIRMED but their email/phone never
@@ -644,6 +659,7 @@ pub fn admin_confirm_sign_up(
     })?;
 
     user.status = "CONFIRMED".to_string();
+    user.last_modified_date = now_epoch();
     info!(username = %username, pool_id = %pool_id, "Cognito: admin confirmed sign-up");
 
     // Post-Confirmation trigger (fire-and-forget)
@@ -888,6 +904,7 @@ pub fn admin_set_user_password(
     } else {
         "FORCE_CHANGE_PASSWORD".to_string()
     };
+    user.last_modified_date = now_epoch();
     // Setting a fresh password administratively unlocks the account.
     user.failed_login_attempts = 0;
     user.locked_until_secs = None;
@@ -1219,6 +1236,7 @@ pub fn confirm_forgot_password(
     user.srp_salt = Some(s);
     user.srp_verifier = Some(v);
     user.status = "CONFIRMED".to_string();
+    user.last_modified_date = now_epoch();
     user.failed_login_attempts = 0;
     user.locked_until_secs = None;
 
@@ -1274,6 +1292,7 @@ pub fn change_password(
             user.srp_verifier = Some(v);
             user.failed_login_attempts = 0;
             user.locked_until_secs = None;
+            user.last_modified_date = now_epoch();
             return Ok(json!({}));
         }
     }
@@ -1352,6 +1371,7 @@ pub fn admin_enable_user(
     })?;
 
     user.enabled = true;
+    user.last_modified_date = now_epoch();
     info!(username = %username, pool_id = %pool_id, "Cognito: admin enabled user");
     Ok(json!({}))
 }
@@ -1387,6 +1407,7 @@ pub fn admin_disable_user(
     })?;
 
     user.enabled = false;
+    user.last_modified_date = now_epoch();
     info!(username = %username, pool_id = %pool_id, "Cognito: admin disabled user");
     Ok(json!({}))
 }
@@ -1422,6 +1443,7 @@ pub fn admin_reset_user_password(
     })?;
 
     user.status = "RESET_REQUIRED".to_string();
+    user.last_modified_date = now_epoch();
     info!(username = %username, pool_id = %pool_id, "Cognito: admin reset user password");
     Ok(json!({}))
 }
@@ -1523,6 +1545,7 @@ fn apply_attribute_updates(
         }
         user.attributes.insert(k, v);
     }
+    user.last_modified_date = now_epoch();
     Ok(())
 }
 
@@ -2120,6 +2143,7 @@ mod tests {
             enabled: true,
             groups: Vec::new(),
             created_date: 0,
+            last_modified_date: 0,
             pending_verifications: Default::default(),
             pending_verifications_issued: Default::default(),
             code_failed_attempts: 0,
@@ -2725,6 +2749,42 @@ mod tests {
             &ctx(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn admin_get_user_reports_mfa_fields() {
+        let (state, pool_id) = schema_fixture();
+        make_u1(&state, &pool_id);
+        // Before enrollment: empty list, empty preference.
+        let before = admin_get_user(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Username": "u1" }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(before["UserMFASettingList"].as_array().unwrap().len(), 0);
+        assert_eq!(before["PreferredMfaSetting"], "");
+        // Enroll a verified software token + preference directly.
+        {
+            let mut pool = state.user_pools.get_mut(&pool_id).unwrap();
+            let user = pool.users.get_mut("u1").unwrap();
+            user.totp_verified = true;
+            user.mfa_preferred = Some("SOFTWARE_TOKEN_MFA".to_string());
+        }
+        let after = admin_get_user(
+            &state,
+            &json!({ "UserPoolId": pool_id, "Username": "u1" }),
+            &ctx(),
+        )
+        .unwrap();
+        let list: Vec<String> = after["UserMFASettingList"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert!(list.contains(&"SOFTWARE_TOKEN_MFA".to_string()));
+        assert_eq!(after["PreferredMfaSetting"], "SOFTWARE_TOKEN_MFA");
     }
 
     #[test]

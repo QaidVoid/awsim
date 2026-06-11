@@ -226,6 +226,7 @@ mod tests {
             enabled: true,
             groups: Vec::new(),
             created_date: 0,
+            last_modified_date: 0,
             pending_verifications: Default::default(),
             pending_verifications_issued: Default::default(),
             code_failed_attempts: 0,

@@ -162,6 +162,7 @@ pub async fn seed(
                 enabled,
                 groups: Vec::new(),
                 created_date: now,
+                last_modified_date: now,
                 pending_verifications: HashMap::new(),
                 pending_verifications_issued: HashMap::new(),
                 code_failed_attempts: 0,
