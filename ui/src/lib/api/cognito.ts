@@ -124,6 +124,11 @@ export interface CognitoUser {
   status: string;
   enabled: boolean;
   createDate: string;
+  lastModifiedDate: string;
+  /** Enabled MFA methods, e.g. ["SOFTWARE_TOKEN_MFA"]. */
+  mfaSettings: string[];
+  /** The user's preferred MFA method, if any. */
+  preferredMfa: string;
   attributes: { name: string; value: string }[];
 }
 
@@ -453,6 +458,9 @@ export async function adminGetUser(
     UserStatus?: string;
     Enabled?: boolean;
     UserCreateDate?: number;
+    UserLastModifiedDate?: number;
+    UserMFASettingList?: string[];
+    PreferredMfaSetting?: string;
     UserAttributes?: { Name: string; Value: string }[];
   };
   return {
@@ -462,6 +470,11 @@ export async function adminGetUser(
     createDate: data.UserCreateDate
       ? new Date(data.UserCreateDate * 1000).toISOString()
       : "",
+    lastModifiedDate: data.UserLastModifiedDate
+      ? new Date(data.UserLastModifiedDate * 1000).toISOString()
+      : "",
+    mfaSettings: data.UserMFASettingList ?? [],
+    preferredMfa: data.PreferredMfaSetting ?? "",
     attributes: (data.UserAttributes ?? []).map((a) => ({
       name: a.Name,
       value: a.Value,
