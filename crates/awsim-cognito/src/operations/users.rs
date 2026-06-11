@@ -23,7 +23,7 @@ fn invoke_trigger(ctx: &RequestContext, trigger_source: &str, lambda_arn: &str, 
             detail: json!({
                 "triggerSource": trigger_source,
                 "functionArn": lambda_arn,
-                "event": event,
+                "event": super::cognito_trigger_event(event, trigger_source, &ctx.region),
             }),
         });
     }
@@ -532,13 +532,18 @@ pub fn sign_up(
     let user = make_user(&pool.id, username, password, attributes, "UNCONFIRMED")?;
     let sub = user.sub.clone();
 
-    // Pre Sign-Up trigger (fire-and-forget)
+    // Pre Sign-Up trigger (fire-and-forget). Carry the user's real attributes.
     if let Some(arn) = pool.lambda_config.get("PreSignUp") {
+        let user_attrs: serde_json::Map<String, Value> = user
+            .attributes
+            .iter()
+            .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+            .collect();
         let trigger_event = json!({
             "userPoolId": pool.id,
             "userName": username,
             "callerContext": { "clientId": client_id },
-            "request": { "userAttributes": {} }
+            "request": { "userAttributes": user_attrs, "validationData": {} }
         });
         invoke_trigger(ctx, "PreSignUp_SignUp", arn, &trigger_event);
     }
