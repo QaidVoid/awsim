@@ -4,6 +4,7 @@ pub mod branding;
 pub mod client_secrets;
 pub mod devices;
 pub mod domain;
+pub mod email;
 pub mod groups;
 pub mod identity_providers;
 pub mod import;

@@ -2304,6 +2304,9 @@ fn spawn_event_router(state: &AppState) {
                         "cognito:LambdaTrigger" => {
                             integrations::handle_cognito_trigger(&services, &event).await;
                         }
+                        t if t == awsim_cognito::EMAIL_EVENT_TYPE => {
+                            integrations::handle_cognito_email(&services, &event).await;
+                        }
                         t if t.starts_with("s3:ObjectCreated:")
                             || t.starts_with("s3:ObjectRemoved:") =>
                         {
