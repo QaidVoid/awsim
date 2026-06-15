@@ -21,12 +21,24 @@ and the `rds-data` service is simply not registered.
 
 ## Configuration
 
+- `AWSIM_RDS_DATA_CONTAINER_RUNTIME`: the container runtime executable. Defaults
+  to `docker`. Podman is drop-in compatible for the commands used here (`run`,
+  `rm`), so set this to `podman` to use it instead.
 - `AWSIM_RDS_DATA_PG_IMAGE`: the PostgreSQL image to run. Any `postgres:NN` tag
   works (14 through 18), since the Data API only uses wire-protocol features
   that are stable across those releases. Defaults to `postgres:16-alpine`.
 - `AWSIM_RDS_DATA_PG_HOST`: the host AWSim connects to in order to reach a
   container's published port. Defaults to `127.0.0.1` for the common case where
-  AWSim runs directly on the Docker host.
+  AWSim runs directly on the host.
+
+### Using Podman
+
+Set `AWSIM_RDS_DATA_CONTAINER_RUNTIME=podman`. The `run -d --rm -e -p` and
+`rm -f` commands AWSim issues are all Podman-compatible, and because AWSim shells
+out to the CLI rather than the Docker socket, Podman's different socket path does
+not matter. When AWSim itself runs in a rootless Podman container reaching the
+host, use `host.containers.internal` (Podman's equivalent of
+`host.docker.internal`) for `AWSIM_RDS_DATA_PG_HOST`.
 
 ### Running AWSim itself inside Docker
 

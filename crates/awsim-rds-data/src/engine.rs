@@ -29,6 +29,7 @@ pub enum ExecResult {
 
 /// A running PostgreSQL container backing one cluster.
 struct Container {
+    runtime: String,
     container_id: String,
     host_port: u16,
     client: Arc<Client>,
@@ -38,7 +39,7 @@ impl Drop for Container {
     fn drop(&mut self) {
         // Best-effort teardown. The container is also started with
         // `--rm`, so a stop removes it; `rm -f` covers both.
-        let _ = std::process::Command::new("docker")
+        let _ = std::process::Command::new(&self.runtime)
             .args(["rm", "-f", &self.container_id])
             .output();
     }
@@ -53,6 +54,10 @@ struct Transaction {
 /// demand in a Docker container. Statements run against the cluster's
 /// container; transactions each hold a dedicated connection.
 pub struct PgEngine {
+    /// Container runtime executable, `docker` by default. Podman is
+    /// drop-in compatible for the commands used here, so setting this to
+    /// `podman` works without further changes.
+    runtime: String,
     image: String,
     db_name: String,
     /// Host AWSim connects to in order to reach the published container
@@ -67,8 +72,9 @@ pub struct PgEngine {
 }
 
 impl PgEngine {
-    pub fn new(image: String, host: String) -> Self {
+    pub fn new(runtime: String, image: String, host: String) -> Self {
         Self {
+            runtime,
             image,
             db_name: "awsim".to_string(),
             host,
@@ -165,7 +171,7 @@ impl PgEngine {
         } else {
             format!("0.0.0.0:{port}:5432")
         };
-        let output = Command::new("docker")
+        let output = Command::new(&self.runtime)
             .args([
                 "run",
                 "-d",
@@ -182,12 +188,14 @@ impl PgEngine {
             .await
             .map_err(|e| {
                 AwsError::internal(format!(
-                    "failed to start a PostgreSQL container (is Docker running?): {e}"
+                    "failed to start a PostgreSQL container with `{}` (is the container runtime installed and running?): {e}",
+                    self.runtime
                 ))
             })?;
         if !output.status.success() {
             return Err(AwsError::internal(format!(
-                "docker run failed: {}",
+                "`{} run` failed: {}",
+                self.runtime,
                 String::from_utf8_lossy(&output.stderr).trim()
             )));
         }
@@ -195,12 +203,13 @@ impl PgEngine {
 
         match wait_for_ready(&self.host, port, &self.db_name).await {
             Ok(client) => Ok(Container {
+                runtime: self.runtime.clone(),
                 container_id,
                 host_port: port,
                 client: Arc::new(client),
             }),
             Err(e) => {
-                let _ = std::process::Command::new("docker")
+                let _ = std::process::Command::new(&self.runtime)
                     .args(["rm", "-f", &container_id])
                     .output();
                 Err(AwsError::internal(format!(

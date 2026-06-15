@@ -11,6 +11,9 @@
 //! enabled, since it depends on Docker being available at runtime.
 //!
 //! Configuration (environment variables):
+//! - `AWSIM_RDS_DATA_CONTAINER_RUNTIME`: the container runtime executable.
+//!   Defaults to `docker`. Podman is drop-in compatible for the commands
+//!   used here, so set this to `podman` to use it instead.
 //! - `AWSIM_RDS_DATA_PG_IMAGE`: the PostgreSQL image to run. Any
 //!   `postgres:NN` tag works (14 through 18), since the Data API only
 //!   uses wire-protocol features stable across those releases. Defaults
@@ -43,12 +46,14 @@ pub struct RdsDataService {
 
 impl RdsDataService {
     pub fn new() -> Self {
+        let runtime = std::env::var("AWSIM_RDS_DATA_CONTAINER_RUNTIME")
+            .unwrap_or_else(|_| "docker".to_string());
         let image = std::env::var("AWSIM_RDS_DATA_PG_IMAGE")
             .unwrap_or_else(|_| DEFAULT_PG_IMAGE.to_string());
         let host =
             std::env::var("AWSIM_RDS_DATA_PG_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
         Self {
-            engine: PgEngine::new(image, host),
+            engine: PgEngine::new(runtime, image, host),
         }
     }
 }
