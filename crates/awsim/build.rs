@@ -43,6 +43,8 @@ fn stage_ui_build() {
     let src = Path::new(&manifest_dir).join("../../ui/build");
     let dst = Path::new(&out_dir).join("ui-build");
 
+    println!("cargo:rerun-if-changed={}", src.display());
+
     // Always recreate the staging dir so removed UI files don't linger
     // across incremental builds.
     if dst.exists() {
@@ -51,7 +53,6 @@ fn stage_ui_build() {
     fs::create_dir_all(&dst).expect("create ui-build staging dir");
 
     if src.exists() {
-        println!("cargo:rerun-if-changed={}", src.display());
         copy_dir_recursive(&src, &dst).expect("copy ui/build into OUT_DIR");
     }
 }
