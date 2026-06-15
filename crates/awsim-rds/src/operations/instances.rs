@@ -480,7 +480,7 @@ pub fn describe_db_instances(
         }));
     }
 
-    let max_records = cap_max_results(input["MaxRecords"].as_i64(), 100, 100);
+    let max_records = cap_max_results(super::coerce_i64(&input["MaxRecords"]), 100, 100);
     let mut items: Vec<(String, Value)> = state
         .instances
         .iter()
@@ -790,21 +790,21 @@ pub fn apply_pending_modified_values(instance: &mut DbInstance) {
     if let Some(v) = instance
         .pending_modified_values
         .get("AllocatedStorage")
-        .and_then(|v| v.as_u64())
+        .and_then(super::coerce_u64)
     {
         instance.allocated_storage = v as u32;
     }
     if let Some(v) = instance
         .pending_modified_values
         .get("MultiAZ")
-        .and_then(|v| v.as_bool())
+        .and_then(super::coerce_bool)
     {
         instance.multi_az = v;
     }
     if let Some(v) = instance
         .pending_modified_values
         .get("PubliclyAccessible")
-        .and_then(|v| v.as_bool())
+        .and_then(super::coerce_bool)
     {
         instance.publicly_accessible = v;
     }
