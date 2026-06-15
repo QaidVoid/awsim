@@ -37,7 +37,7 @@ fn instance_to_value(inst: &DbInstance) -> Value {
         "AllocatedStorage": inst.allocated_storage,
         "Endpoint": endpoint,
         "DBSubnetGroup": inst.subnet_group_name.as_deref().map(|n| json!({ "DBSubnetGroupName": n })),
-        "VpcSecurityGroups": inst.vpc_security_groups.iter().map(|sg| json!({ "VpcSecurityGroupId": sg, "Status": "active" })).collect::<Vec<_>>(),
+        "VpcSecurityGroups": { "VpcSecurityGroupMembership": inst.vpc_security_groups.iter().map(|sg| json!({ "VpcSecurityGroupId": sg, "Status": "active" })).collect::<Vec<_>>() },
         "MultiAZ": inst.multi_az,
         "PubliclyAccessible": inst.publicly_accessible,
         "StorageType": inst.storage_type,
@@ -1141,7 +1141,9 @@ mod create_db_instance_tests {
         let mut input = base_input();
         input["VpcSecurityGroupIds"] = json!(["sg-1", "sg-2"]);
         let resp = create_db_instance(&state, &input, &ctx()).unwrap();
-        let sgs = resp["DBInstance"]["VpcSecurityGroups"].as_array().unwrap();
+        let sgs = resp["DBInstance"]["VpcSecurityGroups"]["VpcSecurityGroupMembership"]
+            .as_array()
+            .unwrap();
         assert_eq!(sgs.len(), 2);
         assert_eq!(sgs[0]["VpcSecurityGroupId"], "sg-1");
     }
@@ -1534,7 +1536,7 @@ mod aurora_membership_tests {
         let resp =
             describe_db_clusters(state, &json!({ "DBClusterIdentifier": cluster_id }), &ctx())
                 .unwrap();
-        resp["DBClusters"]["DBCluster"][0]["DBClusterMembers"]
+        resp["DBClusters"]["DBCluster"][0]["DBClusterMembers"]["DBClusterMember"]
             .as_array()
             .cloned()
             .unwrap_or_default()
