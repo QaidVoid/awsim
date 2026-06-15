@@ -17,6 +17,7 @@ fn snapshot_to_value(s: &DbSnapshot) -> Value {
         "DBInstanceIdentifier": s.db_instance_identifier,
         "Engine": s.engine,
         "EngineVersion": s.engine_version,
+        "MasterUsername": s.master_username,
         "AllocatedStorage": s.allocated_storage,
         "Status": s.status,
         "SnapshotCreateTime": s.created_at,
@@ -82,6 +83,7 @@ pub fn create_db_snapshot(
         allocated_storage: instance.allocated_storage,
         status: "available".to_string(),
         created_at: now_iso8601(),
+        master_username: instance.master_username.clone(),
         tags,
         kms_key_id: instance.kms_key_id.clone(),
         source_region: None,
@@ -209,6 +211,7 @@ pub fn copy_db_snapshot(
         allocated_storage: source.allocated_storage,
         status: "available".to_string(),
         created_at: now_iso8601(),
+        master_username: source.master_username.clone(),
         tags: source.tags.clone(),
         kms_key_id: opt_str(input, "KmsKeyId")
             .map(str::to_string)

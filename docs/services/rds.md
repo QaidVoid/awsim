@@ -145,6 +145,10 @@ aws --endpoint-url http://localhost:4566 \
 - `CopyDBSnapshot` — copy snapshot metadata to a new identifier (stub)
   - Input: `SourceDBSnapshotIdentifier`, `TargetDBSnapshotIdentifier`
 
+- `RestoreDBInstanceFromDBSnapshot` rebuilds an instance from a snapshot
+  - Input: `DBInstanceIdentifier`, `DBSnapshotIdentifier`, optional `DBInstanceClass`, `StorageType`, `MultiAZ`, `PubliclyAccessible`, `DBSubnetGroupName`, `VpcSecurityGroupIds`
+  - Engine, version, storage, master username, and encryption are inherited from the snapshot
+
 ### DB Cluster Snapshots (Aurora)
 - `CreateDBClusterSnapshot` creates a manual snapshot of an Aurora cluster
   - Input: `DBClusterSnapshotIdentifier`, `DBClusterIdentifier`, optional `Tags`
@@ -155,6 +159,9 @@ aws --endpoint-url http://localhost:4566 \
   - Input: `DBClusterSnapshotIdentifier`
 - `CopyDBClusterSnapshot` copies a cluster snapshot to a new identifier
   - Input: `SourceDBClusterSnapshotIdentifier`, `TargetDBClusterSnapshotIdentifier`, optional `KmsKeyId`, `SourceRegion`, `Tags`
+- `RestoreDBClusterFromSnapshot` rebuilds an Aurora cluster from a cluster snapshot
+  - Input: `DBClusterIdentifier`, `SnapshotIdentifier`, `Engine`, optional `EngineVersion`, `VpcSecurityGroupIds`, `BackupRetentionPeriod`, `DeletionProtection`
+  - The restored cluster inherits the snapshot's engine version and master username and starts with no members
 
 ### Engine Versions & Options
 - `DescribeDBEngineVersions` returns available engine versions for `postgres`, `mysql`, `mariadb`, `aurora-postgresql`, and `aurora-mysql`

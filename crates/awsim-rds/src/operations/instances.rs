@@ -590,6 +590,91 @@ pub fn create_db_instance_read_replica(
     Ok(json!({ "DBInstance": result }))
 }
 
+/// `RestoreDBInstanceFromDBSnapshot` rebuilds a standalone DB instance
+/// from a previously captured snapshot. Engine, version, storage, master
+/// username, and encryption are inherited from the snapshot; the caller
+/// may choose a new instance class, storage type, and placement.
+pub fn restore_db_instance_from_db_snapshot(
+    state: &RdsState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let identifier = require_str(input, "DBInstanceIdentifier")?;
+    validate_db_identifier(identifier)?;
+    let snapshot_id = require_str(input, "DBSnapshotIdentifier")?;
+
+    let snapshot = state
+        .snapshots
+        .get(snapshot_id)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "DBSnapshotNotFound",
+                format!("DB snapshot not found: {snapshot_id}"),
+            )
+        })?
+        .clone();
+
+    if state.instances.contains_key(identifier) {
+        return Err(db_instance_already_exists(identifier));
+    }
+
+    let engine = opt_str(input, "Engine")
+        .unwrap_or(snapshot.engine.as_str())
+        .to_string();
+    let port = default_port(&engine);
+    let license_model = default_license_model(&engine).map(str::to_string);
+
+    let vpc_security_groups: Vec<String> = input["VpcSecurityGroupIds"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let inst = DbInstance {
+        identifier: identifier.to_string(),
+        arn: instance_arn(&ctx.partition, &ctx.region, &ctx.account_id, identifier),
+        instance_class: opt_str(input, "DBInstanceClass")
+            .unwrap_or("db.t3.micro")
+            .to_string(),
+        engine,
+        engine_version: snapshot.engine_version.clone(),
+        status: "available".to_string(),
+        master_username: snapshot.master_username.clone(),
+        allocated_storage: snapshot.allocated_storage,
+        endpoint: Some(DbEndpoint {
+            address: instance_endpoint(identifier, &ctx.region),
+            port,
+        }),
+        subnet_group_name: opt_str(input, "DBSubnetGroupName").map(str::to_string),
+        vpc_security_groups,
+        multi_az: opt_bool(input, "MultiAZ").unwrap_or(false),
+        publicly_accessible: opt_bool(input, "PubliclyAccessible").unwrap_or(false),
+        storage_type: opt_str(input, "StorageType").unwrap_or("gp2").to_string(),
+        cluster_identifier: None,
+        created_at: now_iso8601(),
+        iops: None,
+        storage_throughput: None,
+        license_model,
+        copy_tags_to_snapshot: opt_bool(input, "CopyTagsToSnapshot").unwrap_or(false),
+        kms_key_id: snapshot.kms_key_id.clone(),
+        monitoring_interval: None,
+        monitoring_role_arn: None,
+        enabled_cloudwatch_logs_exports: Vec::new(),
+        preferred_maintenance_window: Some(DEFAULT_MAINTENANCE_WINDOW.to_string()),
+        pending_modified_values: std::collections::HashMap::new(),
+        read_replica_source_db_instance_identifier: None,
+        read_replica_db_instance_identifiers: Vec::new(),
+    };
+
+    let result = instance_to_value(&inst);
+    state.instances.insert(identifier.to_string(), inst);
+
+    Ok(json!({ "DBInstance": result }))
+}
+
 pub fn modify_db_instance(
     state: &RdsState,
     input: &Value,
@@ -1549,5 +1634,109 @@ mod aurora_membership_tests {
         });
         let err = create_db_instance(&state, &input, &ctx()).unwrap_err();
         assert_eq!(err.code, "InvalidParameterValue");
+    }
+}
+
+#[cfg(test)]
+mod restore_instance_tests {
+    use super::*;
+    use crate::operations::snapshots::create_db_snapshot;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("rds", "us-east-1")
+    }
+
+    fn create_and_snapshot(state: &RdsState) {
+        create_db_instance(
+            state,
+            &json!({
+                "DBInstanceIdentifier": "prod-db",
+                "DBInstanceClass": "db.t3.micro",
+                "Engine": "postgres",
+                "EngineVersion": "15.4",
+                "MasterUsername": "admin",
+                "MasterUserPassword": "secret123",
+                "AllocatedStorage": 50,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        create_db_snapshot(
+            state,
+            &json!({ "DBSnapshotIdentifier": "snap-1", "DBInstanceIdentifier": "prod-db" }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn restore_inherits_snapshot_metadata() {
+        let state = RdsState::default();
+        create_and_snapshot(&state);
+
+        let resp = restore_db_instance_from_db_snapshot(
+            &state,
+            &json!({
+                "DBInstanceIdentifier": "restored-db",
+                "DBSnapshotIdentifier": "snap-1",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let inst = &resp["DBInstance"];
+        assert_eq!(inst["DBInstanceIdentifier"], "restored-db");
+        assert_eq!(inst["Engine"], "postgres");
+        assert_eq!(inst["EngineVersion"], "15.4");
+        assert_eq!(inst["MasterUsername"], "admin");
+        assert_eq!(inst["AllocatedStorage"], 50);
+        assert_eq!(inst["DBInstanceStatus"], "available");
+    }
+
+    #[test]
+    fn restore_honors_new_instance_class() {
+        let state = RdsState::default();
+        create_and_snapshot(&state);
+        let resp = restore_db_instance_from_db_snapshot(
+            &state,
+            &json!({
+                "DBInstanceIdentifier": "restored-db",
+                "DBSnapshotIdentifier": "snap-1",
+                "DBInstanceClass": "db.r5.large",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(resp["DBInstance"]["DBInstanceClass"], "db.r5.large");
+    }
+
+    #[test]
+    fn restore_unknown_snapshot_is_not_found() {
+        let state = RdsState::default();
+        let err = restore_db_instance_from_db_snapshot(
+            &state,
+            &json!({
+                "DBInstanceIdentifier": "restored-db",
+                "DBSnapshotIdentifier": "ghost",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "DBSnapshotNotFound");
+    }
+
+    #[test]
+    fn restore_onto_existing_identifier_is_rejected() {
+        let state = RdsState::default();
+        create_and_snapshot(&state);
+        let err = restore_db_instance_from_db_snapshot(
+            &state,
+            &json!({
+                "DBInstanceIdentifier": "prod-db",
+                "DBSnapshotIdentifier": "snap-1",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "DBInstanceAlreadyExists");
     }
 }

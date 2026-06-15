@@ -91,6 +91,9 @@ impl ServiceHandler for RdsService {
             "StartDBInstance" => operations::instances::start_db_instance(&state, &input, ctx),
             "StopDBInstance" => operations::instances::stop_db_instance(&state, &input, ctx),
             "RebootDBInstance" => operations::instances::reboot_db_instance(&state, &input, ctx),
+            "RestoreDBInstanceFromDBSnapshot" => {
+                operations::instances::restore_db_instance_from_db_snapshot(&state, &input, ctx)
+            }
 
             // DB Clusters
             "CreateDBCluster" => operations::clusters::create_db_cluster(&state, &input, ctx),
@@ -101,6 +104,9 @@ impl ServiceHandler for RdsService {
             "StopDBCluster" => operations::clusters::stop_db_cluster(&state, &input, ctx),
             "RebootDBCluster" => operations::clusters::reboot_db_cluster(&state, &input, ctx),
             "FailoverDBCluster" => operations::clusters::failover_db_cluster(&state, &input, ctx),
+            "RestoreDBClusterFromSnapshot" => {
+                operations::clusters::restore_db_cluster_from_snapshot(&state, &input, ctx)
+            }
             "StartActivityStream" => {
                 operations::clusters::start_activity_stream(&state, &input, ctx)
             }
