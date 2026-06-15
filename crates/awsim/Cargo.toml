@@ -32,6 +32,7 @@ awsim-eventbridge = { workspace = true }
 awsim-glue = { workspace = true }
 awsim-iam = { workspace = true }
 awsim-rds = { workspace = true }
+awsim-rds-data = { workspace = true, optional = true }
 awsim-kms = { workspace = true }
 awsim-lambda = { workspace = true }
 awsim-route53 = { workspace = true }
@@ -112,6 +113,11 @@ mime_guess = { workspace = true }
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"] }
+
+# The RDS Data API is opt-in: it backs SQL execution with a real
+# PostgreSQL launched via Docker, so it is left out of the default build.
+[features]
+rds-data = ["dep:awsim-rds-data"]
 
 # rlimit is POSIX only — the crate's Resource::NOFILE / get/setrlimit don't
 # exist on Windows, so the unix-targeted fd watcher / soft-limit bumper

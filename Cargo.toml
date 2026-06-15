@@ -51,6 +51,7 @@ members = [
   "crates/awsim-polly",
   "crates/awsim-qldb",
   "crates/awsim-rds",
+  "crates/awsim-rds-data",
   "crates/awsim-resourcegroupstagging",
   "crates/awsim-route53",
   "crates/awsim-s3",
@@ -124,6 +125,7 @@ awsim-pipes = { path = "crates/awsim-pipes", version = "0.5.0" }
 awsim-polly = { path = "crates/awsim-polly", version = "0.5.0" }
 awsim-qldb = { path = "crates/awsim-qldb", version = "0.5.0" }
 awsim-rds = { path = "crates/awsim-rds", version = "0.5.0" }
+awsim-rds-data = { path = "crates/awsim-rds-data", version = "0.5.0" }
 awsim-resourcegroupstagging = { path = "crates/awsim-resourcegroupstagging", version = "0.5.0" }
 awsim-route53 = { path = "crates/awsim-route53", version = "0.5.0" }
 awsim-s3 = { path = "crates/awsim-s3", version = "0.5.0" }
@@ -148,6 +150,7 @@ reqwest = { version = "0.12", default-features = false, features = [
 ] }
 # Async
 tokio = { version = "1", features = ["full"] }
+tokio-postgres = "0.7"
 tokio-stream = { version = "0.1", features = ["sync"] }
 
 # Web
