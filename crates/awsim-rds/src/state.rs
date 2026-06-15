@@ -303,6 +303,10 @@ pub struct DbSnapshot {
     pub allocated_storage: u32,
     pub status: String,
     pub created_at: String,
+    /// Master username carried over from the source instance, so a
+    /// restore can rebuild the instance with its original credentials.
+    #[serde(default)]
+    pub master_username: String,
     /// Tags copied from the source DB instance when
     /// `CopyTagsToSnapshot=true`, plus any tags supplied directly to
     /// CreateDBSnapshot.
