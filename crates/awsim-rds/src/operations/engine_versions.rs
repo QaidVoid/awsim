@@ -3,10 +3,11 @@ use serde_json::{Value, json};
 
 use super::{opt_str, require_str};
 use crate::error::invalid_parameter;
-use crate::ids::now_iso8601;
+use crate::ids::{default_engine_version, is_aurora_engine, now_iso8601};
 use crate::state::{DbCustomEngineVersion, RdsState};
 
-/// DescribeDBEngineVersions — return hardcoded engine versions for postgres, mysql, mariadb.
+/// `DescribeDBEngineVersions` returns the built-in engine versions for
+/// postgres, mysql, mariadb, aurora-postgresql, and aurora-mysql.
 ///
 /// Custom engine versions registered via [`create_custom_db_engine_version`]
 /// are merged into the result so callers polling for a fresh CEV's
@@ -127,6 +128,73 @@ pub fn describe_db_engine_versions(state: &RdsState, input: &Value) -> Result<Va
             "SupportsGlobalDatabases": false,
             "SupportsBabelfish": false,
         }),
+        // Aurora PostgreSQL
+        json!({
+            "Engine": "aurora-postgresql",
+            "EngineVersion": "16.1",
+            "DBParameterGroupFamily": "aurora-postgresql16",
+            "DBEngineDescription": "Aurora PostgreSQL",
+            "DBEngineVersionDescription": "Aurora PostgreSQL 16.1",
+            "ValidUpgradeTarget": { "member": [] },
+            "SupportedFeatureNames": { "member": [] },
+            "Status": "available",
+            "SupportsParallelQuery": false,
+            "SupportsGlobalDatabases": true,
+            "SupportsBabelfish": false,
+        }),
+        json!({
+            "Engine": "aurora-postgresql",
+            "EngineVersion": "15.4",
+            "DBParameterGroupFamily": "aurora-postgresql15",
+            "DBEngineDescription": "Aurora PostgreSQL",
+            "DBEngineVersionDescription": "Aurora PostgreSQL 15.4",
+            "ValidUpgradeTarget": { "member": [] },
+            "SupportedFeatureNames": { "member": [] },
+            "Status": "available",
+            "SupportsParallelQuery": false,
+            "SupportsGlobalDatabases": true,
+            "SupportsBabelfish": false,
+        }),
+        json!({
+            "Engine": "aurora-postgresql",
+            "EngineVersion": "14.9",
+            "DBParameterGroupFamily": "aurora-postgresql14",
+            "DBEngineDescription": "Aurora PostgreSQL",
+            "DBEngineVersionDescription": "Aurora PostgreSQL 14.9",
+            "ValidUpgradeTarget": { "member": [] },
+            "SupportedFeatureNames": { "member": [] },
+            "Status": "available",
+            "SupportsParallelQuery": false,
+            "SupportsGlobalDatabases": true,
+            "SupportsBabelfish": false,
+        }),
+        // Aurora MySQL
+        json!({
+            "Engine": "aurora-mysql",
+            "EngineVersion": "8.0.mysql_aurora.3.04.0",
+            "DBParameterGroupFamily": "aurora-mysql8.0",
+            "DBEngineDescription": "Aurora MySQL",
+            "DBEngineVersionDescription": "Aurora MySQL 3.04.0 (compatible with MySQL 8.0.28)",
+            "ValidUpgradeTarget": { "member": [] },
+            "SupportedFeatureNames": { "member": [] },
+            "Status": "available",
+            "SupportsParallelQuery": true,
+            "SupportsGlobalDatabases": true,
+            "SupportsBabelfish": false,
+        }),
+        json!({
+            "Engine": "aurora-mysql",
+            "EngineVersion": "8.0.mysql_aurora.3.02.0",
+            "DBParameterGroupFamily": "aurora-mysql8.0",
+            "DBEngineDescription": "Aurora MySQL",
+            "DBEngineVersionDescription": "Aurora MySQL 3.02.0 (compatible with MySQL 8.0.23)",
+            "ValidUpgradeTarget": { "member": [] },
+            "SupportedFeatureNames": { "member": [] },
+            "Status": "available",
+            "SupportsParallelQuery": true,
+            "SupportsGlobalDatabases": true,
+            "SupportsBabelfish": false,
+        }),
     ];
 
     let versions: Vec<Value> = all_versions
@@ -180,28 +248,56 @@ pub fn describe_db_engine_versions(state: &RdsState, input: &Value) -> Result<Va
     }))
 }
 
-/// DescribeOrderableDBInstanceOptions — return available instance classes per engine.
+/// `DescribeOrderableDBInstanceOptions` returns the available instance
+/// classes for an engine.
+///
+/// Aurora engines advertise cluster-capable classes (including the
+/// `db.serverless` class used by Serverless v2) backed by `aurora`
+/// storage, and report `SupportsClusters` so SDK clients pick the
+/// cluster creation path. Standalone engines keep the provisioned
+/// instance classes and the `gp2`/`io1`/`standard` storage tiers.
 pub fn describe_orderable_db_instance_options(input: &Value) -> Result<Value, AwsError> {
     let engine = opt_str(input, "Engine").unwrap_or("mysql");
+    let aurora = is_aurora_engine(engine);
+    let engine_version =
+        opt_str(input, "EngineVersion").unwrap_or_else(|| default_engine_version(engine));
 
-    let classes = vec![
-        "db.t3.micro",
-        "db.t3.small",
-        "db.t3.medium",
-        "db.t3.large",
-        "db.t3.xlarge",
-        "db.t3.2xlarge",
-        "db.m5.large",
-        "db.m5.xlarge",
-        "db.m5.2xlarge",
-        "db.m5.4xlarge",
-        "db.r5.large",
-        "db.r5.xlarge",
-        "db.r5.2xlarge",
-        "db.r5.4xlarge",
-    ];
+    let classes: &[&str] = if aurora {
+        &[
+            "db.serverless",
+            "db.t3.medium",
+            "db.t4g.medium",
+            "db.r6g.large",
+            "db.r6g.xlarge",
+            "db.r6g.2xlarge",
+            "db.r5.large",
+            "db.r5.xlarge",
+            "db.r5.2xlarge",
+        ]
+    } else {
+        &[
+            "db.t3.micro",
+            "db.t3.small",
+            "db.t3.medium",
+            "db.t3.large",
+            "db.t3.xlarge",
+            "db.t3.2xlarge",
+            "db.m5.large",
+            "db.m5.xlarge",
+            "db.m5.2xlarge",
+            "db.m5.4xlarge",
+            "db.r5.large",
+            "db.r5.xlarge",
+            "db.r5.2xlarge",
+            "db.r5.4xlarge",
+        ]
+    };
 
-    let storage_types = ["gp2", "io1", "standard"];
+    let storage_types: &[&str] = if aurora {
+        &["aurora"]
+    } else {
+        &["gp2", "io1", "standard"]
+    };
 
     let options: Vec<Value> = classes
         .iter()
@@ -209,18 +305,21 @@ pub fn describe_orderable_db_instance_options(input: &Value) -> Result<Value, Aw
             storage_types.iter().map(move |storage| {
                 json!({
                     "Engine": engine,
-                    "EngineVersion": "8.0.35",
+                    "EngineVersion": engine_version,
                     "DBInstanceClass": class,
                     "LicenseModel": "general-public-license",
                     "StorageType": storage,
                     "MultiAZCapable": true,
-                    "ReadReplicaCapable": true,
+                    // Aurora scales reads through cluster reader instances
+                    // rather than RDS-style read replicas.
+                    "ReadReplicaCapable": !aurora,
                     "Vpc": true,
                     "SupportsStorageEncryption": true,
-                    "SupportsIops": storage == &"io1",
+                    "SupportsIops": !aurora && storage == &"io1",
                     "SupportsEnhancedMonitoring": true,
                     "SupportsIAMDatabaseAuthentication": true,
                     "SupportsPerformanceInsights": true,
+                    "SupportsClusters": aurora,
                     "AvailabilityZones": { "member": [
                         { "Name": "us-east-1a" },
                         { "Name": "us-east-1b" },
@@ -589,5 +688,83 @@ mod custom_engine_version_tests {
         )
         .unwrap();
         assert!(state.custom_engine_versions.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod aurora_discovery_tests {
+    use super::*;
+
+    fn versions_for(engine: &str) -> Vec<Value> {
+        let state = RdsState::default();
+        let resp = describe_db_engine_versions(&state, &json!({ "Engine": engine })).unwrap();
+        resp["DBEngineVersions"]["DBEngineVersion"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn engine_versions_advertise_aurora_postgresql_families() {
+        let entries = versions_for("aurora-postgresql");
+        assert!(!entries.is_empty());
+        assert!(entries.iter().all(|v| v["Engine"] == "aurora-postgresql"));
+        assert!(
+            entries
+                .iter()
+                .any(|v| v["DBParameterGroupFamily"] == "aurora-postgresql16")
+        );
+        assert!(entries.iter().all(|v| v["SupportsGlobalDatabases"] == true));
+    }
+
+    #[test]
+    fn engine_versions_advertise_aurora_mysql_family() {
+        let entries = versions_for("aurora-mysql");
+        assert!(!entries.is_empty());
+        assert!(entries.iter().all(|v| v["Engine"] == "aurora-mysql"));
+        assert!(
+            entries
+                .iter()
+                .all(|v| v["DBParameterGroupFamily"] == "aurora-mysql8.0")
+        );
+        assert!(entries.iter().all(|v| v["SupportsParallelQuery"] == true));
+    }
+
+    #[test]
+    fn orderable_options_for_aurora_use_cluster_storage_and_classes() {
+        let resp = describe_orderable_db_instance_options(&json!({
+            "Engine": "aurora-postgresql",
+        }))
+        .unwrap();
+        let options = resp["OrderableDBInstanceOptions"]["OrderableDBInstanceOption"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert!(!options.is_empty());
+        assert!(options.iter().all(|o| o["StorageType"] == "aurora"));
+        assert!(options.iter().all(|o| o["SupportsClusters"] == true));
+        assert!(options.iter().all(|o| o["EngineVersion"] == "16.1"));
+        assert!(
+            options
+                .iter()
+                .any(|o| o["DBInstanceClass"] == "db.serverless")
+        );
+    }
+
+    #[test]
+    fn orderable_options_for_standalone_engine_stay_provisioned() {
+        let resp =
+            describe_orderable_db_instance_options(&json!({ "Engine": "postgres" })).unwrap();
+        let options = resp["OrderableDBInstanceOptions"]["OrderableDBInstanceOption"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert!(options.iter().all(|o| o["SupportsClusters"] == false));
+        assert!(options.iter().any(|o| o["StorageType"] == "gp2"));
+        assert!(
+            options
+                .iter()
+                .all(|o| o["DBInstanceClass"] != "db.serverless")
+        );
     }
 }
