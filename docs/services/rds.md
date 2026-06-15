@@ -2,6 +2,9 @@
 
 Amazon Relational Database Service for managing relational database instances and clusters.
 
+For the Aurora HTTP SQL endpoint, see the [RDS Data API](rds-data.md), an opt-in
+service backed by a real PostgreSQL via Docker.
+
 ## Configuration
 
 | Property | Value |
