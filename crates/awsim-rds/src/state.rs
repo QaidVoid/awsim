@@ -224,6 +224,30 @@ pub struct DbCluster {
     /// configured retention and cluster age on every describe.
     #[serde(default)]
     pub backtrack_window: Option<u64>,
+    /// Port the cluster's database engine listens on. Defaults to the
+    /// engine's standard port at creation.
+    #[serde(default)]
+    pub port: Option<u16>,
+    /// Number of days automated backups are retained. AWS defaults to 1.
+    #[serde(default)]
+    pub backup_retention_period: Option<u32>,
+    /// Daily time range during which automated backups are taken, in the
+    /// `hh24:mi-hh24:mi` UTC format.
+    #[serde(default)]
+    pub preferred_backup_window: Option<String>,
+    /// Weekly maintenance window in `ddd:hh24:mi-ddd:hh24:mi` format.
+    /// Staged `ModifyDBCluster` changes flush during this window.
+    #[serde(default)]
+    pub preferred_maintenance_window: Option<String>,
+    /// When true, the cluster cannot be deleted until the protection is
+    /// removed with `ModifyDBCluster`.
+    #[serde(default)]
+    pub deletion_protection: bool,
+    /// `ModifyDBCluster` with `ApplyImmediately=false` stages the
+    /// requested values here until the maintenance window applies them.
+    /// AWS surfaces the staged set on `PendingModifiedValues`.
+    #[serde(default)]
+    pub pending_modified_values: HashMap<String, serde_json::Value>,
 }
 
 fn default_activity_stream_status() -> String {

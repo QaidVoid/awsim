@@ -5,12 +5,13 @@ use serde_json::{Value, json};
 use crate::{
     error::{db_cluster_already_exists, db_cluster_not_found, invalid_parameter},
     ids::{
-        cluster_arn, cluster_endpoint, cluster_reader_endpoint, default_engine_version, now_iso8601,
+        cluster_arn, cluster_endpoint, cluster_reader_endpoint, default_engine_version,
+        default_port, now_iso8601,
     },
     state::{DbCluster, DbGlobalCluster, DbGlobalClusterMember, RdsState},
 };
 
-use super::{opt_str, require_str};
+use super::{opt_str, opt_u32, require_str};
 
 fn cluster_to_value(c: &DbCluster) -> Value {
     let mut obj = json!({
@@ -36,7 +37,24 @@ fn cluster_to_value(c: &DbCluster) -> Value {
         })).collect::<Vec<_>>(),
         "ClusterCreateTime": c.created_at,
         "ActivityStreamStatus": c.activity_stream_status,
+        "DeletionProtection": c.deletion_protection,
     });
+    if let Some(port) = c.port {
+        obj["Port"] = json!(port);
+    }
+    if let Some(days) = c.backup_retention_period {
+        obj["BackupRetentionPeriod"] = json!(days);
+    }
+    if let Some(ref w) = c.preferred_backup_window {
+        obj["PreferredBackupWindow"] = json!(w);
+    }
+    if let Some(ref w) = c.preferred_maintenance_window {
+        obj["PreferredMaintenanceWindow"] = json!(w);
+    }
+    if !c.pending_modified_values.is_empty() {
+        obj["PendingModifiedValues"] =
+            serde_json::to_value(&c.pending_modified_values).unwrap_or_else(|_| json!({}));
+    }
     if let Some(ref name) = c.activity_stream_kinesis_stream_name {
         obj["ActivityStreamKinesisStreamName"] = json!(name);
     }
@@ -134,6 +152,16 @@ pub fn create_db_cluster(
         activity_stream_kms_key_id: None,
         activity_stream_mode: None,
         backtrack_window,
+        port: Some(opt_u32(input, "Port").map_or_else(|| default_port(engine), |p| p as u16)),
+        backup_retention_period: Some(opt_u32(input, "BackupRetentionPeriod").unwrap_or(1)),
+        preferred_backup_window: opt_str(input, "PreferredBackupWindow").map(str::to_string),
+        preferred_maintenance_window: opt_str(input, "PreferredMaintenanceWindow")
+            .map(str::to_string),
+        deletion_protection: input
+            .get("DeletionProtection")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        pending_modified_values: std::collections::HashMap::new(),
     };
 
     let result = cluster_to_value(&cluster);
@@ -154,6 +182,16 @@ pub fn delete_db_cluster(
         .get(identifier)
         .ok_or_else(|| db_cluster_not_found(identifier))?
         .clone();
+
+    if cluster.deletion_protection {
+        return Err(AwsError::bad_request(
+            "InvalidParameterCombination",
+            format!(
+                "Cluster `{identifier}` cannot be deleted because deletion \
+                 protection is enabled. Disable it with ModifyDBCluster first."
+            ),
+        ));
+    }
 
     let result = cluster_to_value(&cluster);
     drop(cluster);
@@ -257,6 +295,268 @@ pub fn stop_activity_stream(
         "KinesisStreamName": kinesis_stream_name,
         "Status": "stopped",
     }))
+}
+
+/// `ModifyDBCluster` updates a cluster's scalar configuration.
+///
+/// `DeletionProtection`, `PreferredMaintenanceWindow`, and
+/// `VpcSecurityGroupIds` apply immediately. `BackupRetentionPeriod`,
+/// `PreferredBackupWindow`, `Port`, and `EngineVersion` follow the
+/// `ApplyImmediately` flag: when true they apply now, otherwise they are
+/// staged under `PendingModifiedValues` and flushed during the cluster's
+/// maintenance window.
+pub fn modify_db_cluster(
+    state: &RdsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let identifier = require_str(input, "DBClusterIdentifier")?;
+
+    let mut cluster = state
+        .clusters
+        .get_mut(identifier)
+        .ok_or_else(|| db_cluster_not_found(identifier))?;
+
+    if let Some(window) = opt_str(input, "PreferredMaintenanceWindow") {
+        crate::operations::instances::validate_maintenance_window(window)?;
+        cluster.preferred_maintenance_window = Some(window.to_string());
+    }
+    if let Some(protect) = input.get("DeletionProtection").and_then(|v| v.as_bool()) {
+        cluster.deletion_protection = protect;
+    }
+    if let Some(groups) = input["VpcSecurityGroupIds"].as_array() {
+        cluster.vpc_security_groups = groups
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect();
+    }
+
+    let apply_immediately = input
+        .get("ApplyImmediately")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if apply_immediately {
+        if let Some(days) = opt_u32(input, "BackupRetentionPeriod") {
+            cluster.backup_retention_period = Some(days);
+        }
+        if let Some(window) = opt_str(input, "PreferredBackupWindow") {
+            cluster.preferred_backup_window = Some(window.to_string());
+        }
+        if let Some(port) = opt_u32(input, "Port") {
+            cluster.port = Some(port as u16);
+        }
+        if let Some(version) = opt_str(input, "EngineVersion") {
+            cluster.engine_version = version.to_string();
+        }
+        cluster.pending_modified_values.clear();
+    } else {
+        if let Some(days) = opt_u32(input, "BackupRetentionPeriod") {
+            cluster
+                .pending_modified_values
+                .insert("BackupRetentionPeriod".to_string(), json!(days));
+        }
+        if let Some(window) = opt_str(input, "PreferredBackupWindow") {
+            cluster
+                .pending_modified_values
+                .insert("PreferredBackupWindow".to_string(), json!(window));
+        }
+        if let Some(port) = opt_u32(input, "Port") {
+            cluster
+                .pending_modified_values
+                .insert("Port".to_string(), json!(port));
+        }
+        if let Some(version) = opt_str(input, "EngineVersion") {
+            cluster
+                .pending_modified_values
+                .insert("EngineVersion".to_string(), json!(version));
+        }
+    }
+
+    let result = cluster_to_value(&cluster);
+    Ok(json!({ "DBCluster": result }))
+}
+
+/// Flush every staged key in a cluster's `pending_modified_values` back
+/// onto its live fields, then clear the map. This is the immediate-apply
+/// path that the maintenance window runs when `ApplyImmediately` was
+/// false. Pure and wall-clock-free so the tick driver decides when to
+/// call it.
+pub fn apply_pending_cluster_modified_values(cluster: &mut DbCluster) {
+    if cluster.pending_modified_values.is_empty() {
+        return;
+    }
+    if let Some(v) = cluster
+        .pending_modified_values
+        .get("BackupRetentionPeriod")
+        .and_then(|v| v.as_u64())
+    {
+        cluster.backup_retention_period = Some(v as u32);
+    }
+    if let Some(v) = cluster
+        .pending_modified_values
+        .get("PreferredBackupWindow")
+        .and_then(|v| v.as_str())
+    {
+        cluster.preferred_backup_window = Some(v.to_string());
+    }
+    if let Some(v) = cluster
+        .pending_modified_values
+        .get("Port")
+        .and_then(|v| v.as_u64())
+    {
+        cluster.port = Some(v as u16);
+    }
+    if let Some(v) = cluster
+        .pending_modified_values
+        .get("EngineVersion")
+        .and_then(|v| v.as_str())
+    {
+        cluster.engine_version = v.to_string();
+    }
+    cluster.pending_modified_values.clear();
+}
+
+/// Set the status of every member instance of a cluster. Cluster
+/// start/stop cascades to the instances that make up the cluster.
+fn set_member_status(state: &RdsState, members: &[String], status: &str) {
+    for member in members {
+        if let Some(mut inst) = state.instances.get_mut(member) {
+            inst.status = status.to_string();
+        }
+    }
+}
+
+/// `StartDBCluster` brings a stopped cluster and its members back to
+/// `available`.
+pub fn start_db_cluster(
+    state: &RdsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let identifier = require_str(input, "DBClusterIdentifier")?;
+
+    let mut cluster = state
+        .clusters
+        .get_mut(identifier)
+        .ok_or_else(|| db_cluster_not_found(identifier))?;
+    if cluster.status != "stopped" {
+        return Err(AwsError::bad_request(
+            "InvalidDBClusterStateFault",
+            format!(
+                "Cluster `{identifier}` must be in `stopped` state to start \
+                 (current: `{}`).",
+                cluster.status
+            ),
+        ));
+    }
+    cluster.status = "available".to_string();
+    let members = cluster.members.clone();
+    let result = cluster_to_value(&cluster);
+    drop(cluster);
+
+    set_member_status(state, &members, "available");
+    Ok(json!({ "DBCluster": result }))
+}
+
+/// `StopDBCluster` stops a running cluster and its members.
+pub fn stop_db_cluster(
+    state: &RdsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let identifier = require_str(input, "DBClusterIdentifier")?;
+
+    let mut cluster = state
+        .clusters
+        .get_mut(identifier)
+        .ok_or_else(|| db_cluster_not_found(identifier))?;
+    if cluster.status != "available" {
+        return Err(AwsError::bad_request(
+            "InvalidDBClusterStateFault",
+            format!(
+                "Cluster `{identifier}` must be in `available` state to stop \
+                 (current: `{}`).",
+                cluster.status
+            ),
+        ));
+    }
+    cluster.status = "stopped".to_string();
+    let members = cluster.members.clone();
+    let result = cluster_to_value(&cluster);
+    drop(cluster);
+
+    set_member_status(state, &members, "stopped");
+    Ok(json!({ "DBCluster": result }))
+}
+
+/// `RebootDBCluster` cycles a cluster. The transient `rebooting` state
+/// is collapsed, so the cluster returns to `available` immediately.
+pub fn reboot_db_cluster(
+    state: &RdsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let identifier = require_str(input, "DBClusterIdentifier")?;
+
+    let cluster = state
+        .clusters
+        .get(identifier)
+        .ok_or_else(|| db_cluster_not_found(identifier))?;
+    if cluster.status != "available" {
+        return Err(AwsError::bad_request(
+            "InvalidDBClusterStateFault",
+            format!(
+                "Cluster `{identifier}` must be in `available` state to reboot \
+                 (current: `{}`).",
+                cluster.status
+            ),
+        ));
+    }
+    let result = cluster_to_value(&cluster);
+    Ok(json!({ "DBCluster": result }))
+}
+
+/// `FailoverDBCluster` promotes a reader to writer.
+///
+/// With an explicit `TargetDBInstanceIdentifier`, that member is moved to
+/// the front of the member list (the writer position). Without one, the
+/// next reader is promoted. Promotion is expressed purely through member
+/// ordering, since `cluster_to_value` treats the first member as the
+/// writer.
+pub fn failover_db_cluster(
+    state: &RdsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let identifier = require_str(input, "DBClusterIdentifier")?;
+
+    let mut cluster = state
+        .clusters
+        .get_mut(identifier)
+        .ok_or_else(|| db_cluster_not_found(identifier))?;
+
+    if let Some(target) = opt_str(input, "TargetDBInstanceIdentifier") {
+        let pos = cluster.members.iter().position(|m| m == target);
+        match pos {
+            Some(idx) => {
+                let member = cluster.members.remove(idx);
+                cluster.members.insert(0, member);
+            }
+            None => {
+                return Err(invalid_parameter(format!(
+                    "Target instance `{target}` is not a member of cluster \
+                     `{identifier}`."
+                )));
+            }
+        }
+    } else if cluster.members.len() >= 2 {
+        let member = cluster.members.remove(1);
+        cluster.members.insert(0, member);
+    }
+
+    let result = cluster_to_value(&cluster);
+    Ok(json!({ "DBCluster": result }))
 }
 
 /// Extract a DB cluster identifier from a `DBCluster` ARN. The ARN
@@ -852,5 +1152,271 @@ mod cluster_tests {
         .unwrap();
         let cluster = &resp["DBClusters"]["DBCluster"][0];
         assert!(cluster.get("BacktrackWindow").is_none());
+    }
+}
+
+#[cfg(test)]
+mod cluster_lifecycle_tests {
+    use super::*;
+    use crate::operations::instances::create_db_instance;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("rds", "us-east-1")
+    }
+
+    fn create_cluster(state: &RdsState) {
+        create_db_cluster(
+            state,
+            &json!({
+                "DBClusterIdentifier": "aurora-pg",
+                "Engine": "aurora-postgresql",
+                "EngineVersion": "15.4",
+                "MasterUsername": "admin",
+                "MasterUserPassword": "secret123",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    fn add_member(state: &RdsState, instance_id: &str) {
+        create_db_instance(
+            state,
+            &json!({
+                "DBInstanceIdentifier": instance_id,
+                "DBInstanceClass": "db.r6g.large",
+                "Engine": "aurora-postgresql",
+                "DBClusterIdentifier": "aurora-pg",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    fn describe(state: &RdsState) -> Value {
+        let resp = describe_db_clusters(
+            state,
+            &json!({ "DBClusterIdentifier": "aurora-pg" }),
+            &ctx(),
+        )
+        .unwrap();
+        resp["DBClusters"]["DBCluster"][0].clone()
+    }
+
+    #[test]
+    fn modify_applies_deletion_protection_immediately() {
+        let state = RdsState::default();
+        create_cluster(&state);
+        modify_db_cluster(
+            &state,
+            &json!({ "DBClusterIdentifier": "aurora-pg", "DeletionProtection": true }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(describe(&state)["DeletionProtection"], true);
+    }
+
+    #[test]
+    fn modify_with_apply_immediately_changes_backup_retention() {
+        let state = RdsState::default();
+        create_cluster(&state);
+        modify_db_cluster(
+            &state,
+            &json!({
+                "DBClusterIdentifier": "aurora-pg",
+                "BackupRetentionPeriod": 7,
+                "ApplyImmediately": true,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let cluster = describe(&state);
+        assert_eq!(cluster["BackupRetentionPeriod"], 7);
+        assert!(cluster.get("PendingModifiedValues").is_none());
+    }
+
+    #[test]
+    fn modify_without_apply_immediately_stages_pending() {
+        let state = RdsState::default();
+        create_cluster(&state);
+        modify_db_cluster(
+            &state,
+            &json!({
+                "DBClusterIdentifier": "aurora-pg",
+                "EngineVersion": "16.1",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let cluster = describe(&state);
+        assert_eq!(cluster["EngineVersion"], "15.4");
+        assert_eq!(cluster["PendingModifiedValues"]["EngineVersion"], "16.1");
+    }
+
+    #[test]
+    fn pending_flush_applies_staged_values() {
+        let state = RdsState::default();
+        create_cluster(&state);
+        modify_db_cluster(
+            &state,
+            &json!({
+                "DBClusterIdentifier": "aurora-pg",
+                "EngineVersion": "16.1",
+                "Port": 6000,
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        {
+            let mut cluster = state.clusters.get_mut("aurora-pg").unwrap();
+            apply_pending_cluster_modified_values(&mut cluster);
+        }
+        let cluster = describe(&state);
+        assert_eq!(cluster["EngineVersion"], "16.1");
+        assert_eq!(cluster["Port"], 6000);
+        assert!(cluster.get("PendingModifiedValues").is_none());
+    }
+
+    #[test]
+    fn stop_then_start_cascades_to_members() {
+        let state = RdsState::default();
+        create_cluster(&state);
+        add_member(&state, "aurora-pg-1");
+
+        stop_db_cluster(
+            &state,
+            &json!({ "DBClusterIdentifier": "aurora-pg" }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(describe(&state)["Status"], "stopped");
+        assert_eq!(
+            state.instances.get("aurora-pg-1").unwrap().status,
+            "stopped"
+        );
+
+        start_db_cluster(
+            &state,
+            &json!({ "DBClusterIdentifier": "aurora-pg" }),
+            &ctx(),
+        )
+        .unwrap();
+        assert_eq!(describe(&state)["Status"], "available");
+        assert_eq!(
+            state.instances.get("aurora-pg-1").unwrap().status,
+            "available"
+        );
+    }
+
+    #[test]
+    fn stop_rejects_when_not_available() {
+        let state = RdsState::default();
+        create_cluster(&state);
+        stop_db_cluster(
+            &state,
+            &json!({ "DBClusterIdentifier": "aurora-pg" }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = stop_db_cluster(
+            &state,
+            &json!({ "DBClusterIdentifier": "aurora-pg" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidDBClusterStateFault");
+    }
+
+    #[test]
+    fn reboot_requires_available_state() {
+        let state = RdsState::default();
+        create_cluster(&state);
+        stop_db_cluster(
+            &state,
+            &json!({ "DBClusterIdentifier": "aurora-pg" }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = reboot_db_cluster(
+            &state,
+            &json!({ "DBClusterIdentifier": "aurora-pg" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidDBClusterStateFault");
+    }
+
+    #[test]
+    fn failover_to_target_promotes_it_to_writer() {
+        let state = RdsState::default();
+        create_cluster(&state);
+        add_member(&state, "aurora-pg-1");
+        add_member(&state, "aurora-pg-2");
+
+        failover_db_cluster(
+            &state,
+            &json!({
+                "DBClusterIdentifier": "aurora-pg",
+                "TargetDBInstanceIdentifier": "aurora-pg-2",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let members = describe(&state)["DBClusterMembers"].clone();
+        assert_eq!(members[0]["DBInstanceIdentifier"], "aurora-pg-2");
+        assert_eq!(members[0]["IsClusterWriter"], true);
+    }
+
+    #[test]
+    fn failover_without_target_promotes_next_reader() {
+        let state = RdsState::default();
+        create_cluster(&state);
+        add_member(&state, "aurora-pg-1");
+        add_member(&state, "aurora-pg-2");
+
+        failover_db_cluster(
+            &state,
+            &json!({ "DBClusterIdentifier": "aurora-pg" }),
+            &ctx(),
+        )
+        .unwrap();
+        let members = describe(&state)["DBClusterMembers"].clone();
+        assert_eq!(members[0]["DBInstanceIdentifier"], "aurora-pg-2");
+    }
+
+    #[test]
+    fn failover_rejects_unknown_target() {
+        let state = RdsState::default();
+        create_cluster(&state);
+        add_member(&state, "aurora-pg-1");
+        let err = failover_db_cluster(
+            &state,
+            &json!({
+                "DBClusterIdentifier": "aurora-pg",
+                "TargetDBInstanceIdentifier": "ghost",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+    }
+
+    #[test]
+    fn delete_rejected_when_deletion_protection_enabled() {
+        let state = RdsState::default();
+        create_cluster(&state);
+        modify_db_cluster(
+            &state,
+            &json!({ "DBClusterIdentifier": "aurora-pg", "DeletionProtection": true }),
+            &ctx(),
+        )
+        .unwrap();
+        let err = delete_db_cluster(
+            &state,
+            &json!({ "DBClusterIdentifier": "aurora-pg" }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterCombination");
     }
 }
