@@ -114,8 +114,8 @@ fn parse_serverless_scaling(input: &Value) -> Result<Option<ServerlessV2Scaling>
     let Some(cfg) = input.get("ServerlessV2ScalingConfiguration") else {
         return Ok(None);
     };
-    let min_capacity = cfg.get("MinCapacity").and_then(|v| v.as_f64());
-    let max_capacity = cfg.get("MaxCapacity").and_then(|v| v.as_f64());
+    let min_capacity = cfg.get("MinCapacity").and_then(super::coerce_f64);
+    let max_capacity = cfg.get("MaxCapacity").and_then(super::coerce_f64);
     let (Some(min_capacity), Some(max_capacity)) = (min_capacity, max_capacity) else {
         return Err(invalid_parameter(
             "ServerlessV2ScalingConfiguration requires numeric MinCapacity and MaxCapacity.",
@@ -180,7 +180,7 @@ pub fn create_db_cluster(
 
     let backtrack_window = input
         .get("BacktrackWindow")
-        .and_then(|v| v.as_u64())
+        .and_then(super::coerce_u64)
         .filter(|&w| w > 0);
     if backtrack_window.is_some() && engine != "aurora-mysql" {
         return Err(invalid_parameter(
@@ -221,7 +221,7 @@ pub fn create_db_cluster(
             .map(str::to_string),
         deletion_protection: input
             .get("DeletionProtection")
-            .and_then(|v| v.as_bool())
+            .and_then(super::coerce_bool)
             .unwrap_or(false),
         pending_modified_values: std::collections::HashMap::new(),
         engine_mode: Some(
@@ -232,7 +232,7 @@ pub fn create_db_cluster(
         serverless_v2_scaling,
         http_endpoint_enabled: input
             .get("EnableHttpEndpoint")
-            .and_then(|v| v.as_bool())
+            .and_then(super::coerce_bool)
             .unwrap_or(false),
         associated_roles: Vec::new(),
     };
@@ -303,7 +303,7 @@ pub fn restore_db_cluster_from_snapshot(
         preferred_maintenance_window: None,
         deletion_protection: input
             .get("DeletionProtection")
-            .and_then(|v| v.as_bool())
+            .and_then(super::coerce_bool)
             .unwrap_or(false),
         pending_modified_values: std::collections::HashMap::new(),
         engine_mode: Some(
@@ -403,7 +403,7 @@ pub fn start_activity_stream(
         "Mode": mode,
         "ApplyImmediately": input
             .get("ApplyImmediately")
-            .and_then(|v| v.as_bool())
+            .and_then(super::coerce_bool)
             .unwrap_or(false),
     }))
 }
@@ -473,7 +473,7 @@ pub fn modify_db_cluster(
         crate::operations::instances::validate_maintenance_window(window)?;
         cluster.preferred_maintenance_window = Some(window.to_string());
     }
-    if let Some(protect) = input.get("DeletionProtection").and_then(|v| v.as_bool()) {
+    if let Some(protect) = input.get("DeletionProtection").and_then(super::coerce_bool) {
         cluster.deletion_protection = protect;
     }
     if let Some(groups) = input["VpcSecurityGroupIds"].as_array() {
@@ -485,13 +485,13 @@ pub fn modify_db_cluster(
     if let Some(scaling) = parse_serverless_scaling(input)? {
         cluster.serverless_v2_scaling = Some(scaling);
     }
-    if let Some(enabled) = input.get("EnableHttpEndpoint").and_then(|v| v.as_bool()) {
+    if let Some(enabled) = input.get("EnableHttpEndpoint").and_then(super::coerce_bool) {
         cluster.http_endpoint_enabled = enabled;
     }
 
     let apply_immediately = input
         .get("ApplyImmediately")
-        .and_then(|v| v.as_bool())
+        .and_then(super::coerce_bool)
         .unwrap_or(false);
 
     if apply_immediately {
@@ -547,7 +547,7 @@ pub fn apply_pending_cluster_modified_values(cluster: &mut DbCluster) {
     if let Some(v) = cluster
         .pending_modified_values
         .get("BackupRetentionPeriod")
-        .and_then(|v| v.as_u64())
+        .and_then(super::coerce_u64)
     {
         cluster.backup_retention_period = Some(v as u32);
     }
@@ -561,7 +561,7 @@ pub fn apply_pending_cluster_modified_values(cluster: &mut DbCluster) {
     if let Some(v) = cluster
         .pending_modified_values
         .get("Port")
-        .and_then(|v| v.as_u64())
+        .and_then(super::coerce_u64)
     {
         cluster.port = Some(v as u16);
     }
@@ -912,11 +912,11 @@ pub fn create_global_cluster(
         status: "available".to_string(),
         storage_encrypted: input
             .get("StorageEncrypted")
-            .and_then(|v| v.as_bool())
+            .and_then(super::coerce_bool)
             .unwrap_or(false),
         deletion_protection: input
             .get("DeletionProtection")
-            .and_then(|v| v.as_bool())
+            .and_then(super::coerce_bool)
             .unwrap_or(false),
         database_name: opt_str(input, "DatabaseName").map(String::from),
         members,
@@ -1048,7 +1048,7 @@ pub fn describe_db_clusters(
         }));
     }
 
-    let max_records = cap_max_results(input["MaxRecords"].as_i64(), 100, 100);
+    let max_records = cap_max_results(super::coerce_i64(&input["MaxRecords"]), 100, 100);
     let mut items: Vec<(String, Value)> = state
         .clusters
         .iter()

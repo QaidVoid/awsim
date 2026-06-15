@@ -305,7 +305,7 @@ pub fn reset_db_cluster_parameter_group(
 
     let reset_all = input
         .get("ResetAllParameters")
-        .and_then(|v| v.as_bool())
+        .and_then(super::coerce_bool)
         .unwrap_or(false);
 
     if reset_all {

@@ -17,7 +17,7 @@ pub fn describe_db_engine_versions(state: &RdsState, input: &Value) -> Result<Va
     let filter_version = opt_str(input, "EngineVersion");
     let include_all = input
         .get("IncludeAll")
-        .and_then(|v| v.as_bool())
+        .and_then(super::coerce_bool)
         .unwrap_or(false);
 
     let all_versions: Vec<Value> = vec![
