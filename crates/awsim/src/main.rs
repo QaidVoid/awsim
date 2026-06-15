@@ -2865,6 +2865,19 @@ fn register_services(
     let rds_clone = Arc::clone(&rds);
     state.register(rds, vec![]);
 
+    // The RDS Data API is opt-in: it backs SQL execution with a real
+    // PostgreSQL via Docker, so it is only compiled and registered when
+    // the `rds-data` feature is enabled.
+    #[cfg(feature = "rds-data")]
+    {
+        let rds_data = awsim_rds_data::RdsDataService::new();
+        let rds_data_routes = {
+            use awsim_core::ServiceHandler;
+            rds_data.routes()
+        };
+        state.register(Arc::new(rds_data), rds_data_routes);
+    }
+
     let appsync = awsim_appsync::AppSyncService::new();
     let appsync_routes = {
         use awsim_core::ServiceHandler;
