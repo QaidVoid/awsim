@@ -3,7 +3,10 @@ use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
 use crate::{
-    error::{db_cluster_already_exists, db_cluster_not_found, invalid_parameter},
+    error::{
+        db_cluster_already_exists, db_cluster_not_found, db_cluster_snapshot_not_found,
+        invalid_parameter,
+    },
     ids::{
         cluster_arn, cluster_endpoint, cluster_reader_endpoint, default_engine_version,
         default_port, now_iso8601,
@@ -157,6 +160,77 @@ pub fn create_db_cluster(
         preferred_backup_window: opt_str(input, "PreferredBackupWindow").map(str::to_string),
         preferred_maintenance_window: opt_str(input, "PreferredMaintenanceWindow")
             .map(str::to_string),
+        deletion_protection: input
+            .get("DeletionProtection")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        pending_modified_values: std::collections::HashMap::new(),
+    };
+
+    let result = cluster_to_value(&cluster);
+    state.clusters.insert(identifier.to_string(), cluster);
+
+    Ok(json!({ "DBCluster": result }))
+}
+
+/// `RestoreDBClusterFromSnapshot` rebuilds an Aurora cluster from a
+/// cluster snapshot. Engine version and master username are inherited
+/// from the snapshot; the caller supplies the new cluster identifier and
+/// engine. The restored cluster starts with no members, exactly like a
+/// freshly created cluster, so instances are added afterwards.
+pub fn restore_db_cluster_from_snapshot(
+    state: &RdsState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let identifier = require_str(input, "DBClusterIdentifier")?;
+    let snapshot_id = require_str(input, "SnapshotIdentifier")?;
+    let engine = require_str(input, "Engine")?;
+
+    let snapshot = state
+        .cluster_snapshots
+        .get(snapshot_id)
+        .ok_or_else(|| db_cluster_snapshot_not_found(snapshot_id))?
+        .clone();
+
+    if state.clusters.contains_key(identifier) {
+        return Err(db_cluster_already_exists(identifier));
+    }
+
+    let engine_version = opt_str(input, "EngineVersion")
+        .unwrap_or(snapshot.engine_version.as_str())
+        .to_string();
+
+    let vpc_security_groups: Vec<String> = input["VpcSecurityGroupIds"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let cluster = DbCluster {
+        identifier: identifier.to_string(),
+        arn: cluster_arn(&ctx.partition, &ctx.region, &ctx.account_id, identifier),
+        engine: engine.to_string(),
+        engine_version,
+        status: "available".to_string(),
+        master_username: snapshot.master_username.clone(),
+        endpoint: cluster_endpoint(identifier, &ctx.region),
+        reader_endpoint: cluster_reader_endpoint(identifier, &ctx.region),
+        members: vec![],
+        created_at: now_iso8601(),
+        vpc_security_groups,
+        activity_stream_status: "stopped".to_string(),
+        activity_stream_kinesis_stream_name: None,
+        activity_stream_kms_key_id: None,
+        activity_stream_mode: None,
+        backtrack_window: None,
+        port: Some(default_port(engine)),
+        backup_retention_period: Some(opt_u32(input, "BackupRetentionPeriod").unwrap_or(1)),
+        preferred_backup_window: None,
+        preferred_maintenance_window: None,
         deletion_protection: input
             .get("DeletionProtection")
             .and_then(|v| v.as_bool())
@@ -1418,5 +1492,102 @@ mod cluster_lifecycle_tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "InvalidParameterCombination");
+    }
+}
+
+#[cfg(test)]
+mod restore_cluster_tests {
+    use super::*;
+    use crate::operations::cluster_snapshots::create_db_cluster_snapshot;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("rds", "us-east-1")
+    }
+
+    fn create_and_snapshot(state: &RdsState) {
+        create_db_cluster(
+            state,
+            &json!({
+                "DBClusterIdentifier": "aurora-pg",
+                "Engine": "aurora-postgresql",
+                "EngineVersion": "15.4",
+                "MasterUsername": "clusteradmin",
+                "MasterUserPassword": "secret123",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        create_db_cluster_snapshot(
+            state,
+            &json!({
+                "DBClusterSnapshotIdentifier": "csnap-1",
+                "DBClusterIdentifier": "aurora-pg",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn restore_inherits_snapshot_metadata() {
+        let state = RdsState::default();
+        create_and_snapshot(&state);
+
+        let resp = restore_db_cluster_from_snapshot(
+            &state,
+            &json!({
+                "DBClusterIdentifier": "restored-cluster",
+                "SnapshotIdentifier": "csnap-1",
+                "Engine": "aurora-postgresql",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let cluster = &resp["DBCluster"];
+        assert_eq!(cluster["DBClusterIdentifier"], "restored-cluster");
+        assert_eq!(cluster["Engine"], "aurora-postgresql");
+        assert_eq!(cluster["EngineVersion"], "15.4");
+        assert_eq!(cluster["MasterUsername"], "clusteradmin");
+        assert_eq!(cluster["Status"], "available");
+        assert!(cluster["DBClusterMembers"].as_array().unwrap().is_empty());
+        assert!(
+            cluster["Endpoint"]
+                .as_str()
+                .unwrap()
+                .contains("restored-cluster.cluster")
+        );
+    }
+
+    #[test]
+    fn restore_unknown_snapshot_is_not_found() {
+        let state = RdsState::default();
+        let err = restore_db_cluster_from_snapshot(
+            &state,
+            &json!({
+                "DBClusterIdentifier": "restored-cluster",
+                "SnapshotIdentifier": "ghost",
+                "Engine": "aurora-postgresql",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "DBClusterSnapshotNotFoundFault");
+    }
+
+    #[test]
+    fn restore_onto_existing_cluster_is_rejected() {
+        let state = RdsState::default();
+        create_and_snapshot(&state);
+        let err = restore_db_cluster_from_snapshot(
+            &state,
+            &json!({
+                "DBClusterIdentifier": "aurora-pg",
+                "SnapshotIdentifier": "csnap-1",
+                "Engine": "aurora-postgresql",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "DBClusterAlreadyExistsFault");
     }
 }
