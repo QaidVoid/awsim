@@ -115,6 +115,21 @@ aws --endpoint-url http://localhost:4566 \
 
 - `DescribeDBParameterGroups` — list parameter groups
 
+### DB Cluster Parameter Groups (Aurora)
+- `CreateDBClusterParameterGroup` creates a cluster-level parameter group
+  - Input: `DBClusterParameterGroupName`, `DBParameterGroupFamily` (e.g., `aurora-postgresql16`, `aurora-mysql8.0`), `Description`
+- `DescribeDBClusterParameterGroups` lists cluster parameter groups
+  - Input: optional `DBClusterParameterGroupName`
+- `DeleteDBClusterParameterGroup` deletes a cluster parameter group
+  - Input: `DBClusterParameterGroupName`
+- `DescribeDBClusterParameters` returns the resolved parameter list for a group
+  - Input: `DBClusterParameterGroupName`, optional `Source` (`user` or `engine-default`)
+  - Returns: engine defaults for the family with caller overrides applied, each tagged with its `Source`
+- `ModifyDBClusterParameterGroup` overrides one or more parameter values
+  - Input: `DBClusterParameterGroupName`, `Parameters` (list of `{ParameterName, ParameterValue, ApplyMethod}`)
+- `ResetDBClusterParameterGroup` returns parameters to their engine defaults
+  - Input: `DBClusterParameterGroupName`, optional `ResetAllParameters`, `Parameters`
+
 ### DB Snapshots
 - `CreateDBSnapshot` — create a snapshot from an existing instance
   - Input: `DBSnapshotIdentifier`, `DBInstanceIdentifier`
