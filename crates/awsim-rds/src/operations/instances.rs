@@ -1414,3 +1414,140 @@ mod modify_db_instance_tests {
         assert!(!maintenance_window_matches("garbage", UNIX_EPOCH));
     }
 }
+
+#[cfg(test)]
+mod aurora_membership_tests {
+    use super::*;
+    use crate::operations::clusters::{create_db_cluster, describe_db_clusters};
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("rds", "us-east-1")
+    }
+
+    fn create_cluster(state: &RdsState, id: &str) {
+        let input = json!({
+            "DBClusterIdentifier": id,
+            "Engine": "aurora-postgresql",
+            "EngineVersion": "15.4",
+            "MasterUsername": "clusteradmin",
+            "MasterUserPassword": "secret123",
+        });
+        create_db_cluster(state, &input, &ctx()).unwrap();
+    }
+
+    fn add_instance(state: &RdsState, instance_id: &str, cluster_id: &str) -> Value {
+        let input = json!({
+            "DBInstanceIdentifier": instance_id,
+            "DBInstanceClass": "db.r6g.large",
+            "Engine": "aurora-postgresql",
+            "DBClusterIdentifier": cluster_id,
+        });
+        create_db_instance(state, &input, &ctx()).unwrap()
+    }
+
+    fn members(state: &RdsState, cluster_id: &str) -> Vec<Value> {
+        let resp =
+            describe_db_clusters(state, &json!({ "DBClusterIdentifier": cluster_id }), &ctx())
+                .unwrap();
+        resp["DBClusters"]["DBCluster"][0]["DBClusterMembers"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn first_instance_joins_as_writer() {
+        let state = RdsState::default();
+        create_cluster(&state, "aurora-pg");
+        add_instance(&state, "aurora-pg-1", "aurora-pg");
+
+        let members = members(&state, "aurora-pg");
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0]["DBInstanceIdentifier"], "aurora-pg-1");
+        assert_eq!(members[0]["IsClusterWriter"], true);
+    }
+
+    #[test]
+    fn second_instance_joins_as_reader() {
+        let state = RdsState::default();
+        create_cluster(&state, "aurora-pg");
+        add_instance(&state, "aurora-pg-1", "aurora-pg");
+        add_instance(&state, "aurora-pg-2", "aurora-pg");
+
+        let members = members(&state, "aurora-pg");
+        assert_eq!(members.len(), 2);
+        assert_eq!(members[0]["IsClusterWriter"], true);
+        assert_eq!(members[1]["DBInstanceIdentifier"], "aurora-pg-2");
+        assert_eq!(members[1]["IsClusterWriter"], false);
+    }
+
+    #[test]
+    fn deleting_writer_promotes_next_member() {
+        let state = RdsState::default();
+        create_cluster(&state, "aurora-pg");
+        add_instance(&state, "aurora-pg-1", "aurora-pg");
+        add_instance(&state, "aurora-pg-2", "aurora-pg");
+
+        delete_db_instance(
+            &state,
+            &json!({ "DBInstanceIdentifier": "aurora-pg-1" }),
+            &ctx(),
+        )
+        .unwrap();
+
+        let members = members(&state, "aurora-pg");
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0]["DBInstanceIdentifier"], "aurora-pg-2");
+        assert_eq!(members[0]["IsClusterWriter"], true);
+    }
+
+    #[test]
+    fn instance_inherits_cluster_master_username_and_version() {
+        let state = RdsState::default();
+        create_cluster(&state, "aurora-pg");
+        let resp = add_instance(&state, "aurora-pg-1", "aurora-pg");
+
+        assert_eq!(resp["DBInstance"]["MasterUsername"], "clusteradmin");
+        assert_eq!(resp["DBInstance"]["EngineVersion"], "15.4");
+        assert_eq!(resp["DBInstance"]["StorageType"], "aurora");
+    }
+
+    #[test]
+    fn aurora_instance_requires_a_cluster() {
+        let state = RdsState::default();
+        let input = json!({
+            "DBInstanceIdentifier": "orphan",
+            "DBInstanceClass": "db.r6g.large",
+            "Engine": "aurora-mysql",
+        });
+        let err = create_db_instance(&state, &input, &ctx()).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+    }
+
+    #[test]
+    fn aurora_instance_rejects_unknown_cluster() {
+        let state = RdsState::default();
+        let input = json!({
+            "DBInstanceIdentifier": "ghost",
+            "DBInstanceClass": "db.r6g.large",
+            "Engine": "aurora-postgresql",
+            "DBClusterIdentifier": "missing-cluster",
+        });
+        let err = create_db_instance(&state, &input, &ctx()).unwrap_err();
+        assert_eq!(err.code, "DBClusterNotFoundFault");
+    }
+
+    #[test]
+    fn aurora_instance_engine_must_match_cluster() {
+        let state = RdsState::default();
+        create_cluster(&state, "aurora-pg");
+        let input = json!({
+            "DBInstanceIdentifier": "mismatch",
+            "DBInstanceClass": "db.r6g.large",
+            "Engine": "aurora-mysql",
+            "DBClusterIdentifier": "aurora-pg",
+        });
+        let err = create_db_instance(&state, &input, &ctx()).unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+    }
+}
