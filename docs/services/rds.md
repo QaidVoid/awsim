@@ -75,9 +75,28 @@ aws --endpoint-url http://localhost:4566 \
 
 - `DeleteDBCluster` — delete a database cluster
   - Input: `DBClusterIdentifier`, optional `SkipFinalSnapshot`
+  - Rejected with `InvalidParameterCombination` when the cluster has deletion protection enabled
 
 - `DescribeDBClusters` — list database clusters with optional filter
   - Input: optional `DBClusterIdentifier`, `Filters`, `MaxRecords`, `Marker`
+
+- `ModifyDBCluster` updates a cluster's configuration
+  - Input: `DBClusterIdentifier`, optional `BackupRetentionPeriod`, `PreferredBackupWindow`, `PreferredMaintenanceWindow`, `Port`, `EngineVersion`, `VpcSecurityGroupIds`, `DeletionProtection`, `ApplyImmediately`
+  - `DeletionProtection`, `PreferredMaintenanceWindow`, and security groups apply immediately; the rest follow `ApplyImmediately`, staging under `PendingModifiedValues` and flushing during the maintenance window when deferred
+
+- `StartDBCluster` starts a stopped cluster and its member instances
+  - Input: `DBClusterIdentifier`
+  - Status transitions: `stopped` to `available`
+
+- `StopDBCluster` stops a running cluster and its member instances
+  - Input: `DBClusterIdentifier`
+  - Status transitions: `available` to `stopped`
+
+- `RebootDBCluster` reboots a cluster
+  - Input: `DBClusterIdentifier`
+
+- `FailoverDBCluster` promotes a reader to writer
+  - Input: `DBClusterIdentifier`, optional `TargetDBInstanceIdentifier` (promotes the named member, otherwise the next reader)
 
 ### DB Subnet Groups
 - `CreateDBSubnetGroup` — create a subnet group for database placement
