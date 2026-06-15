@@ -13,6 +13,8 @@ pub struct RdsState {
     pub tags: DashMap<String, HashMap<String, String>>,
     /// snapshot identifier → DbSnapshot
     pub snapshots: DashMap<String, DbSnapshot>,
+    /// cluster snapshot identifier → DbClusterSnapshot
+    pub cluster_snapshots: DashMap<String, DbClusterSnapshot>,
     /// cluster identifier → Vec<DbClusterEndpoint>
     pub cluster_endpoints: DashMap<String, Vec<DbClusterEndpoint>>,
     /// (engine, version) → DbCustomEngineVersion
@@ -35,6 +37,8 @@ pub struct RdsStateSnapshot {
     pub parameter_groups: Vec<DbParameterGroup>,
     pub tags: Vec<(String, HashMap<String, String>)>,
     pub snapshots: Vec<DbSnapshot>,
+    #[serde(default)]
+    pub cluster_snapshots: Vec<DbClusterSnapshot>,
     pub cluster_endpoints: Vec<DbClusterEndpoint>,
     #[serde(default)]
     pub custom_engine_versions: Vec<DbCustomEngineVersion>,
@@ -262,6 +266,36 @@ pub struct DbSnapshot {
     #[serde(default)]
     pub kms_key_id: Option<String>,
     /// Source region for cross-region copy bookkeeping.
+    #[serde(default)]
+    pub source_region: Option<String>,
+}
+
+/// A point-in-time snapshot of an Aurora DB cluster. Cluster snapshots
+/// are distinct from instance snapshots: they capture the cluster's
+/// shared storage volume rather than a single instance, and AWS exposes
+/// them through a separate `cluster-snapshot` ARN namespace and the
+/// `DBClusterSnapshot*` operations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DbClusterSnapshot {
+    pub snapshot_identifier: String,
+    pub arn: String,
+    pub cluster_identifier: String,
+    pub engine: String,
+    pub engine_version: String,
+    pub master_username: String,
+    pub status: String,
+    pub created_at: String,
+    /// `manual` for user-requested snapshots; `automated` is reserved
+    /// for the backup-retention snapshots AWS takes on a schedule.
+    pub snapshot_type: String,
+    /// KmsKeyId carried over from the source cluster or supplied on copy.
+    #[serde(default)]
+    pub kms_key_id: Option<String>,
+    /// Tags copied from the source cluster plus any supplied to the
+    /// create or copy request.
+    #[serde(default)]
+    pub tags: HashMap<String, String>,
+    /// Source region recorded for cross-region copy bookkeeping.
     #[serde(default)]
     pub source_region: Option<String>,
 }

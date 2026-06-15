@@ -165,6 +165,20 @@ impl ServiceHandler for RdsService {
             }
             "CopyDBSnapshot" => operations::snapshots::copy_db_snapshot(&state, &input, ctx),
 
+            // Cluster snapshots
+            "CreateDBClusterSnapshot" => {
+                operations::cluster_snapshots::create_db_cluster_snapshot(&state, &input, ctx)
+            }
+            "DeleteDBClusterSnapshot" => {
+                operations::cluster_snapshots::delete_db_cluster_snapshot(&state, &input, ctx)
+            }
+            "DescribeDBClusterSnapshots" => {
+                operations::cluster_snapshots::describe_db_cluster_snapshots(&state, &input, ctx)
+            }
+            "CopyDBClusterSnapshot" => {
+                operations::cluster_snapshots::copy_db_cluster_snapshot(&state, &input, ctx)
+            }
+
             // Event subscriptions (stub)
             "DescribeEventSubscriptions" => {
                 operations::snapshots::describe_event_subscriptions(&input)
@@ -243,6 +257,9 @@ impl ServiceHandler for RdsService {
             snapshot
                 .snapshots
                 .extend(state.snapshots.iter().map(|e| e.value().clone()));
+            snapshot
+                .cluster_snapshots
+                .extend(state.cluster_snapshots.iter().map(|e| e.value().clone()));
             snapshot.cluster_endpoints.extend(
                 state
                     .cluster_endpoints
@@ -300,6 +317,11 @@ impl ServiceHandler for RdsService {
         for snap in snapshot.snapshots {
             state
                 .snapshots
+                .insert(snap.snapshot_identifier.clone(), snap);
+        }
+        for snap in snapshot.cluster_snapshots {
+            state
+                .cluster_snapshots
                 .insert(snap.snapshot_identifier.clone(), snap);
         }
         for ep in snapshot.cluster_endpoints {

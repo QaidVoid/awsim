@@ -1,4 +1,5 @@
 pub mod cluster_endpoints;
+pub mod cluster_snapshots;
 pub mod clusters;
 pub mod engine_versions;
 pub mod instances;
