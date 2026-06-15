@@ -70,6 +70,20 @@ pub fn db_cluster_snapshot_not_found(identifier: &str) -> AwsError {
     )
 }
 
+pub fn db_cluster_role_already_exists(role_arn: &str) -> AwsError {
+    AwsError::conflict(
+        "DBClusterRoleAlreadyExists",
+        format!("Role is already associated with the cluster: {role_arn}"),
+    )
+}
+
+pub fn db_cluster_role_not_found(role_arn: &str) -> AwsError {
+    AwsError::not_found(
+        "DBClusterRoleNotFound",
+        format!("Role is not associated with the cluster: {role_arn}"),
+    )
+}
+
 pub fn missing_parameter(param: &str) -> AwsError {
     AwsError::bad_request(
         "MissingParameter",

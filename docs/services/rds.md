@@ -70,8 +70,8 @@ aws --endpoint-url http://localhost:4566 \
 
 ### DB Clusters (Aurora)
 - `CreateDBCluster` — create an Aurora database cluster
-  - Input: `DBClusterIdentifier`, `Engine` (`aurora`, `aurora-mysql`, `aurora-postgresql`), `MasterUsername`, `MasterUserPassword`, `DatabaseName`, `VpcSecurityGroupIds`
-  - Returns: `DBCluster` with `DBClusterIdentifier`, `Status`, `Endpoint`, `ReaderEndpoint`
+  - Input: `DBClusterIdentifier`, `Engine` (`aurora`, `aurora-mysql`, `aurora-postgresql`), `MasterUsername`, `MasterUserPassword`, `DatabaseName`, `VpcSecurityGroupIds`, optional `EngineMode`, `ServerlessV2ScalingConfiguration` (`{MinCapacity, MaxCapacity}`), `EnableHttpEndpoint`
+  - Returns: `DBCluster` with `DBClusterIdentifier`, `Status`, `Endpoint`, `ReaderEndpoint`, `EngineMode`, `HttpEndpointEnabled`, `AssociatedRoles`
 
 - `DeleteDBCluster` — delete a database cluster
   - Input: `DBClusterIdentifier`, optional `SkipFinalSnapshot`
@@ -97,6 +97,16 @@ aws --endpoint-url http://localhost:4566 \
 
 - `FailoverDBCluster` promotes a reader to writer
   - Input: `DBClusterIdentifier`, optional `TargetDBInstanceIdentifier` (promotes the named member, otherwise the next reader)
+
+- `ModifyDBCluster` also accepts `ServerlessV2ScalingConfiguration` and `EnableHttpEndpoint`, applied immediately
+
+- `AddRoleToDBCluster` associates an IAM role with the cluster
+  - Input: `DBClusterIdentifier`, `RoleArn`, optional `FeatureName`
+- `RemoveRoleFromDBCluster` detaches an IAM role from the cluster
+  - Input: `DBClusterIdentifier`, `RoleArn`, optional `FeatureName`
+
+- `EnableHttpEndpoint` / `DisableHttpEndpoint` toggle the RDS Data API HTTP endpoint
+  - Input: `ResourceArn` (the cluster ARN)
 
 ### DB Subnet Groups
 - `CreateDBSubnetGroup` — create a subnet group for database placement

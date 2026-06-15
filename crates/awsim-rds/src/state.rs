@@ -186,6 +186,26 @@ pub struct DbEndpoint {
     pub port: u16,
 }
 
+/// Aurora Serverless v2 capacity range, measured in Aurora Capacity
+/// Units. The cluster scales its writer and readers between these bounds
+/// on demand.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerlessV2Scaling {
+    pub min_capacity: f64,
+    pub max_capacity: f64,
+}
+
+/// An IAM role associated with a cluster, granting it access to another
+/// AWS service (for example S3 for `aurora_load_from_s3`). AWS reports
+/// these under `DescribeDBClusters.AssociatedRoles`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DbClusterRole {
+    pub role_arn: String,
+    #[serde(default)]
+    pub feature_name: Option<String>,
+    pub status: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DbCluster {
     pub identifier: String,
@@ -252,6 +272,18 @@ pub struct DbCluster {
     /// AWS surfaces the staged set on `PendingModifiedValues`.
     #[serde(default)]
     pub pending_modified_values: HashMap<String, serde_json::Value>,
+    /// `provisioned` or `serverless`. AWS defaults to `provisioned`.
+    #[serde(default)]
+    pub engine_mode: Option<String>,
+    /// Aurora Serverless v2 capacity range, when configured.
+    #[serde(default)]
+    pub serverless_v2_scaling: Option<ServerlessV2Scaling>,
+    /// Whether the RDS Data API HTTP endpoint is enabled for the cluster.
+    #[serde(default)]
+    pub http_endpoint_enabled: bool,
+    /// IAM roles associated with the cluster via `AddRoleToDBCluster`.
+    #[serde(default)]
+    pub associated_roles: Vec<DbClusterRole>,
 }
 
 fn default_activity_stream_status() -> String {
