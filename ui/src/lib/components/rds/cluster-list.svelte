@@ -4,22 +4,25 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { EmptyState } from '$lib/components/service';
+	import ClusterDetail from '$lib/components/rds/cluster-detail.svelte';
 	import Loader2 from '@lucide/svelte/icons/loader-2';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import Boxes from '@lucide/svelte/icons/boxes';
 	import Search from '@lucide/svelte/icons/search';
+	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 
 	interface Props {
 		clusters: DBCluster[];
 		loading: boolean;
-		selectedId: string | null;
-		onSelect: (cluster: DBCluster) => void;
 		onRefresh: () => void;
+		onDeleteCluster: (cluster: DBCluster) => void;
+		onChanged: () => Promise<void>;
 	}
 
-	let { clusters, loading, selectedId, onSelect, onRefresh }: Props = $props();
+	let { clusters, loading, onRefresh, onDeleteCluster, onChanged }: Props = $props();
 
 	let filter = $state('');
+	let expandedId = $state<string | null>(null);
 
 	let visible = $derived(
 		filter.trim().length === 0
@@ -28,6 +31,10 @@
 					c.identifier.toLowerCase().includes(filter.trim().toLowerCase())
 				)
 	);
+
+	function toggle(id: string) {
+		expandedId = expandedId === id ? null : id;
+	}
 </script>
 
 <div class="flex h-full min-h-0 flex-col">
@@ -76,6 +83,7 @@
 						class="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur-sm"
 					>
 						<tr>
+							<th class="w-6"></th>
 							<th class="px-3 py-2 text-left font-medium text-muted-foreground">
 								Identifier
 							</th>
@@ -90,12 +98,19 @@
 					<tbody>
 						{#each visible as cluster (cluster.identifier)}
 							<tr
-								class="cursor-pointer border-b border-border/40 transition-colors hover:bg-muted/40 {selectedId ===
+								class="cursor-pointer border-b border-border/40 transition-colors hover:bg-muted/40 {expandedId ===
 								cluster.identifier
 									? 'bg-muted/60'
 									: ''}"
-								onclick={() => onSelect(cluster)}
+								onclick={() => toggle(cluster.identifier)}
 							>
+								<td class="pl-2 text-muted-foreground">
+									<ChevronRight
+										class="size-3.5 transition-transform {expandedId === cluster.identifier
+											? 'rotate-90'
+											: ''}"
+									/>
+								</td>
 								<td class="px-3 py-2 font-mono">{cluster.identifier}</td>
 								<td class="px-3 py-2 font-mono">
 									{cluster.engine}{cluster.engineVersion ? ` ${cluster.engineVersion}` : ''}
@@ -112,6 +127,13 @@
 									{cluster.endpoint || '—'}{cluster.port ? `:${cluster.port}` : ''}
 								</td>
 							</tr>
+							{#if expandedId === cluster.identifier}
+								<tr>
+									<td colspan="6" class="p-0">
+										<ClusterDetail {cluster} {onDeleteCluster} {onChanged} />
+									</td>
+								</tr>
+							{/if}
 						{/each}
 					</tbody>
 				</table>

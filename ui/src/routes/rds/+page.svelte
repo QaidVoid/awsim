@@ -15,9 +15,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Tabs, TabsContent, TabsList, TabsTrigger } from '$lib/components/ui/tabs';
 	import InstanceList from '$lib/components/rds/instance-list.svelte';
-	import InstanceDetailSheet from '$lib/components/rds/instance-detail-sheet.svelte';
 	import ClusterList from '$lib/components/rds/cluster-list.svelte';
-	import ClusterDetailSheet from '$lib/components/rds/cluster-detail-sheet.svelte';
 	import SnapshotsTab from '$lib/components/rds/snapshots-tab.svelte';
 	import CreateInstanceDialog from '$lib/components/rds/create-instance-dialog.svelte';
 	import CreateClusterDialog from '$lib/components/rds/create-cluster-dialog.svelte';
@@ -35,12 +33,6 @@
 			set: (v) => (active = v)
 		})
 	);
-
-	let selected = $state<DBInstance | null>(null);
-	let detailOpen = $state(false);
-
-	let selectedCluster = $state<DBCluster | null>(null);
-	let clusterDetailOpen = $state(false);
 
 	let createOpen = $state(false);
 	let createClusterOpen = $state(false);
@@ -71,25 +63,11 @@
 		clustersLoading = true;
 		try {
 			clusters = await describeDBClusters();
-			if (selectedCluster) {
-				selectedCluster =
-					clusters.find((c) => c.identifier === selectedCluster?.identifier) ?? null;
-			}
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to list clusters');
 		} finally {
 			clustersLoading = false;
 		}
-	}
-
-	function openInstance(inst: DBInstance) {
-		selected = inst;
-		detailOpen = true;
-	}
-
-	function openCluster(cluster: DBCluster) {
-		selectedCluster = cluster;
-		clusterDetailOpen = true;
 	}
 
 	function askDelete(inst: DBInstance) {
@@ -109,7 +87,6 @@
 			await deleteDBInstance(pendingDelete.identifier);
 			toast.success(`Delete requested for ${pendingDelete.identifier}`);
 			confirmOpen = false;
-			detailOpen = false;
 			pendingDelete = null;
 			await refresh();
 		} catch (e) {
@@ -126,7 +103,6 @@
 			await deleteDBCluster(pendingClusterDelete.identifier);
 			toast.success(`Delete requested for ${pendingClusterDelete.identifier}`);
 			clusterConfirmOpen = false;
-			clusterDetailOpen = false;
 			pendingClusterDelete = null;
 			await refreshClusters();
 		} catch (e) {
@@ -178,21 +154,15 @@
 
 		<div class="min-h-0 flex-1">
 			<TabsContent value="instances" class="m-0 h-full">
-				<InstanceList
-					{instances}
-					{loading}
-					selectedId={selected?.identifier ?? null}
-					onSelect={openInstance}
-					onRefresh={refresh}
-				/>
+				<InstanceList {instances} {loading} onRefresh={refresh} onDeleteInstance={askDelete} />
 			</TabsContent>
 			<TabsContent value="clusters" class="m-0 h-full">
 				<ClusterList
 					{clusters}
 					loading={clustersLoading}
-					selectedId={selectedCluster?.identifier ?? null}
-					onSelect={openCluster}
 					onRefresh={refreshClusters}
+					onDeleteCluster={askDeleteCluster}
+					onChanged={refreshClusters}
 				/>
 			</TabsContent>
 			<TabsContent value="snapshots" class="m-0 h-full">
@@ -201,13 +171,6 @@
 		</div>
 	</Tabs>
 </ServicePage>
-
-<InstanceDetailSheet
-	bind:open={detailOpen}
-	instance={selected}
-	onClose={() => (detailOpen = false)}
-	onDeleteInstance={askDelete}
-/>
 
 <CreateInstanceDialog
 	bind:open={createOpen}
@@ -222,14 +185,6 @@
 	busy={confirmBusy}
 	onConfirm={confirmDelete}
 	onClose={() => (confirmOpen = false)}
-/>
-
-<ClusterDetailSheet
-	bind:open={clusterDetailOpen}
-	cluster={selectedCluster}
-	onClose={() => (clusterDetailOpen = false)}
-	onDeleteCluster={askDeleteCluster}
-	onChanged={refreshClusters}
 />
 
 <CreateClusterDialog

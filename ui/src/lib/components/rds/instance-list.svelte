@@ -4,22 +4,24 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { EmptyState } from '$lib/components/service';
+	import InstanceDetail from '$lib/components/rds/instance-detail.svelte';
 	import Loader2 from '@lucide/svelte/icons/loader-2';
 	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 	import Database from '@lucide/svelte/icons/database';
 	import Search from '@lucide/svelte/icons/search';
+	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 
 	interface Props {
 		instances: DBInstance[];
 		loading: boolean;
-		selectedId: string | null;
-		onSelect: (instance: DBInstance) => void;
 		onRefresh: () => void;
+		onDeleteInstance: (instance: DBInstance) => void;
 	}
 
-	let { instances, loading, selectedId, onSelect, onRefresh }: Props = $props();
+	let { instances, loading, onRefresh, onDeleteInstance }: Props = $props();
 
 	let filter = $state('');
+	let expandedId = $state<string | null>(null);
 
 	let visible = $derived(
 		filter.trim().length === 0
@@ -28,6 +30,10 @@
 					i.identifier.toLowerCase().includes(filter.trim().toLowerCase())
 				)
 	);
+
+	function toggle(id: string) {
+		expandedId = expandedId === id ? null : id;
+	}
 </script>
 
 <div class="flex h-full min-h-0 flex-col">
@@ -76,6 +82,7 @@
 						class="sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur-sm"
 					>
 						<tr>
+							<th class="w-6"></th>
 							<th class="px-3 py-2 text-left font-medium text-muted-foreground">
 								Identifier
 							</th>
@@ -88,12 +95,19 @@
 					<tbody>
 						{#each visible as inst (inst.identifier)}
 							<tr
-								class="cursor-pointer border-b border-border/40 transition-colors hover:bg-muted/40 {selectedId ===
+								class="cursor-pointer border-b border-border/40 transition-colors hover:bg-muted/40 {expandedId ===
 								inst.identifier
 									? 'bg-muted/60'
 									: ''}"
-								onclick={() => onSelect(inst)}
+								onclick={() => toggle(inst.identifier)}
 							>
+								<td class="pl-2 text-muted-foreground">
+									<ChevronRight
+										class="size-3.5 transition-transform {expandedId === inst.identifier
+											? 'rotate-90'
+											: ''}"
+									/>
+								</td>
 								<td class="px-3 py-2 font-mono">{inst.identifier}</td>
 								<td class="px-3 py-2 font-mono">
 									{inst.engine}{inst.engineVersion ? ` ${inst.engineVersion}` : ''}
@@ -110,6 +124,13 @@
 									{inst.endpoint || '—'}{inst.port ? `:${inst.port}` : ''}
 								</td>
 							</tr>
+							{#if expandedId === inst.identifier}
+								<tr>
+									<td colspan="6" class="p-0">
+										<InstanceDetail instance={inst} {onDeleteInstance} />
+									</td>
+								</tr>
+							{/if}
 						{/each}
 					</tbody>
 				</table>
