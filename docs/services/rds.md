@@ -112,13 +112,13 @@ aws --endpoint-url http://localhost:4566 \
   - Input: `SourceDBSnapshotIdentifier`, `TargetDBSnapshotIdentifier`
 
 ### Engine Versions & Options
-- `DescribeDBEngineVersions` — return available engine versions for `postgres`, `mysql`, `mariadb`
+- `DescribeDBEngineVersions` returns available engine versions for `postgres`, `mysql`, `mariadb`, `aurora-postgresql`, and `aurora-mysql`
   - Input: optional `Engine`, `EngineVersion` filters
-  - Returns: list of engine versions with `DBParameterGroupFamily`, `Status`
+  - Returns: list of engine versions with `DBParameterGroupFamily`, `Status`, and Aurora capability flags (`SupportsGlobalDatabases`, `SupportsParallelQuery`)
 
-- `DescribeOrderableDBInstanceOptions` — return available instance classes per engine
-  - Input: `Engine`
-  - Returns: instance classes (`db.t3.micro` through `db.r5.4xlarge`) with storage type options
+- `DescribeOrderableDBInstanceOptions` returns available instance classes per engine
+  - Input: `Engine`, optional `EngineVersion`
+  - Returns: instance classes with their storage type options. Aurora engines return cluster-capable classes (including `db.serverless`) backed by `aurora` storage and report `SupportsClusters`; standalone engines return `db.t3.micro` through `db.r5.4xlarge` on `gp2`/`io1`/`standard` storage
 
 ### DB Cluster Endpoints
 - `DescribeDBClusterEndpoints` — list writer, reader, and custom cluster endpoints
