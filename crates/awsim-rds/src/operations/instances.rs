@@ -6,10 +6,13 @@ use serde_json::{Value, json};
 
 use crate::{
     error::{
-        db_instance_already_exists, db_instance_not_found, invalid_db_instance_state,
-        invalid_parameter,
+        db_cluster_not_found, db_instance_already_exists, db_instance_not_found,
+        invalid_db_instance_state, invalid_parameter,
     },
-    ids::{default_engine_version, default_port, instance_arn, instance_endpoint, now_iso8601},
+    ids::{
+        default_engine_version, default_port, instance_arn, instance_endpoint, is_aurora_engine,
+        now_iso8601,
+    },
     state::{DbEndpoint, DbInstance, RdsState},
 };
 
@@ -167,8 +170,10 @@ fn default_license_model(engine: &str) -> Option<&'static str> {
 /// out-of-range values with InvalidParameterValue.
 fn allowed_log_exports(engine: &str) -> &'static [&'static str] {
     match engine {
-        "mysql" | "mariadb" => &["audit", "error", "general", "slowquery"],
-        "postgres" => &["postgresql", "upgrade"],
+        "mysql" | "mariadb" | "aurora" | "aurora-mysql" => {
+            &["audit", "error", "general", "slowquery"]
+        }
+        "postgres" | "aurora-postgresql" => &["postgresql", "upgrade"],
         "oracle-ee" | "oracle-se" | "oracle-se1" | "oracle-se2" => {
             &["alert", "audit", "listener", "trace"]
         }
@@ -197,10 +202,7 @@ pub fn create_db_instance(
     validate_db_identifier(identifier)?;
     let instance_class = require_str(input, "DBInstanceClass")?;
     let engine = require_str(input, "Engine")?;
-    let master_username = require_str(input, "MasterUsername")?;
-    // MasterUserPassword is required for real AWS but we just store it (never expose it).
-    let _master_password = require_str(input, "MasterUserPassword")?;
-    let allocated_storage = opt_u32(input, "AllocatedStorage").unwrap_or(20);
+    let cluster_identifier = opt_str(input, "DBClusterIdentifier").map(|s| s.to_string());
     let subnet_group_name = opt_str(input, "DBSubnetGroupName").map(|s| s.to_string());
     let multi_az = opt_bool(input, "MultiAZ").unwrap_or(false);
     let publicly_accessible = opt_bool(input, "PubliclyAccessible").unwrap_or(false);
@@ -239,6 +241,7 @@ pub fn create_db_instance(
     match engine {
         "postgres" | "mysql" | "mariadb" | "oracle-ee" | "sqlserver-ex" | "sqlserver-se"
         | "sqlserver-ee" | "sqlserver-web" | "docdb" | "neptune" => {}
+        _ if is_aurora_engine(engine) => {}
         _ => {
             return Err(invalid_parameter(format!("Unknown engine: {engine}")));
         }
@@ -248,9 +251,48 @@ pub fn create_db_instance(
         return Err(db_instance_already_exists(identifier));
     }
 
-    let engine_version = opt_str(input, "EngineVersion")
-        .unwrap_or_else(|| default_engine_version(engine))
-        .to_string();
+    // Aurora instances are members of a DB cluster and inherit their
+    // credentials, engine version, and storage from it. A standalone
+    // instance instead carries its own master credentials and storage.
+    let (master_username, engine_version, allocated_storage, storage_type) =
+        if is_aurora_engine(engine) {
+            let cluster_id = cluster_identifier.as_deref().ok_or_else(|| {
+                invalid_parameter(format!(
+                    "The engine '{engine}' requires a DBClusterIdentifier; \
+                     create the DB cluster before adding instances to it."
+                ))
+            })?;
+            let cluster = state
+                .clusters
+                .get(cluster_id)
+                .ok_or_else(|| db_cluster_not_found(cluster_id))?;
+            if cluster.engine != engine {
+                return Err(invalid_parameter(format!(
+                    "DB instance engine '{engine}' does not match the engine \
+                     '{}' of cluster '{cluster_id}'.",
+                    cluster.engine
+                )));
+            }
+            (
+                cluster.master_username.clone(),
+                cluster.engine_version.clone(),
+                1,
+                "aurora".to_string(),
+            )
+        } else {
+            let master_username = require_str(input, "MasterUsername")?.to_string();
+            // MasterUserPassword is required by AWS but only stored, never exposed.
+            let _master_password = require_str(input, "MasterUserPassword")?;
+            let engine_version = opt_str(input, "EngineVersion")
+                .unwrap_or_else(|| default_engine_version(engine))
+                .to_string();
+            (
+                master_username,
+                engine_version,
+                opt_u32(input, "AllocatedStorage").unwrap_or(20),
+                storage_type,
+            )
+        };
 
     let license_model = match opt_str(input, "LicenseModel") {
         Some(lm) => {
@@ -320,7 +362,7 @@ pub fn create_db_instance(
         engine: engine.to_string(),
         engine_version,
         status: "available".to_string(),
-        master_username: master_username.to_string(),
+        master_username,
         allocated_storage,
         endpoint: Some(DbEndpoint { address, port }),
         subnet_group_name,
@@ -328,7 +370,7 @@ pub fn create_db_instance(
         multi_az,
         publicly_accessible,
         storage_type,
-        cluster_identifier: opt_str(input, "DBClusterIdentifier").map(|s| s.to_string()),
+        cluster_identifier: cluster_identifier.clone(),
         created_at: now_iso8601(),
         iops,
         storage_throughput,
@@ -345,6 +387,17 @@ pub fn create_db_instance(
     };
 
     let result = instance_to_value(&inst);
+
+    // Register the instance as a member of its cluster. Membership order
+    // determines roles: the first instance to join is the writer and the
+    // rest are read replicas (see `cluster_to_value`).
+    if let Some(ref cluster_id) = cluster_identifier
+        && let Some(mut cluster) = state.clusters.get_mut(cluster_id)
+        && !cluster.members.iter().any(|m| m == identifier)
+    {
+        cluster.members.push(identifier.to_string());
+    }
+
     state.instances.insert(identifier.to_string(), inst);
 
     Ok(json!({ "DBInstance": result }))
@@ -379,6 +432,7 @@ pub fn delete_db_instance(
     }
 
     let source = inst.read_replica_source_db_instance_identifier.clone();
+    let cluster_identifier = inst.cluster_identifier.clone();
 
     let result = instance_to_value(&inst);
     drop(inst);
@@ -393,6 +447,15 @@ pub fn delete_db_instance(
         src_inst
             .read_replica_db_instance_identifiers
             .retain(|id| id != identifier);
+    }
+
+    // Drop the instance from its cluster's member list. Removing the
+    // first member (the writer) promotes the next member to writer,
+    // since membership order is preserved.
+    if let Some(ref cluster_id) = cluster_identifier
+        && let Some(mut cluster) = state.clusters.get_mut(cluster_id)
+    {
+        cluster.members.retain(|m| m != identifier);
     }
 
     Ok(json!({ "DBInstance": result }))
