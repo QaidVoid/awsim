@@ -6,6 +6,9 @@ pub fn default_engine_version(engine: &str) -> &'static str {
         "mariadb" => "10.11.6",
         "docdb" => "5.0.0",
         "neptune" => "1.3.1.0",
+        "aurora-postgresql" => "16.1",
+        "aurora-mysql" => "8.0.mysql_aurora.3.04.0",
+        "aurora" => "5.7.mysql_aurora.2.11.4",
         _ => "1.0",
     }
 }
@@ -13,11 +16,21 @@ pub fn default_engine_version(engine: &str) -> &'static str {
 /// Return the default port for a given engine name.
 pub fn default_port(engine: &str) -> u16 {
     match engine {
-        "postgres" => 5432,
+        "postgres" | "aurora-postgresql" => 5432,
         "docdb" => 27017,
         "neptune" => 8182,
         _ => 3306,
     }
+}
+
+/// Whether `engine` names an Aurora engine.
+///
+/// Aurora instances belong to a DB cluster rather than standing alone,
+/// which changes how `CreateDBInstance` validates and provisions them:
+/// credentials, engine version, and storage are inherited from the
+/// parent cluster instead of being supplied per instance.
+pub fn is_aurora_engine(engine: &str) -> bool {
+    matches!(engine, "aurora" | "aurora-mysql" | "aurora-postgresql")
 }
 
 /// Build an endpoint address for a DB instance.

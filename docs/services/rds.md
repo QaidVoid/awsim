@@ -43,8 +43,9 @@ aws --endpoint-url http://localhost:4566 \
 
 ### DB Instances
 - `CreateDBInstance` — create a new database instance
-  - Input: `DBInstanceIdentifier` (required, unique name), `DBInstanceClass` (e.g., `db.t3.micro`, `db.r5.large`), `Engine` (`mysql`, `postgres`, `mariadb`, `oracle-se2`, `sqlserver-se`), `MasterUsername`, `MasterUserPassword`, `AllocatedStorage` (GB), `DBName`, `VpcSecurityGroupIds`, `DBSubnetGroupName`, `PubliclyAccessible`, `MultiAZ`, `EngineVersion`, `StorageType` (`gp2`, `io1`, `standard`)
+  - Input: `DBInstanceIdentifier` (required, unique name), `DBInstanceClass` (e.g., `db.t3.micro`, `db.r5.large`), `Engine` (`mysql`, `postgres`, `mariadb`, `oracle-se2`, `sqlserver-se`, `aurora-mysql`, `aurora-postgresql`), `MasterUsername`, `MasterUserPassword`, `AllocatedStorage` (GB), `DBName`, `VpcSecurityGroupIds`, `DBSubnetGroupName`, `PubliclyAccessible`, `MultiAZ`, `EngineVersion`, `StorageType` (`gp2`, `io1`, `standard`)
   - Returns: `DBInstance` with `DBInstanceIdentifier`, `DBInstanceStatus` (`creating` → `available`), `Endpoint` (`{Address, Port}`), `DBInstanceArn`
+  - Aurora engines require a `DBClusterIdentifier` naming an existing cluster. The instance joins that cluster's member list and inherits its master username, engine version, and storage; the first instance to join is the writer and later instances are read replicas.
 
 - `DeleteDBInstance` — delete a database instance
   - Input: `DBInstanceIdentifier`, optional `SkipFinalSnapshot`, `FinalDBSnapshotIdentifier`
