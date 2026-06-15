@@ -111,6 +111,17 @@ aws --endpoint-url http://localhost:4566 \
 - `CopyDBSnapshot` — copy snapshot metadata to a new identifier (stub)
   - Input: `SourceDBSnapshotIdentifier`, `TargetDBSnapshotIdentifier`
 
+### DB Cluster Snapshots (Aurora)
+- `CreateDBClusterSnapshot` creates a manual snapshot of an Aurora cluster
+  - Input: `DBClusterSnapshotIdentifier`, `DBClusterIdentifier`, optional `Tags`
+  - Returns: `DBClusterSnapshot` with `Status` (`available`), inheriting the cluster's engine, version, and master username
+- `DescribeDBClusterSnapshots` lists cluster snapshots with optional filters
+  - Input: optional `DBClusterSnapshotIdentifier`, `DBClusterIdentifier`, `SnapshotType`, `MaxRecords`, `Marker`
+- `DeleteDBClusterSnapshot` deletes a cluster snapshot
+  - Input: `DBClusterSnapshotIdentifier`
+- `CopyDBClusterSnapshot` copies a cluster snapshot to a new identifier
+  - Input: `SourceDBClusterSnapshotIdentifier`, `TargetDBClusterSnapshotIdentifier`, optional `KmsKeyId`, `SourceRegion`, `Tags`
+
 ### Engine Versions & Options
 - `DescribeDBEngineVersions` returns available engine versions for `postgres`, `mysql`, `mariadb`, `aurora-postgresql`, and `aurora-mysql`
   - Input: optional `Engine`, `EngineVersion` filters
