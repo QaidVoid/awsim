@@ -56,6 +56,20 @@ pub fn db_parameter_group_not_found(name: &str) -> AwsError {
     )
 }
 
+pub fn db_cluster_snapshot_already_exists(identifier: &str) -> AwsError {
+    AwsError::conflict(
+        "DBClusterSnapshotAlreadyExistsFault",
+        format!("DB cluster snapshot already exists: {identifier}"),
+    )
+}
+
+pub fn db_cluster_snapshot_not_found(identifier: &str) -> AwsError {
+    AwsError::not_found(
+        "DBClusterSnapshotNotFoundFault",
+        format!("DB cluster snapshot not found: {identifier}"),
+    )
+}
+
 pub fn missing_parameter(param: &str) -> AwsError {
     AwsError::bad_request(
         "MissingParameter",

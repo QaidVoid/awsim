@@ -73,6 +73,16 @@ pub fn snapshot_arn(partition: &str, region: &str, account: &str, identifier: &s
     format!("arn:{partition}:rds:{region}:{account}:snapshot:{identifier}")
 }
 
+/// Build a DB cluster snapshot ARN.
+pub fn cluster_snapshot_arn(
+    partition: &str,
+    region: &str,
+    account: &str,
+    identifier: &str,
+) -> String {
+    format!("arn:{partition}:rds:{region}:{account}:cluster-snapshot:{identifier}")
+}
+
 /// Build a DB cluster endpoint ARN.
 pub fn cluster_endpoint_arn(
     partition: &str,
