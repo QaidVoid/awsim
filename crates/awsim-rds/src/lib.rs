@@ -96,6 +96,11 @@ impl ServiceHandler for RdsService {
             "CreateDBCluster" => operations::clusters::create_db_cluster(&state, &input, ctx),
             "DeleteDBCluster" => operations::clusters::delete_db_cluster(&state, &input, ctx),
             "DescribeDBClusters" => operations::clusters::describe_db_clusters(&state, &input, ctx),
+            "ModifyDBCluster" => operations::clusters::modify_db_cluster(&state, &input, ctx),
+            "StartDBCluster" => operations::clusters::start_db_cluster(&state, &input, ctx),
+            "StopDBCluster" => operations::clusters::stop_db_cluster(&state, &input, ctx),
+            "RebootDBCluster" => operations::clusters::reboot_db_cluster(&state, &input, ctx),
+            "FailoverDBCluster" => operations::clusters::failover_db_cluster(&state, &input, ctx),
             "StartActivityStream" => {
                 operations::clusters::start_activity_stream(&state, &input, ctx)
             }
@@ -227,6 +232,20 @@ impl ServiceHandler for RdsService {
                     .unwrap_or(false);
                 if matches {
                     operations::instances::apply_pending_modified_values(inst);
+                }
+            }
+            for mut entry in state.clusters.iter_mut() {
+                let cluster = entry.value_mut();
+                if cluster.pending_modified_values.is_empty() {
+                    continue;
+                }
+                let matches = cluster
+                    .preferred_maintenance_window
+                    .as_deref()
+                    .map(|w| operations::instances::maintenance_window_matches(w, now))
+                    .unwrap_or(false);
+                if matches {
+                    operations::clusters::apply_pending_cluster_modified_values(cluster);
                 }
             }
         }

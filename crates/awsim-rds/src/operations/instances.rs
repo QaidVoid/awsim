@@ -89,7 +89,7 @@ fn instance_to_value(inst: &DbInstance) -> Value {
 /// we enforce shape and field ranges but skip the duration check
 /// since clients almost universally pass the AWS-default 30-minute
 /// shape.
-fn validate_maintenance_window(s: &str) -> Result<(), AwsError> {
+pub(crate) fn validate_maintenance_window(s: &str) -> Result<(), AwsError> {
     let (start, end) = s.split_once('-').ok_or_else(|| {
         invalid_parameter(format!(
             "PreferredMaintenanceWindow `{s}` must be in `ddd:hh24:mi-ddd:hh24:mi` form."
