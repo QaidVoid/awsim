@@ -31,16 +31,19 @@ fn cluster_to_value(c: &DbCluster) -> Value {
         "ReaderEndpoint": c.reader_endpoint,
         // AWS Aurora clusters have exactly one writer (the first member,
         // by AddRoleToDBCluster ordering); the rest are read replicas.
-        "DBClusterMembers": c.members.iter().enumerate().map(|(i, m)| json!({
+        // Each list is wrapped in its AWS member element so the query/XML
+        // serializer emits `<DBClusterMembers><DBClusterMember>...` the way
+        // the AWS SDK expects to parse it.
+        "DBClusterMembers": { "DBClusterMember": c.members.iter().enumerate().map(|(i, m)| json!({
             "DBInstanceIdentifier": m,
             "IsClusterWriter": i == 0,
             "DBClusterParameterGroupStatus": "in-sync",
             "PromotionTier": i + 1,
-        })).collect::<Vec<_>>(),
-        "VpcSecurityGroups": c.vpc_security_groups.iter().map(|sg| json!({
+        })).collect::<Vec<_>>() },
+        "VpcSecurityGroups": { "VpcSecurityGroupMembership": c.vpc_security_groups.iter().map(|sg| json!({
             "VpcSecurityGroupId": sg,
             "Status": "active",
-        })).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>() },
         "ClusterCreateTime": c.created_at,
         "ActivityStreamStatus": c.activity_stream_status,
         "DeletionProtection": c.deletion_protection,
@@ -88,8 +91,9 @@ fn cluster_to_value(c: &DbCluster) -> Value {
             "MaxCapacity": scaling.max_capacity,
         });
     }
-    obj["AssociatedRoles"] = json!(
-        c.associated_roles
+    obj["AssociatedRoles"] = json!({
+        "DBClusterRole": c
+            .associated_roles
             .iter()
             .map(|r| {
                 let mut role = json!({ "RoleArn": r.role_arn, "Status": r.status });
@@ -99,7 +103,7 @@ fn cluster_to_value(c: &DbCluster) -> Value {
                 role
             })
             .collect::<Vec<_>>()
-    );
+    });
     obj
 }
 
@@ -842,11 +846,11 @@ fn global_cluster_to_value(c: &DbGlobalCluster) -> Value {
         "DeletionProtection": c.deletion_protection,
         "DatabaseName": c.database_name,
         "ClusterCreateTime": c.created_at,
-        "GlobalClusterMembers": c.members.iter().map(|m| json!({
+        "GlobalClusterMembers": { "GlobalClusterMember": c.members.iter().map(|m| json!({
             "DBClusterArn": m.db_cluster_arn,
             "Readers": [],
             "IsWriter": m.role == "primary",
-        })).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>() },
     })
 }
 
@@ -1253,7 +1257,7 @@ mod cluster_tests {
             &ctx(),
         )
         .unwrap();
-        let members = resp["GlobalCluster"]["GlobalClusterMembers"]
+        let members = resp["GlobalCluster"]["GlobalClusterMembers"]["GlobalClusterMember"]
             .as_array()
             .unwrap();
         assert_eq!(members.len(), 1);
@@ -1354,7 +1358,7 @@ mod cluster_tests {
             &ctx(),
         )
         .unwrap();
-        let members = resp["GlobalCluster"]["GlobalClusterMembers"]
+        let members = resp["GlobalCluster"]["GlobalClusterMembers"]["GlobalClusterMember"]
             .as_array()
             .unwrap();
         assert!(members.is_empty());
@@ -1613,7 +1617,7 @@ mod cluster_lifecycle_tests {
             &ctx(),
         )
         .unwrap();
-        let members = describe(&state)["DBClusterMembers"].clone();
+        let members = describe(&state)["DBClusterMembers"]["DBClusterMember"].clone();
         assert_eq!(members[0]["DBInstanceIdentifier"], "aurora-pg-2");
         assert_eq!(members[0]["IsClusterWriter"], true);
     }
@@ -1631,7 +1635,7 @@ mod cluster_lifecycle_tests {
             &ctx(),
         )
         .unwrap();
-        let members = describe(&state)["DBClusterMembers"].clone();
+        let members = describe(&state)["DBClusterMembers"]["DBClusterMember"].clone();
         assert_eq!(members[0]["DBInstanceIdentifier"], "aurora-pg-2");
     }
 
@@ -1726,7 +1730,12 @@ mod restore_cluster_tests {
         assert_eq!(cluster["EngineVersion"], "15.4");
         assert_eq!(cluster["MasterUsername"], "clusteradmin");
         assert_eq!(cluster["Status"], "available");
-        assert!(cluster["DBClusterMembers"].as_array().unwrap().is_empty());
+        assert!(
+            cluster["DBClusterMembers"]["DBClusterMember"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
         assert!(
             cluster["Endpoint"]
                 .as_str()
@@ -1867,7 +1876,7 @@ mod serverless_and_roles_tests {
             &ctx(),
         )
         .unwrap();
-        let roles = describe(&state, "aurora-sv2")["AssociatedRoles"].clone();
+        let roles = describe(&state, "aurora-sv2")["AssociatedRoles"]["DBClusterRole"].clone();
         assert_eq!(roles.as_array().unwrap().len(), 1);
         assert_eq!(roles[0]["RoleArn"], role);
         assert_eq!(roles[0]["Status"], "ACTIVE");
@@ -1879,7 +1888,7 @@ mod serverless_and_roles_tests {
         )
         .unwrap();
         assert!(
-            describe(&state, "aurora-sv2")["AssociatedRoles"]
+            describe(&state, "aurora-sv2")["AssociatedRoles"]["DBClusterRole"]
                 .as_array()
                 .unwrap()
                 .is_empty()
@@ -1938,5 +1947,57 @@ mod serverless_and_roles_tests {
 
         disable_http_endpoint(&state, &json!({ "ResourceArn": arn }), &ctx()).unwrap();
         assert_eq!(describe(&state, "aurora-pg")["HttpEndpointEnabled"], false);
+    }
+}
+
+#[cfg(test)]
+mod wire_format_tests {
+    use super::*;
+    use awsim_core::protocol::query::json_to_xml_fields;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("rds", "us-east-1")
+    }
+
+    #[test]
+    fn cluster_members_serialize_with_member_wrapper() {
+        let state = RdsState::default();
+        create_db_cluster(
+            &state,
+            &json!({
+                "DBClusterIdentifier": "c1",
+                "Engine": "aurora-postgresql",
+                "MasterUsername": "admin",
+                "MasterUserPassword": "secret123",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        state
+            .clusters
+            .get_mut("c1")
+            .unwrap()
+            .members
+            .push("c1-writer".to_string());
+
+        let cluster = state.clusters.get("c1").unwrap();
+        let xml = json_to_xml_fields(&cluster_to_value(&cluster));
+
+        // The AWS SDK expects the list wrapped in <DBClusterMembers> with
+        // <DBClusterMember> entries, not the member fields flattened
+        // directly under <DBClusterMembers>.
+        let outer = xml
+            .find("<DBClusterMembers>")
+            .expect("DBClusterMembers element");
+        let inner = xml
+            .find("<DBClusterMember>")
+            .expect("DBClusterMember wrapper");
+        let id = xml
+            .find("<DBInstanceIdentifier>c1-writer</DBInstanceIdentifier>")
+            .expect("member identifier");
+        assert!(
+            outer < inner && inner < id,
+            "expected <DBClusterMembers><DBClusterMember><DBInstanceIdentifier> nesting: {xml}"
+        );
     }
 }
