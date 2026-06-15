@@ -107,6 +107,16 @@ impl ServiceHandler for RdsService {
             "RestoreDBClusterFromSnapshot" => {
                 operations::clusters::restore_db_cluster_from_snapshot(&state, &input, ctx)
             }
+            "AddRoleToDBCluster" => {
+                operations::clusters::add_role_to_db_cluster(&state, &input, ctx)
+            }
+            "RemoveRoleFromDBCluster" => {
+                operations::clusters::remove_role_from_db_cluster(&state, &input, ctx)
+            }
+            "EnableHttpEndpoint" => operations::clusters::enable_http_endpoint(&state, &input, ctx),
+            "DisableHttpEndpoint" => {
+                operations::clusters::disable_http_endpoint(&state, &input, ctx)
+            }
             "StartActivityStream" => {
                 operations::clusters::start_activity_stream(&state, &input, ctx)
             }

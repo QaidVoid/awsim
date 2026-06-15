@@ -4,14 +4,17 @@ use serde_json::{Value, json};
 
 use crate::{
     error::{
-        db_cluster_already_exists, db_cluster_not_found, db_cluster_snapshot_not_found,
-        invalid_parameter,
+        db_cluster_already_exists, db_cluster_not_found, db_cluster_role_already_exists,
+        db_cluster_role_not_found, db_cluster_snapshot_not_found, invalid_parameter,
     },
     ids::{
         cluster_arn, cluster_endpoint, cluster_reader_endpoint, default_engine_version,
         default_port, now_iso8601,
     },
-    state::{DbCluster, DbGlobalCluster, DbGlobalClusterMember, RdsState},
+    state::{
+        DbCluster, DbClusterRole, DbGlobalCluster, DbGlobalClusterMember, RdsState,
+        ServerlessV2Scaling,
+    },
 };
 
 use super::{opt_str, opt_u32, require_str};
@@ -77,7 +80,57 @@ fn cluster_to_value(c: &DbCluster) -> Value {
         obj["BacktrackWindow"] = json!(window);
         obj["LatestBacktrackTime"] = json!(c.created_at);
     }
+    obj["EngineMode"] = json!(c.engine_mode.as_deref().unwrap_or("provisioned"));
+    obj["HttpEndpointEnabled"] = json!(c.http_endpoint_enabled);
+    if let Some(ref scaling) = c.serverless_v2_scaling {
+        obj["ServerlessV2ScalingConfiguration"] = json!({
+            "MinCapacity": scaling.min_capacity,
+            "MaxCapacity": scaling.max_capacity,
+        });
+    }
+    obj["AssociatedRoles"] = json!(
+        c.associated_roles
+            .iter()
+            .map(|r| {
+                let mut role = json!({ "RoleArn": r.role_arn, "Status": r.status });
+                if let Some(ref f) = r.feature_name {
+                    role["FeatureName"] = json!(f);
+                }
+                role
+            })
+            .collect::<Vec<_>>()
+    );
     obj
+}
+
+/// Parse and validate the `ServerlessV2ScalingConfiguration` request
+/// member. AWS requires the minimum capacity to be at most the maximum,
+/// with both within the supported Aurora Capacity Unit range.
+fn parse_serverless_scaling(input: &Value) -> Result<Option<ServerlessV2Scaling>, AwsError> {
+    let Some(cfg) = input.get("ServerlessV2ScalingConfiguration") else {
+        return Ok(None);
+    };
+    let min_capacity = cfg.get("MinCapacity").and_then(|v| v.as_f64());
+    let max_capacity = cfg.get("MaxCapacity").and_then(|v| v.as_f64());
+    let (Some(min_capacity), Some(max_capacity)) = (min_capacity, max_capacity) else {
+        return Err(invalid_parameter(
+            "ServerlessV2ScalingConfiguration requires numeric MinCapacity and MaxCapacity.",
+        ));
+    };
+    if !(0.5..=256.0).contains(&min_capacity) || !(0.5..=256.0).contains(&max_capacity) {
+        return Err(invalid_parameter(
+            "Serverless v2 capacity must be between 0.5 and 256 Aurora Capacity Units.",
+        ));
+    }
+    if min_capacity > max_capacity {
+        return Err(invalid_parameter(
+            "Serverless v2 MinCapacity must not exceed MaxCapacity.",
+        ));
+    }
+    Ok(Some(ServerlessV2Scaling {
+        min_capacity,
+        max_capacity,
+    }))
 }
 
 pub fn create_db_cluster(
@@ -138,6 +191,8 @@ pub fn create_db_cluster(
         )));
     }
 
+    let serverless_v2_scaling = parse_serverless_scaling(input)?;
+
     let cluster = DbCluster {
         identifier: identifier.to_string(),
         arn: arn.clone(),
@@ -165,6 +220,17 @@ pub fn create_db_cluster(
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
         pending_modified_values: std::collections::HashMap::new(),
+        engine_mode: Some(
+            opt_str(input, "EngineMode")
+                .unwrap_or("provisioned")
+                .to_string(),
+        ),
+        serverless_v2_scaling,
+        http_endpoint_enabled: input
+            .get("EnableHttpEndpoint")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        associated_roles: Vec::new(),
     };
 
     let result = cluster_to_value(&cluster);
@@ -236,6 +302,14 @@ pub fn restore_db_cluster_from_snapshot(
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
         pending_modified_values: std::collections::HashMap::new(),
+        engine_mode: Some(
+            opt_str(input, "EngineMode")
+                .unwrap_or("provisioned")
+                .to_string(),
+        ),
+        serverless_v2_scaling: parse_serverless_scaling(input)?,
+        http_endpoint_enabled: false,
+        associated_roles: Vec::new(),
     };
 
     let result = cluster_to_value(&cluster);
@@ -403,6 +477,12 @@ pub fn modify_db_cluster(
             .iter()
             .filter_map(|v| v.as_str().map(str::to_string))
             .collect();
+    }
+    if let Some(scaling) = parse_serverless_scaling(input)? {
+        cluster.serverless_v2_scaling = Some(scaling);
+    }
+    if let Some(enabled) = input.get("EnableHttpEndpoint").and_then(|v| v.as_bool()) {
+        cluster.http_endpoint_enabled = enabled;
     }
 
     let apply_immediately = input
@@ -631,6 +711,103 @@ pub fn failover_db_cluster(
 
     let result = cluster_to_value(&cluster);
     Ok(json!({ "DBCluster": result }))
+}
+
+/// `AddRoleToDBCluster` associates an IAM role with the cluster, granting
+/// it access to another AWS service. AWS rejects a role that is already
+/// attached for the same feature with `DBClusterRoleAlreadyExists`.
+pub fn add_role_to_db_cluster(
+    state: &RdsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let identifier = require_str(input, "DBClusterIdentifier")?;
+    let role_arn = require_str(input, "RoleArn")?;
+    let feature_name = opt_str(input, "FeatureName").map(str::to_string);
+
+    let mut cluster = state
+        .clusters
+        .get_mut(identifier)
+        .ok_or_else(|| db_cluster_not_found(identifier))?;
+
+    if cluster
+        .associated_roles
+        .iter()
+        .any(|r| r.role_arn == role_arn && r.feature_name == feature_name)
+    {
+        return Err(db_cluster_role_already_exists(role_arn));
+    }
+
+    cluster.associated_roles.push(DbClusterRole {
+        role_arn: role_arn.to_string(),
+        feature_name,
+        status: "ACTIVE".to_string(),
+    });
+
+    Ok(json!({}))
+}
+
+/// `RemoveRoleFromDBCluster` detaches an IAM role from the cluster. AWS
+/// rejects a role that is not attached with `DBClusterRoleNotFound`.
+pub fn remove_role_from_db_cluster(
+    state: &RdsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let identifier = require_str(input, "DBClusterIdentifier")?;
+    let role_arn = require_str(input, "RoleArn")?;
+    let feature_name = opt_str(input, "FeatureName").map(str::to_string);
+
+    let mut cluster = state
+        .clusters
+        .get_mut(identifier)
+        .ok_or_else(|| db_cluster_not_found(identifier))?;
+
+    let before = cluster.associated_roles.len();
+    cluster
+        .associated_roles
+        .retain(|r| !(r.role_arn == role_arn && r.feature_name == feature_name));
+    if cluster.associated_roles.len() == before {
+        return Err(db_cluster_role_not_found(role_arn));
+    }
+
+    Ok(json!({}))
+}
+
+/// `EnableHttpEndpoint` turns on the RDS Data API HTTP endpoint for a
+/// cluster, addressed by its ARN.
+pub fn enable_http_endpoint(
+    state: &RdsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    set_http_endpoint(state, input, true)
+}
+
+/// `DisableHttpEndpoint` turns off the RDS Data API HTTP endpoint.
+pub fn disable_http_endpoint(
+    state: &RdsState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    set_http_endpoint(state, input, false)
+}
+
+fn set_http_endpoint(state: &RdsState, input: &Value, enabled: bool) -> Result<Value, AwsError> {
+    let resource_arn = require_str(input, "ResourceArn")?;
+    let identifier = cluster_identifier_from_arn(resource_arn)
+        .ok_or_else(|| db_cluster_not_found(resource_arn))?;
+
+    let mut cluster = state
+        .clusters
+        .get_mut(&identifier)
+        .ok_or_else(|| db_cluster_not_found(&identifier))?;
+    cluster.http_endpoint_enabled = enabled;
+
+    Ok(json!({
+        "ResourceArn": resource_arn,
+        "HttpEndpointEnabled": enabled,
+    }))
 }
 
 /// Extract a DB cluster identifier from a `DBCluster` ARN. The ARN
@@ -1589,5 +1766,177 @@ mod restore_cluster_tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "DBClusterAlreadyExistsFault");
+    }
+}
+
+#[cfg(test)]
+mod serverless_and_roles_tests {
+    use super::*;
+
+    fn ctx() -> RequestContext {
+        RequestContext::new("rds", "us-east-1")
+    }
+
+    fn describe(state: &RdsState, id: &str) -> Value {
+        let resp =
+            describe_db_clusters(state, &json!({ "DBClusterIdentifier": id }), &ctx()).unwrap();
+        resp["DBClusters"]["DBCluster"][0].clone()
+    }
+
+    fn create_serverless(state: &RdsState, id: &str) -> Result<Value, AwsError> {
+        create_db_cluster(
+            state,
+            &json!({
+                "DBClusterIdentifier": id,
+                "Engine": "aurora-postgresql",
+                "EngineVersion": "15.4",
+                "MasterUsername": "admin",
+                "MasterUserPassword": "secret123",
+                "EngineMode": "provisioned",
+                "ServerlessV2ScalingConfiguration": { "MinCapacity": 0.5, "MaxCapacity": 16.0 },
+                "EnableHttpEndpoint": true,
+            }),
+            &ctx(),
+        )
+    }
+
+    #[test]
+    fn create_records_scaling_engine_mode_and_http_endpoint() {
+        let state = RdsState::default();
+        create_serverless(&state, "aurora-sv2").unwrap();
+        let cluster = describe(&state, "aurora-sv2");
+        assert_eq!(cluster["EngineMode"], "provisioned");
+        assert_eq!(cluster["HttpEndpointEnabled"], true);
+        assert_eq!(
+            cluster["ServerlessV2ScalingConfiguration"]["MinCapacity"],
+            0.5
+        );
+        assert_eq!(
+            cluster["ServerlessV2ScalingConfiguration"]["MaxCapacity"],
+            16.0
+        );
+    }
+
+    #[test]
+    fn create_rejects_inverted_capacity_range() {
+        let state = RdsState::default();
+        let err = create_db_cluster(
+            &state,
+            &json!({
+                "DBClusterIdentifier": "bad",
+                "Engine": "aurora-postgresql",
+                "MasterUsername": "admin",
+                "MasterUserPassword": "secret123",
+                "ServerlessV2ScalingConfiguration": { "MinCapacity": 8.0, "MaxCapacity": 2.0 },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
+    }
+
+    #[test]
+    fn modify_updates_scaling_configuration() {
+        let state = RdsState::default();
+        create_serverless(&state, "aurora-sv2").unwrap();
+        modify_db_cluster(
+            &state,
+            &json!({
+                "DBClusterIdentifier": "aurora-sv2",
+                "ServerlessV2ScalingConfiguration": { "MinCapacity": 1.0, "MaxCapacity": 32.0 },
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let cluster = describe(&state, "aurora-sv2");
+        assert_eq!(
+            cluster["ServerlessV2ScalingConfiguration"]["MaxCapacity"],
+            32.0
+        );
+    }
+
+    #[test]
+    fn add_and_remove_role() {
+        let state = RdsState::default();
+        create_serverless(&state, "aurora-sv2").unwrap();
+        let role = "arn:aws:iam::000000000000:role/s3-access";
+
+        add_role_to_db_cluster(
+            &state,
+            &json!({ "DBClusterIdentifier": "aurora-sv2", "RoleArn": role }),
+            &ctx(),
+        )
+        .unwrap();
+        let roles = describe(&state, "aurora-sv2")["AssociatedRoles"].clone();
+        assert_eq!(roles.as_array().unwrap().len(), 1);
+        assert_eq!(roles[0]["RoleArn"], role);
+        assert_eq!(roles[0]["Status"], "ACTIVE");
+
+        remove_role_from_db_cluster(
+            &state,
+            &json!({ "DBClusterIdentifier": "aurora-sv2", "RoleArn": role }),
+            &ctx(),
+        )
+        .unwrap();
+        assert!(
+            describe(&state, "aurora-sv2")["AssociatedRoles"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn adding_same_role_twice_is_rejected() {
+        let state = RdsState::default();
+        create_serverless(&state, "aurora-sv2").unwrap();
+        let role = "arn:aws:iam::000000000000:role/s3-access";
+        let input = json!({ "DBClusterIdentifier": "aurora-sv2", "RoleArn": role });
+        add_role_to_db_cluster(&state, &input, &ctx()).unwrap();
+        let err = add_role_to_db_cluster(&state, &input, &ctx()).unwrap_err();
+        assert_eq!(err.code, "DBClusterRoleAlreadyExists");
+    }
+
+    #[test]
+    fn removing_absent_role_is_not_found() {
+        let state = RdsState::default();
+        create_serverless(&state, "aurora-sv2").unwrap();
+        let err = remove_role_from_db_cluster(
+            &state,
+            &json!({
+                "DBClusterIdentifier": "aurora-sv2",
+                "RoleArn": "arn:aws:iam::000000000000:role/ghost",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "DBClusterRoleNotFound");
+    }
+
+    #[test]
+    fn enable_then_disable_http_endpoint() {
+        let state = RdsState::default();
+        let resp = create_db_cluster(
+            &state,
+            &json!({
+                "DBClusterIdentifier": "aurora-pg",
+                "Engine": "aurora-postgresql",
+                "MasterUsername": "admin",
+                "MasterUserPassword": "secret123",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let arn = resp["DBCluster"]["DBClusterArn"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(describe(&state, "aurora-pg")["HttpEndpointEnabled"], false);
+
+        enable_http_endpoint(&state, &json!({ "ResourceArn": arn }), &ctx()).unwrap();
+        assert_eq!(describe(&state, "aurora-pg")["HttpEndpointEnabled"], true);
+
+        disable_http_endpoint(&state, &json!({ "ResourceArn": arn }), &ctx()).unwrap();
+        assert_eq!(describe(&state, "aurora-pg")["HttpEndpointEnabled"], false);
     }
 }
