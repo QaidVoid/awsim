@@ -9,6 +9,8 @@ pub struct RdsState {
     pub clusters: DashMap<String, DbCluster>,
     pub subnet_groups: DashMap<String, DbSubnetGroup>,
     pub parameter_groups: DashMap<String, DbParameterGroup>,
+    /// cluster parameter group name → DbClusterParameterGroup
+    pub cluster_parameter_groups: DashMap<String, DbClusterParameterGroup>,
     /// ARN → tags
     pub tags: DashMap<String, HashMap<String, String>>,
     /// snapshot identifier → DbSnapshot
@@ -35,6 +37,8 @@ pub struct RdsStateSnapshot {
     pub clusters: Vec<DbCluster>,
     pub subnet_groups: Vec<DbSubnetGroup>,
     pub parameter_groups: Vec<DbParameterGroup>,
+    #[serde(default)]
+    pub cluster_parameter_groups: Vec<DbClusterParameterGroup>,
     pub tags: Vec<(String, HashMap<String, String>)>,
     pub snapshots: Vec<DbSnapshot>,
     #[serde(default)]
@@ -269,6 +273,24 @@ pub struct DbParameterGroup {
     pub arn: String,
     pub family: String,
     pub description: String,
+}
+
+/// A parameter group applied at the Aurora cluster level. Distinct from
+/// the instance-level `DbParameterGroup`: cluster parameter groups
+/// configure engine settings shared across every instance in a cluster
+/// (for example replication and audit settings) and live in their own
+/// `cluster-pg` ARN namespace.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DbClusterParameterGroup {
+    pub name: String,
+    pub arn: String,
+    pub family: String,
+    pub description: String,
+    /// Caller-overridden parameter values keyed by parameter name.
+    /// Defaults come from the family catalog and are only stored here
+    /// once a caller modifies them.
+    #[serde(default)]
+    pub parameters: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
