@@ -36,11 +36,28 @@ export interface DBSnapshot {
   allocatedStorage: number;
 }
 
+export interface DBClusterMember {
+  instanceId: string;
+  isWriter: boolean;
+}
+
 export interface DBCluster {
   identifier: string;
   engine: string;
+  engineVersion: string;
   status: string;
   endpoint: string;
+  readerEndpoint: string;
+  port: string;
+  masterUsername: string;
+  engineMode: string;
+  httpEndpointEnabled: boolean;
+  deletionProtection: boolean;
+  serverlessMinCapacity: number | null;
+  serverlessMaxCapacity: number | null;
+  members: DBClusterMember[];
+  createdAt: string;
+  arn: string;
 }
 
 async function rdsRequest(
@@ -121,11 +138,29 @@ function parseSnapshot(block: string): DBSnapshot {
 }
 
 function parseCluster(block: string): DBCluster {
+  const members = xmlBlocks(block, "DBClusterMember").map((m) => ({
+    instanceId: xmlText(m, "DBInstanceIdentifier"),
+    isWriter: xmlText(m, "IsClusterWriter") === "true",
+  }));
+  const min = xmlText(block, "MinCapacity");
+  const max = xmlText(block, "MaxCapacity");
   return {
     identifier: xmlText(block, "DBClusterIdentifier"),
     engine: xmlText(block, "Engine"),
+    engineVersion: xmlText(block, "EngineVersion"),
     status: xmlText(block, "Status"),
     endpoint: xmlText(block, "Endpoint"),
+    readerEndpoint: xmlText(block, "ReaderEndpoint"),
+    port: xmlText(block, "Port"),
+    masterUsername: xmlText(block, "MasterUsername"),
+    engineMode: xmlText(block, "EngineMode"),
+    httpEndpointEnabled: xmlText(block, "HttpEndpointEnabled") === "true",
+    deletionProtection: xmlText(block, "DeletionProtection") === "true",
+    serverlessMinCapacity: min ? parseFloat(min) : null,
+    serverlessMaxCapacity: max ? parseFloat(max) : null,
+    members,
+    createdAt: xmlText(block, "ClusterCreateTime"),
+    arn: xmlText(block, "DBClusterArn"),
   };
 }
 
@@ -195,6 +230,75 @@ export async function deleteDBSnapshot(
 export async function describeDBClusters(): Promise<DBCluster[]> {
   const xml = await rdsRequest("DescribeDBClusters");
   return xmlBlocks(xml, "DBCluster").map(parseCluster);
+}
+
+export interface CreateDBClusterParams {
+  identifier: string;
+  engine: string;
+  engineVersion?: string;
+  masterUsername: string;
+  masterUserPassword: string;
+  serverlessMinCapacity?: number;
+  serverlessMaxCapacity?: number;
+}
+
+export async function createDBCluster(
+  params: CreateDBClusterParams,
+): Promise<void> {
+  const req: Record<string, string> = {
+    DBClusterIdentifier: params.identifier,
+    Engine: params.engine,
+    MasterUsername: params.masterUsername,
+    MasterUserPassword: params.masterUserPassword,
+  };
+  if (params.engineVersion) req.EngineVersion = params.engineVersion;
+  if (
+    params.serverlessMinCapacity != null &&
+    params.serverlessMaxCapacity != null
+  ) {
+    req["ServerlessV2ScalingConfiguration.MinCapacity"] = String(
+      params.serverlessMinCapacity,
+    );
+    req["ServerlessV2ScalingConfiguration.MaxCapacity"] = String(
+      params.serverlessMaxCapacity,
+    );
+  }
+  await rdsRequest("CreateDBCluster", req);
+}
+
+export async function deleteDBCluster(identifier: string): Promise<void> {
+  await rdsRequest("DeleteDBCluster", {
+    DBClusterIdentifier: identifier,
+    SkipFinalSnapshot: "true",
+  });
+}
+
+export async function failoverDBCluster(
+  identifier: string,
+  targetInstanceId?: string,
+): Promise<void> {
+  const req: Record<string, string> = { DBClusterIdentifier: identifier };
+  if (targetInstanceId) req.TargetDBInstanceIdentifier = targetInstanceId;
+  await rdsRequest("FailoverDBCluster", req);
+}
+
+/**
+ * Add a DB instance to an existing Aurora cluster. Aurora members
+ * inherit credentials and storage from the cluster, so master
+ * credentials are not sent.
+ */
+export async function createClusterInstance(params: {
+  identifier: string;
+  clusterIdentifier: string;
+  engine: string;
+  instanceClass: string;
+}): Promise<void> {
+  await rdsRequest("CreateDBInstance", {
+    DBInstanceIdentifier: params.identifier,
+    DBClusterIdentifier: params.clusterIdentifier,
+    Engine: params.engine,
+    DBInstanceClass: params.instanceClass,
+  });
 }
 
 export function statusVariant(
