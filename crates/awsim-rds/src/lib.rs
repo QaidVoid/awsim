@@ -140,6 +140,38 @@ impl ServiceHandler for RdsService {
                 operations::parameter_groups::describe_db_parameter_groups(&state, &input, ctx)
             }
 
+            // DB Cluster Parameter Groups
+            "CreateDBClusterParameterGroup" => {
+                operations::cluster_parameter_groups::create_db_cluster_parameter_group(
+                    &state, &input, ctx,
+                )
+            }
+            "DeleteDBClusterParameterGroup" => {
+                operations::cluster_parameter_groups::delete_db_cluster_parameter_group(
+                    &state, &input, ctx,
+                )
+            }
+            "DescribeDBClusterParameterGroups" => {
+                operations::cluster_parameter_groups::describe_db_cluster_parameter_groups(
+                    &state, &input, ctx,
+                )
+            }
+            "DescribeDBClusterParameters" => {
+                operations::cluster_parameter_groups::describe_db_cluster_parameters(
+                    &state, &input, ctx,
+                )
+            }
+            "ModifyDBClusterParameterGroup" => {
+                operations::cluster_parameter_groups::modify_db_cluster_parameter_group(
+                    &state, &input, ctx,
+                )
+            }
+            "ResetDBClusterParameterGroup" => {
+                operations::cluster_parameter_groups::reset_db_cluster_parameter_group(
+                    &state, &input, ctx,
+                )
+            }
+
             // Tags
             "AddTagsToResource" => operations::tags::add_tags_to_resource(&state, &input),
             "RemoveTagsFromResource" => operations::tags::remove_tags_from_resource(&state, &input),
@@ -267,6 +299,12 @@ impl ServiceHandler for RdsService {
             snapshot
                 .parameter_groups
                 .extend(state.parameter_groups.iter().map(|e| e.value().clone()));
+            snapshot.cluster_parameter_groups.extend(
+                state
+                    .cluster_parameter_groups
+                    .iter()
+                    .map(|e| e.value().clone()),
+            );
             snapshot.tags.extend(
                 state
                     .tags
@@ -329,6 +367,9 @@ impl ServiceHandler for RdsService {
         }
         for pg in snapshot.parameter_groups {
             state.parameter_groups.insert(pg.name.clone(), pg);
+        }
+        for pg in snapshot.cluster_parameter_groups {
+            state.cluster_parameter_groups.insert(pg.name.clone(), pg);
         }
         for (arn, tags) in snapshot.tags {
             state.tags.insert(arn, tags);

@@ -68,6 +68,16 @@ pub fn parameter_group_arn(partition: &str, region: &str, account: &str, name: &
     format!("arn:{partition}:rds:{region}:{account}:pg:{name}")
 }
 
+/// Build a DB cluster parameter group ARN.
+pub fn cluster_parameter_group_arn(
+    partition: &str,
+    region: &str,
+    account: &str,
+    name: &str,
+) -> String {
+    format!("arn:{partition}:rds:{region}:{account}:cluster-pg:{name}")
+}
+
 /// Build a DB snapshot ARN.
 pub fn snapshot_arn(partition: &str, region: &str, account: &str, identifier: &str) -> String {
     format!("arn:{partition}:rds:{region}:{account}:snapshot:{identifier}")
