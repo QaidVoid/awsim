@@ -1,0 +1,18 @@
+[package]
+name = "awsim-rds-data"
+description = "Amazon RDS Data API (Aurora HTTP SQL endpoint) emulator for AWSim, backed by a real PostgreSQL via Docker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+awsim-core = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+tokio-postgres = { workspace = true }
+uuid = { workspace = true }
