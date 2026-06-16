@@ -127,6 +127,43 @@ fn emit_object_event(
     });
 }
 
+/// Publish the one-time `s3:TestEvent` that real S3 sends to each newly
+/// configured queue or topic when a notification configuration is saved, so
+/// applications can confirm the destination is reachable. EventBridge and
+/// Lambda destinations do not receive it, matching S3.
+fn emit_test_event(state: &S3State, ctx: &RequestContext, bucket_name: &str) {
+    let Some(bus) = &ctx.event_bus else {
+        return;
+    };
+    let Some(bucket) = state.buckets.get(bucket_name) else {
+        return;
+    };
+    let configured_destinations: Vec<serde_json::Value> = bucket
+        .notification_config
+        .destinations
+        .iter()
+        .filter(|d| d.dest_type == "sqs" || d.dest_type == "sns")
+        .map(|d| serde_json::json!({ "type": d.dest_type, "arn": d.arn }))
+        .collect();
+    if configured_destinations.is_empty() {
+        return;
+    }
+
+    bus.publish(InternalEvent {
+        source: "s3".to_string(),
+        event_type: "s3:TestEvent".to_string(),
+        region: ctx.region.clone(),
+        account_id: ctx.account_id.clone(),
+        detail: serde_json::json!({
+            "bucket": {
+                "name": bucket_name,
+                "arn": arn::build_partition(ctx, "s3", bucket_name),
+            },
+            "configuredDestinations": configured_destinations,
+        }),
+    });
+}
+
 /// The AWSim S3 service handler.
 pub struct S3Service {
     store: AccountRegionStore<S3State>,
@@ -1018,7 +1055,11 @@ impl ServiceHandler for S3Service {
             "GetBucketCors" => operations::config::get_bucket_cors(&state, &input),
             "DeleteBucketCors" => operations::config::delete_bucket_cors(&state, &input),
             "PutBucketNotificationConfiguration" => {
-                operations::config::put_bucket_notification_configuration(&state, &input)
+                let result =
+                    operations::config::put_bucket_notification_configuration(&state, &input)?;
+                let bucket_name = input.get("Bucket").and_then(Value::as_str).unwrap_or("");
+                emit_test_event(&state, ctx, bucket_name);
+                Ok(result)
             }
             "GetBucketNotificationConfiguration" => {
                 operations::config::get_bucket_notification_configuration(&state, &input)
@@ -1893,5 +1934,76 @@ mod notification_tests {
         // Wrong suffix: no event.
         put("uploads/photo.png").await.expect("put wrong suffix");
         assert!(drain(&mut rx).is_empty());
+    }
+
+    fn drain_full(rx: &mut Receiver<InternalEvent>) -> Vec<InternalEvent> {
+        let mut out = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            out.push(event);
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn put_notification_configuration_emits_test_event() {
+        let svc = S3Service::new();
+        let mut ctx = RequestContext::new("s3", "us-east-1");
+        let mut rx = arm_bus(&mut ctx);
+        svc.handle("CreateBucket", json!({ "Bucket": "notif-test" }), &ctx)
+            .await
+            .expect("create bucket");
+        svc.handle(
+            "PutBucketNotificationConfiguration",
+            json!({
+                "Bucket": "notif-test",
+                "NotificationConfiguration": {
+                    "QueueConfiguration": {
+                        "Queue": "arn:aws:sqs:us-east-1:000000000000:q",
+                        "Event": "s3:ObjectCreated:*",
+                    }
+                }
+            }),
+            &ctx,
+        )
+        .await
+        .expect("put notification configuration");
+        assert_eq!(drain(&mut rx), vec!["s3:TestEvent".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn eventbridge_destination_receives_object_events() {
+        let svc = S3Service::new();
+        let mut ctx = RequestContext::new("s3", "us-east-1");
+        let mut rx = arm_bus(&mut ctx);
+        svc.handle("CreateBucket", json!({ "Bucket": "eb-bucket" }), &ctx)
+            .await
+            .expect("create bucket");
+        svc.handle(
+            "PutBucketNotificationConfiguration",
+            json!({
+                "Bucket": "eb-bucket",
+                "NotificationConfiguration": { "EventBridgeConfiguration": {} }
+            }),
+            &ctx,
+        )
+        .await
+        .expect("put notification configuration");
+        // EventBridge alone gets no test event (only queues and topics do).
+        assert!(drain(&mut rx).is_empty());
+
+        svc.handle(
+            "PutObject",
+            json!({ "Bucket": "eb-bucket", "Key": "k", "Body": "x" }),
+            &ctx,
+        )
+        .await
+        .expect("put object");
+        let events = drain_full(&mut rx);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "s3:ObjectCreated:Put");
+        let dests = events[0].detail["configuredDestinations"]
+            .as_array()
+            .expect("configured destinations");
+        assert!(dests.iter().any(|d| d["type"] == "eventbridge"));
     }
 }

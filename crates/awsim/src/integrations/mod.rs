@@ -278,6 +278,23 @@ pub async fn handle_s3_event(
 
     let s3_event = serde_json::json!({ "Records": [s3_record] });
 
+    // The one-time TestEvent carries a distinct body rather than the
+    // object-event Records envelope.
+    let is_test_event = event.event_type == "s3:TestEvent";
+    let message_body = if is_test_event {
+        serde_json::json!({
+            "Service": "Amazon S3",
+            "Event": "s3:TestEvent",
+            "Time": event_time,
+            "Bucket": bucket_name,
+            "RequestId": uuid::Uuid::new_v4().to_string(),
+            "HostId": uuid::Uuid::new_v4().to_string(),
+        })
+        .to_string()
+    } else {
+        s3_event.to_string()
+    };
+
     for dest in &configured_destinations {
         let dest_type = dest["type"].as_str().unwrap_or("");
         let dest_arn = dest["arn"].as_str().unwrap_or("");
@@ -311,7 +328,7 @@ pub async fn handle_s3_event(
                     };
                     let input = serde_json::json!({
                         "QueueUrl": queue_url,
-                        "MessageBody": s3_event.to_string(),
+                        "MessageBody": message_body.clone(),
                     });
                     match sqs.handle("SendMessage", input, &sqs_ctx).await {
                         Ok(_) => info!(
@@ -347,7 +364,7 @@ pub async fn handle_s3_event(
                     };
                     let input = serde_json::json!({
                         "TopicArn": dest_arn,
-                        "Message": s3_event.to_string(),
+                        "Message": message_body.clone(),
                         "Subject": format!("Amazon S3 Notification: {}", event.event_type),
                     });
                     match sns.handle("Publish", input, &sns_ctx).await {
@@ -384,7 +401,7 @@ pub async fn handle_s3_event(
                     };
                     let invoke_input = serde_json::json!({
                         "FunctionName": dest_arn,
-                        "Payload": s3_event.to_string(),
+                        "Payload": message_body.clone(),
                         "InvocationType": "Event",
                     });
                     match lambda.handle("Invoke", invoke_input, &lambda_ctx).await {
@@ -399,6 +416,57 @@ pub async fn handle_s3_event(
                             function = %dest_arn,
                             error = %e.message,
                             "S3->Lambda notification delivery failed"
+                        ),
+                    }
+                }
+            }
+            "eventbridge" => {
+                if let Some(events) = services.get("events") {
+                    let detail_type = if event.event_type.starts_with("s3:ObjectCreated:") {
+                        "Object Created"
+                    } else if event.event_type.starts_with("s3:ObjectRemoved:") {
+                        "Object Deleted"
+                    } else {
+                        "Object Access"
+                    };
+                    let detail = serde_json::json!({
+                        "version": "0",
+                        "bucket": { "name": bucket_name },
+                        "object": { "key": key, "size": size, "etag": etag },
+                        "reason": event.event_type.trim_start_matches("s3:"),
+                    });
+                    let events_ctx = RequestContext {
+                        account_id: event.account_id.clone(),
+                        region: event.region.clone(),
+                        partition: awsim_core::DEFAULT_PARTITION.to_string(),
+                        service: "events".to_string(),
+                        access_key: None,
+                        request_id: uuid::Uuid::new_v4().to_string(),
+                        method: "POST".to_string(),
+                        uri: "/".to_string(),
+                        event_bus: None,
+                        source_ip: None,
+                        is_secure: false,
+                        internal_bypass: false,
+                    };
+                    let input = serde_json::json!({
+                        "Entries": [{
+                            "Source": "aws.s3",
+                            "DetailType": detail_type,
+                            "Detail": detail.to_string(),
+                            "EventBusName": "default",
+                        }],
+                    });
+                    match events.handle("PutEvents", input, &events_ctx).await {
+                        Ok(_) => info!(
+                            bucket = %bucket_name,
+                            event_type = %event.event_type,
+                            "S3->EventBridge notification delivered"
+                        ),
+                        Err(e) => warn!(
+                            bucket = %bucket_name,
+                            error = %e.message,
+                            "S3->EventBridge notification delivery failed"
                         ),
                     }
                 }
