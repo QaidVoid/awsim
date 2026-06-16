@@ -431,21 +431,13 @@ pub fn serialize_xml_response(output: &Value, request_id: &str) -> (StatusCode, 
 
     // --- Promote well-known fields to HTTP headers (S3 convention) ---
     if let Some(map) = output.as_object() {
-        let header_fields = [
-            "ETag",
-            "ContentType",
-            "ContentLength",
-            "LastModified",
-            "VersionId",
-            "ServerSideEncryption",
-            "StorageClass",
-        ];
-        for field in &header_fields {
+        for field in HEADER_BOUND_FIELDS {
             if let Some(val) = map.get(*field) {
                 let header_name = pascal_to_header(field);
                 let header_value = match val {
                     Value::String(s) => s.clone(),
                     Value::Number(n) => n.to_string(),
+                    Value::Bool(b) => b.to_string(),
                     _ => continue,
                 };
                 if let (Ok(k), Ok(v)) = (
@@ -466,12 +458,18 @@ pub fn serialize_xml_response(output: &Value, request_id: &str) -> (StatusCode, 
         .map(|s| s.to_string());
 
     // Drop every sentinel key (those prefixed with `__`) before
-    // serializing, so control fields like `__status_code`, `__headers`,
-    // and `__xml_root` never leak into the XML body.
+    // serializing. Also drop fields already promoted to headers when the
+    // response has no explicit XML root: those bind to headers only, so
+    // emitting them as bare elements would produce a body with multiple
+    // root elements (for example PutObject's ETag plus VersionId), which is
+    // not well-formed XML. When an `__xml_root` wrapper is present the
+    // fields are legitimate children of that element and are kept.
+    let strip_header_bound = xml_root.is_none();
     let output_for_xml = if let Some(map) = output.as_object() {
         let filtered: serde_json::Map<String, Value> = map
             .iter()
             .filter(|(k, _)| !k.starts_with("__"))
+            .filter(|(k, _)| !(strip_header_bound && HEADER_BOUND_FIELDS.contains(&k.as_str())))
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         Value::Object(filtered)
@@ -531,6 +529,26 @@ fn apply_extra_headers(headers: &mut HeaderMap, output: &Value) {
     }
 }
 
+/// Response fields that bind to HTTP headers rather than the XML body in the
+/// S3 REST protocol. They are promoted to headers on every response and, for
+/// responses without an explicit `__xml_root`, excluded from the body so a
+/// header-only response such as PutObject serializes an empty, well-formed
+/// body instead of several bare root elements.
+const HEADER_BOUND_FIELDS: &[&str] = &[
+    "ETag",
+    "ContentType",
+    "ContentLength",
+    "LastModified",
+    "VersionId",
+    "ServerSideEncryption",
+    "StorageClass",
+    "DeleteMarker",
+    "CopySourceVersionId",
+    "SSEKMSKeyId",
+    "SSECustomerAlgorithm",
+    "SSECustomerKeyMD5",
+];
+
 /// Convert a PascalCase field name to a lowercase HTTP header name.
 /// e.g., "ContentType" → "content-type", "ETag" → "etag"
 fn pascal_to_header(name: &str) -> String {
@@ -543,6 +561,15 @@ fn pascal_to_header(name: &str) -> String {
         "VersionId" => return "x-amz-version-id".to_string(),
         "ServerSideEncryption" => return "x-amz-server-side-encryption".to_string(),
         "StorageClass" => return "x-amz-storage-class".to_string(),
+        "DeleteMarker" => return "x-amz-delete-marker".to_string(),
+        "CopySourceVersionId" => return "x-amz-copy-source-version-id".to_string(),
+        "SSEKMSKeyId" => return "x-amz-server-side-encryption-aws-kms-key-id".to_string(),
+        "SSECustomerAlgorithm" => {
+            return "x-amz-server-side-encryption-customer-algorithm".to_string();
+        }
+        "SSECustomerKeyMD5" => {
+            return "x-amz-server-side-encryption-customer-key-MD5".to_string();
+        }
         _ => {}
     }
     let mut out = String::new();
@@ -871,5 +898,51 @@ mod tests {
         assert_ne!(a, c);
         // Real S3 host ids are 76 chars (base64 of 57 bytes).
         assert_eq!(a.len(), 76);
+    }
+
+    #[test]
+    fn header_only_response_has_empty_body() {
+        // A versioned PutObject returns ETag and VersionId, both header-bound.
+        // Without an XML root they must not become bare body elements, which
+        // would be multiple roots and therefore malformed XML.
+        let output = serde_json::json!({
+            "ETag": "\"abc\"",
+            "VersionId": "v1",
+        });
+        let (status, headers, body) = serialize_xml_response(&output, "req-1");
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.is_empty(), "body should be empty, got {body:?}");
+        assert_eq!(headers.get("etag").unwrap(), "\"abc\"");
+        assert_eq!(headers.get("x-amz-version-id").unwrap(), "v1");
+    }
+
+    #[test]
+    fn delete_marker_response_has_empty_body() {
+        // delete_object reports DeleteMarker as a JSON bool, so the
+        // promotion path must render it as the "true" header value.
+        let output = serde_json::json!({
+            "DeleteMarker": true,
+            "VersionId": "v2",
+        });
+        let (_, headers, body) = serialize_xml_response(&output, "req-2");
+        assert!(body.is_empty(), "body should be empty, got {body:?}");
+        assert_eq!(headers.get("x-amz-delete-marker").unwrap(), "true");
+        assert_eq!(headers.get("x-amz-version-id").unwrap(), "v2");
+    }
+
+    #[test]
+    fn xml_root_response_keeps_header_bound_fields_in_body() {
+        // CompleteMultipartUpload wraps its fields, including ETag, in a root
+        // element, so the ETag must stay in the body.
+        let output = serde_json::json!({
+            "__xml_root": "CompleteMultipartUploadResult",
+            "ETag": "\"xyz\"",
+            "Key": "obj",
+        });
+        let (_, _, body) = serialize_xml_response(&output, "req-3");
+        let xml = std::str::from_utf8(&body).unwrap();
+        assert!(xml.contains("<CompleteMultipartUploadResult"));
+        assert!(xml.contains("<ETag>\"xyz\"</ETag>"), "xml: {xml}");
+        assert!(xml.contains("<Key>obj</Key>"));
     }
 }
