@@ -2308,7 +2308,8 @@ fn spawn_event_router(state: &AppState) {
                             integrations::handle_cognito_email(&services, &event).await;
                         }
                         t if t.starts_with("s3:ObjectCreated:")
-                            || t.starts_with("s3:ObjectRemoved:") =>
+                            || t.starts_with("s3:ObjectRemoved:")
+                            || t == "s3:TestEvent" =>
                         {
                             integrations::handle_s3_event(&services, &event).await;
                         }

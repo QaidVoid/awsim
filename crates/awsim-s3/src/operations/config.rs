@@ -413,6 +413,28 @@ pub fn put_bucket_notification_configuration(
         }
     }
 
+    // EventBridge: an empty <EventBridgeConfiguration/> element enables
+    // delivery of every object event to the default event bus. There is no
+    // ARN and no per-destination event or key filter, so it is recorded as
+    // a destination subscribed to all object create and remove events.
+    let has_eventbridge = input
+        .get("NotificationConfiguration")
+        .and_then(|n| n.get("EventBridgeConfiguration"))
+        .or_else(|| input.get("EventBridgeConfiguration"))
+        .is_some();
+    if has_eventbridge {
+        destinations.push(NotificationDestination {
+            dest_type: "eventbridge".to_string(),
+            arn: String::new(),
+            events: vec![
+                "s3:ObjectCreated:*".to_string(),
+                "s3:ObjectRemoved:*".to_string(),
+            ],
+            key_prefix: None,
+            key_suffix: None,
+        });
+    }
+
     let mut bucket = state
         .buckets
         .get_mut(bucket_name)
@@ -463,13 +485,26 @@ pub fn get_bucket_notification_configuration(
     // `CloudFunctionConfiguration` / `CloudFunction` names from S3's
     // pre-Lambda notification API survive only as input aliases on
     // PutBucketNotificationConfiguration.
-    Ok(json!({
-        "NotificationConfiguration": {
-            "QueueConfiguration": queue_configs,
-            "TopicConfiguration": topic_configs,
-            "LambdaFunctionConfiguration": lambda_configs,
-        }
-    }))
+    let mut config = serde_json::Map::new();
+    config.insert("QueueConfiguration".to_string(), json!(queue_configs));
+    config.insert("TopicConfiguration".to_string(), json!(topic_configs));
+    config.insert(
+        "LambdaFunctionConfiguration".to_string(),
+        json!(lambda_configs),
+    );
+
+    // EventBridge has no per-destination detail; its presence is signalled
+    // by an empty <EventBridgeConfiguration/> element.
+    let has_eventbridge = bucket
+        .notification_config
+        .destinations
+        .iter()
+        .any(|d| d.dest_type == "eventbridge");
+    if has_eventbridge {
+        config.insert("EventBridgeConfiguration".to_string(), json!({}));
+    }
+
+    Ok(json!({ "NotificationConfiguration": config }))
 }
 
 /// Parse event list from a notification config entry.

@@ -316,6 +316,13 @@ fn parse_xml_element(xml: &str) -> Result<Value, AwsError> {
                 current_key = name;
                 current_text.clear();
             }
+            Ok(Event::Empty(e)) => {
+                // A self-closing element such as `<EventBridgeConfiguration/>`
+                // carries no value but its presence is meaningful, so record
+                // it as a key with an empty value rather than dropping it.
+                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                map.entry(name).or_insert(Value::String(String::new()));
+            }
             Ok(Event::Text(e)) => {
                 current_text = e.unescape().unwrap_or_default().to_string();
             }
@@ -898,6 +905,24 @@ mod tests {
         assert_ne!(a, c);
         // Real S3 host ids are 76 chars (base64 of 57 bytes).
         assert_eq!(a.len(), 76);
+    }
+
+    #[test]
+    fn parse_xml_records_self_closing_element() {
+        // A self-closing element such as the aws-cli's
+        // <EventBridgeConfiguration/> must survive parsing as a present key.
+        let xml = "<NotificationConfiguration>\
+                   <QueueConfiguration><Queue>arn:q</Queue></QueueConfiguration>\
+                   <EventBridgeConfiguration/></NotificationConfiguration>";
+        let value = parse_xml_element(xml).expect("parse");
+        let nested = value
+            .get("NotificationConfiguration")
+            .and_then(|n| n.get("EventBridgeConfiguration"));
+        let top = value.get("EventBridgeConfiguration");
+        assert!(
+            nested.is_some() || top.is_some(),
+            "self-closing element should be present: {value:?}"
+        );
     }
 
     #[test]
