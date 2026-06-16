@@ -1756,13 +1756,6 @@ pub fn delete_public_access_block(state: &S3State, input: &Value) -> Result<Valu
     delete_bucket_config(state, input, "public-access-block")
 }
 
-// ─── SelectObjectContent (stub) ───────────────────────────────────────────────
-
-pub fn select_object_content(_state: &S3State, _input: &Value) -> Result<Value, AwsError> {
-    // Stub — returns empty payload. Real implementation requires streaming.
-    Ok(json!({ "Payload": [] }))
-}
-
 // ─── Bucket Policy Status ────────────────────────────────────────────────────
 
 pub fn get_bucket_policy_status(state: &S3State, input: &Value) -> Result<Value, AwsError> {

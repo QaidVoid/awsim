@@ -4,6 +4,7 @@ pub mod list;
 pub mod multipart;
 pub mod object;
 pub mod post;
+pub mod select;
 
 use awsim_core::{AwsError, RequestContext};
 use serde_json::Value;

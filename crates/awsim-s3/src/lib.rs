@@ -1175,8 +1175,7 @@ impl ServiceHandler for S3Service {
                 operations::config::delete_public_access_block(&state, &input)
             }
 
-            // SelectObjectContent (stub)
-            "SelectObjectContent" => operations::config::select_object_content(&state, &input),
+            "SelectObjectContent" => operations::select::select_object_content(&state, &input, ctx),
 
             // Bucket Policy Status
             "GetBucketPolicyStatus" => operations::config::get_bucket_policy_status(&state, &input),
