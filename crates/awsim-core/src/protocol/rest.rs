@@ -385,6 +385,12 @@ pub fn serialize_xml_response(output: &Value, request_id: &str) -> (StatusCode, 
         .and_then(|n| StatusCode::from_u16(n as u16).ok())
         .unwrap_or(StatusCode::OK);
 
+    // Arbitrary response headers requested by the handler via the
+    // `__headers` convention (an object of header name to string value).
+    // Used for responses that carry headers outside the S3 whitelist,
+    // such as the `Location` on a browser POST upload redirect.
+    apply_extra_headers(&mut headers, output);
+
     // --- Raw binary response (e.g. S3 GetObject) ---
     if let Some(raw_b64) = output.get("__raw_body").and_then(Value::as_str) {
         use base64::Engine;
@@ -395,7 +401,7 @@ pub fn serialize_xml_response(output: &Value, request_id: &str) -> (StatusCode, 
         // Promote scalar fields to response headers.
         if let Some(map) = output.as_object() {
             for (key, val) in map {
-                if key == "__raw_body" || key == "Body" || key == "__status_code" {
+                if key.starts_with("__") || key == "Body" {
                     continue;
                 }
                 let header_name = pascal_to_header(key);
@@ -459,18 +465,16 @@ pub fn serialize_xml_response(output: &Value, request_id: &str) -> (StatusCode, 
         .and_then(Value::as_str)
         .map(|s| s.to_string());
 
-    let output_for_xml = if xml_root.is_some() {
-        // Build a Value without the __xml_root sentinel key.
-        if let Some(map) = output.as_object() {
-            let filtered: serde_json::Map<String, Value> = map
-                .iter()
-                .filter(|(k, _)| k.as_str() != "__xml_root")
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect();
-            Value::Object(filtered)
-        } else {
-            output.clone()
-        }
+    // Drop every sentinel key (those prefixed with `__`) before
+    // serializing, so control fields like `__status_code`, `__headers`,
+    // and `__xml_root` never leak into the XML body.
+    let output_for_xml = if let Some(map) = output.as_object() {
+        let filtered: serde_json::Map<String, Value> = map
+            .iter()
+            .filter(|(k, _)| !k.starts_with("__"))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        Value::Object(filtered)
     } else {
         output.clone()
     };
@@ -504,6 +508,27 @@ pub fn serialize_xml_response(output: &Value, request_id: &str) -> (StatusCode, 
         Bytes::from(body)
     };
     (status, headers, body_bytes)
+}
+
+/// Insert handler-requested response headers carried under the
+/// `__headers` convention. The value is an object mapping lowercase
+/// header names to string values; non-string values are ignored, as are
+/// names or values that are not valid HTTP header tokens.
+fn apply_extra_headers(headers: &mut HeaderMap, output: &Value) {
+    let Some(extra) = output.get("__headers").and_then(Value::as_object) else {
+        return;
+    };
+    for (name, value) in extra {
+        let Some(value) = value.as_str() else {
+            continue;
+        };
+        if let (Ok(k), Ok(v)) = (
+            axum::http::header::HeaderName::from_bytes(name.as_bytes()),
+            axum::http::HeaderValue::from_str(value),
+        ) {
+            headers.insert(k, v);
+        }
+    }
 }
 
 /// Convert a PascalCase field name to a lowercase HTTP header name.

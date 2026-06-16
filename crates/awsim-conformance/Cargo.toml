@@ -116,3 +116,5 @@ aws-types = "1"
 [dev-dependencies]
 # Raw HTTP client for the OpenSearch REST data plane (no AWS SDK exists for it).
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
+# Encodes POST policies for the S3 browser form upload behavior tests.
+base64 = "0.22"
