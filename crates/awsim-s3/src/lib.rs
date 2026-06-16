@@ -36,6 +36,22 @@ fn event_matches(filters: &[String], event_name: &str) -> bool {
     false
 }
 
+/// Check whether an object key satisfies a destination's optional `S3Key`
+/// prefix and suffix filter. A destination with no filter matches every key.
+fn key_matches_filter(dest: &state::NotificationDestination, key: &str) -> bool {
+    if let Some(prefix) = &dest.key_prefix
+        && !key.starts_with(prefix.as_str())
+    {
+        return false;
+    }
+    if let Some(suffix) = &dest.key_suffix
+        && !key.ends_with(suffix.as_str())
+    {
+        return false;
+    }
+    true
+}
+
 /// Read the size and ETag of an object's current version, if it exists.
 /// Used to populate object notifications for writes that just landed.
 fn current_object_meta(state: &S3State, bucket: &str, key: &str) -> Option<(u64, String)> {
@@ -76,7 +92,7 @@ fn emit_object_event(
         .notification_config
         .destinations
         .iter()
-        .filter(|d| event_matches(&d.events, event_type))
+        .filter(|d| event_matches(&d.events, event_type) && key_matches_filter(d, key))
         .map(|d| serde_json::json!({ "type": d.dest_type, "arn": d.arn }))
         .collect();
     if configured_destinations.is_empty() {
@@ -1711,6 +1727,8 @@ mod notification_tests {
                     "s3:ObjectCreated:*".to_string(),
                     "s3:ObjectRemoved:*".to_string(),
                 ],
+                key_prefix: None,
+                key_suffix: None,
             });
     }
 
@@ -1831,5 +1849,49 @@ mod notification_tests {
         .await
         .expect("delete version");
         assert_eq!(drain(&mut rx), vec!["s3:ObjectRemoved:Delete".to_string()],);
+    }
+
+    #[tokio::test]
+    async fn notification_filter_honors_key_prefix_and_suffix() {
+        let svc = S3Service::new();
+        let mut ctx = RequestContext::new("s3", "us-east-1");
+        let mut rx = arm_bus(&mut ctx);
+        svc.handle("CreateBucket", json!({ "Bucket": "filtered-bucket" }), &ctx)
+            .await
+            .expect("create bucket");
+        {
+            let state = svc.store().get(&ctx.account_id, "global");
+            let mut entry = state.buckets.get_mut("filtered-bucket").unwrap();
+            entry
+                .notification_config
+                .destinations
+                .push(NotificationDestination {
+                    dest_type: "sqs".to_string(),
+                    arn: "arn:aws:sqs:us-east-1:000000000000:events".to_string(),
+                    events: vec!["s3:ObjectCreated:*".to_string()],
+                    key_prefix: Some("uploads/".to_string()),
+                    key_suffix: Some(".jpg".to_string()),
+                });
+        }
+
+        let put = |key: &'static str| {
+            svc.handle(
+                "PutObject",
+                json!({ "Bucket": "filtered-bucket", "Key": key, "Body": "x" }),
+                &ctx,
+            )
+        };
+
+        // Matching prefix and suffix: the event fires.
+        put("uploads/photo.jpg").await.expect("put match");
+        assert_eq!(drain(&mut rx), vec!["s3:ObjectCreated:Put".to_string()]);
+
+        // Wrong prefix: no event.
+        put("other/photo.jpg").await.expect("put wrong prefix");
+        assert!(drain(&mut rx).is_empty());
+
+        // Wrong suffix: no event.
+        put("uploads/photo.png").await.expect("put wrong suffix");
+        assert!(drain(&mut rx).is_empty());
     }
 }
