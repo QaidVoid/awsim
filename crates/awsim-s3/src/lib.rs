@@ -708,6 +708,13 @@ impl ServiceHandler for S3Service {
                 operation: "DeleteObjects",
                 required_query_param: Some("delete"),
             },
+            // POST /{Bucket} for a browser form upload (must follow the ?delete route)
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/{Bucket}",
+                operation: "PostObject",
+                required_query_param: None,
+            },
             // POST /{Bucket}/{Key+}?select — SelectObjectContent stub
             RouteDefinition {
                 method: "POST",
@@ -1104,6 +1111,60 @@ impl ServiceHandler for S3Service {
                             bus.publish(InternalEvent {
                                 source: "s3".to_string(),
                                 event_type: "s3:ObjectCreated:Put".to_string(),
+                                region: ctx.region.clone(),
+                                account_id: ctx.account_id.clone(),
+                                detail: serde_json::json!({
+                                    "bucket": {
+                                        "name": bucket_name,
+                                        "arn": arn::build_partition(ctx, "s3", bucket_name),
+                                    },
+                                    "object": {
+                                        "key": key,
+                                        "size": size,
+                                        "eTag": etag,
+                                    },
+                                    "configuredDestinations": configured_destinations,
+                                }),
+                            });
+                        }
+                    }
+                }
+                Ok(result)
+            }
+            "PostObject" => {
+                let result = operations::post::post_object(&state, &input, ctx)?;
+                // The browser form upload resolves its own object key, so the
+                // notification reads the resolved identity that post_object
+                // stashed on the result rather than the request input.
+                if let Some(bus) = &ctx.event_bus {
+                    let bucket_name = input.get("Bucket").and_then(Value::as_str).unwrap_or("");
+                    let key = result
+                        .get("__notify_key")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    if let Some(bucket) = state.buckets.get(bucket_name)
+                        && !bucket.notification_config.destinations.is_empty()
+                    {
+                        let etag = result
+                            .get("__notify_etag")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string();
+                        let size = result
+                            .get("__notify_size")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0);
+                        let configured_destinations: Vec<serde_json::Value> = bucket
+                            .notification_config
+                            .destinations
+                            .iter()
+                            .filter(|d| event_matches(&d.events, "s3:ObjectCreated:Post"))
+                            .map(|d| serde_json::json!({ "type": d.dest_type, "arn": d.arn }))
+                            .collect();
+                        if !configured_destinations.is_empty() {
+                            bus.publish(InternalEvent {
+                                source: "s3".to_string(),
+                                event_type: "s3:ObjectCreated:Post".to_string(),
                                 region: ctx.region.clone(),
                                 account_id: ctx.account_id.clone(),
                                 detail: serde_json::json!({
