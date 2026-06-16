@@ -333,11 +333,14 @@ pub fn put_bucket_notification_configuration(
                 .unwrap_or("")
                 .to_string();
             let events = parse_event_list(&config);
+            let (key_prefix, key_suffix) = parse_key_filter(&config);
             if !arn.is_empty() {
                 destinations.push(NotificationDestination {
                     dest_type: "sqs".to_string(),
                     arn,
                     events,
+                    key_prefix,
+                    key_suffix,
                 });
             }
         }
@@ -360,11 +363,14 @@ pub fn put_bucket_notification_configuration(
                 .unwrap_or("")
                 .to_string();
             let events = parse_event_list(&config);
+            let (key_prefix, key_suffix) = parse_key_filter(&config);
             if !arn.is_empty() {
                 destinations.push(NotificationDestination {
                     dest_type: "sns".to_string(),
                     arn,
                     events,
+                    key_prefix,
+                    key_suffix,
                 });
             }
         }
@@ -394,11 +400,14 @@ pub fn put_bucket_notification_configuration(
                 .unwrap_or("")
                 .to_string();
             let events = parse_event_list(&config);
+            let (key_prefix, key_suffix) = parse_key_filter(&config);
             if !arn.is_empty() {
                 destinations.push(NotificationDestination {
                     dest_type: "lambda".to_string(),
                     arn,
                     events,
+                    key_prefix,
+                    key_suffix,
                 });
             }
         }
@@ -430,7 +439,7 @@ pub fn get_bucket_notification_configuration(
         .destinations
         .iter()
         .filter(|d| d.dest_type == "sqs")
-        .map(|d| json!({ "Queue": d.arn, "Event": d.events }))
+        .map(|d| notification_entry("Queue", d))
         .collect();
 
     let topic_configs: Vec<Value> = bucket
@@ -438,7 +447,7 @@ pub fn get_bucket_notification_configuration(
         .destinations
         .iter()
         .filter(|d| d.dest_type == "sns")
-        .map(|d| json!({ "Topic": d.arn, "Event": d.events }))
+        .map(|d| notification_entry("Topic", d))
         .collect();
 
     let lambda_configs: Vec<Value> = bucket
@@ -446,7 +455,7 @@ pub fn get_bucket_notification_configuration(
         .destinations
         .iter()
         .filter(|d| d.dest_type == "lambda")
-        .map(|d| json!({ "LambdaFunctionArn": d.arn, "Event": d.events }))
+        .map(|d| notification_entry("LambdaFunctionArn", d))
         .collect();
 
     // The Lambda destination element is `LambdaFunctionConfiguration`
@@ -474,6 +483,70 @@ fn parse_event_list(config: &Value) -> Vec<String> {
         Some(Value::String(s)) => vec![s.clone()],
         _ => Vec::new(),
     }
+}
+
+/// Parse the optional object key prefix and suffix from a notification
+/// config entry's `Filter` element.
+///
+/// The wire shape is `Filter > S3Key > FilterRule`, where each rule names
+/// `prefix` or `suffix`. A single rule arrives as an object and multiple
+/// rules as an array, so both are handled.
+fn parse_key_filter(config: &Value) -> (Option<String>, Option<String>) {
+    let rules = config
+        .get("Filter")
+        .and_then(|f| f.get("S3Key"))
+        .and_then(|k| k.get("FilterRule"));
+    let Some(rules) = rules else {
+        return (None, None);
+    };
+    let items: Vec<&Value> = match rules {
+        Value::Array(arr) => arr.iter().collect(),
+        other => vec![other],
+    };
+
+    let mut prefix = None;
+    let mut suffix = None;
+    for item in items {
+        let name = item
+            .get("Name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let value = item
+            .get("Value")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        match name.as_str() {
+            "prefix" => prefix = value,
+            "suffix" => suffix = value,
+            _ => {}
+        }
+    }
+    (prefix, suffix)
+}
+
+/// Build a single notification configuration entry for the GET response,
+/// echoing the destination ARN, its events, and the `S3Key` filter when one
+/// was configured.
+fn notification_entry(arn_field: &str, dest: &NotificationDestination) -> Value {
+    let mut entry = serde_json::Map::new();
+    entry.insert(arn_field.to_string(), json!(dest.arn));
+    entry.insert("Event".to_string(), json!(dest.events));
+
+    let mut rules = Vec::new();
+    if let Some(prefix) = &dest.key_prefix {
+        rules.push(json!({ "Name": "prefix", "Value": prefix }));
+    }
+    if let Some(suffix) = &dest.key_suffix {
+        rules.push(json!({ "Name": "suffix", "Value": suffix }));
+    }
+    if !rules.is_empty() {
+        entry.insert(
+            "Filter".to_string(),
+            json!({ "S3Key": { "FilterRule": rules } }),
+        );
+    }
+    Value::Object(entry)
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

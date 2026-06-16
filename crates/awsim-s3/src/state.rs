@@ -22,6 +22,14 @@ pub struct NotificationDestination {
     pub arn: String,
     /// Event name filter prefix, e.g. "s3:ObjectCreated:*"
     pub events: Vec<String>,
+    /// Optional object key prefix from the configuration's `S3Key`
+    /// filter. An event fires only when the key starts with this value.
+    #[serde(default)]
+    pub key_prefix: Option<String>,
+    /// Optional object key suffix from the configuration's `S3Key`
+    /// filter. An event fires only when the key ends with this value.
+    #[serde(default)]
+    pub key_suffix: Option<String>,
 }
 
 /// Notification configuration for a bucket.
