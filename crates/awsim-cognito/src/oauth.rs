@@ -1729,6 +1729,27 @@ struct TokenForm {
     code_verifier: Option<String>,
 }
 
+/// Whether `grant_type` is permitted for a client with the given
+/// `AllowedOAuthFlows`.
+///
+/// `refresh_token` is always allowed: it is not an `AllowedOAuthFlows` value in
+/// real Cognito (that enum only covers `code` / `implicit` /
+/// `client_credentials`), so a standard OIDC client that lists only `"code"`
+/// can still refresh its tokens. An empty `AllowedOAuthFlows` imposes no
+/// restriction.
+fn grant_type_allowed(allowed_oauth_flows: &[String], grant_type: &str) -> bool {
+    if grant_type == "refresh_token" {
+        return true;
+    }
+    let flow_name = match grant_type {
+        "authorization_code" => "code",
+        "implicit" => "implicit",
+        "client_credentials" => "client_credentials",
+        other => other,
+    };
+    allowed_oauth_flows.is_empty() || allowed_oauth_flows.iter().any(|f| f == flow_name)
+}
+
 async fn token(
     State(oauth_state): State<Arc<CognitoOAuthState>>,
     Path(pool_id): Path<String>,
@@ -1755,23 +1776,13 @@ async fn token(
         let pool = cognito.user_pools.get(&pool_id);
         if let Some(pool) = pool
             && let Some(client) = pool.clients.get(client_id.as_str())
+            && !grant_type_allowed(&client.allowed_oauth_flows, grant_type)
         {
-            let flow_name = match grant_type {
-                "authorization_code" => "code",
-                "implicit" => "implicit",
-                "client_credentials" => "client_credentials",
-                "refresh_token" => "refresh_token",
-                _ => grant_type,
-            };
-            if !client.allowed_oauth_flows.is_empty()
-                && !client.allowed_oauth_flows.contains(&flow_name.to_string())
-            {
-                return error_response(
-                    StatusCode::BAD_REQUEST,
-                    "unauthorized_client",
-                    &format!("Grant type '{}' is not allowed for this client", flow_name),
-                );
-            }
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "unauthorized_client",
+                &format!("Grant type '{grant_type}' is not allowed for this client"),
+            );
         }
     }
 
@@ -2949,5 +2960,34 @@ mod saml_tests {
         };
         let resp = saml_acs_inner(&state, pool_id, form);
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+}
+
+#[cfg(test)]
+mod grant_type_tests {
+    use super::grant_type_allowed;
+
+    #[test]
+    fn refresh_token_is_allowed_even_when_flows_list_only_code() {
+        // Regression: a standard OIDC client lists only "code" in
+        // AllowedOAuthFlows. The refresh grant must still be permitted,
+        // otherwise every token refresh returns unauthorized_client and the
+        // app logs the user out.
+        assert!(grant_type_allowed(&["code".to_string()], "refresh_token"));
+    }
+
+    #[test]
+    fn real_oauth_flows_are_still_gated() {
+        let code_only = ["code".to_string()];
+        assert!(grant_type_allowed(&code_only, "authorization_code"));
+        assert!(!grant_type_allowed(&code_only, "client_credentials"));
+        assert!(!grant_type_allowed(&code_only, "implicit"));
+    }
+
+    #[test]
+    fn empty_flows_list_imposes_no_restriction() {
+        assert!(grant_type_allowed(&[], "authorization_code"));
+        assert!(grant_type_allowed(&[], "client_credentials"));
+        assert!(grant_type_allowed(&[], "refresh_token"));
     }
 }
