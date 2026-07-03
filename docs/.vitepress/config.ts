@@ -3,6 +3,10 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   title: 'AWSim',
   description: 'Fully offline, free AWS development environment',
+  cleanUrls: true,
+  sitemap: {
+    hostname: 'https://awsim.qaidvoid.dev'
+  },
   themeConfig: {
     nav: [
       { text: 'Guide', link: '/guide/getting-started' },
