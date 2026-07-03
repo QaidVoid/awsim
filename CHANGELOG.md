@@ -1,4 +1,156 @@
 
+## 0.6.0 — 2026-07-03
+
+### Bug Fixes
+
+- **docs:** Enable clean URLs and sitemap generation
+- **cognito:** Always allow refresh_token grant
+- **core:** Keep header-bound fields out of REST-XML response bodies (#53)
+- **rds:** Parse numeric and boolean parameters from awsQuery strings (#49)
+- **rds:** Wrap Aurora cluster lists in their AWS member elements (#47)
+- Build
+- **cognito:** Responsive layout for the hosted change/forgot-password pages (#38)
+- **cognito:** Mask user existence and reject alias-update collisions (#37)
+- **ui:** Clarify Cognito console attribute permissions and user detail (#34)
+- **cognito:** Tighten parity on known validation gaps (#33)
+- **cognito:** Trigger event envelope, account routing, JSON OAuth errors (#28)
+- **cognito:** MFA selection list, software-token scoping, session shape (#27)
+- **cognito:** User pool / client configuration validation (#26)
+- **cognito:** Group/tag wire shapes and user-attribute output (#25)
+- **cognito:** Identity pool config round-trip, pagination, epoch timestamps (#24)
+- **cognito:** OAuth token-endpoint security and identity credential expiry (#23)
+- **cognito:** Per-method MFA, MFA config, identity providers, domains (#22)
+- **cognito:** User pool and client config round-trip and pagination (#21)
+- **cognito:** User lifecycle parity (MessageAction, aliases, MFA fields) (#20)
+- **cognito:** Align JWT claims with Cognito token shape (#18)
+- **cognito:** Close auth-flow gaps and a NEW_PASSWORD_REQUIRED takeover (#17)
+- **cognito:** Canonical AWS error message strings (#16)
+- **cognito:** AWS-parity error codes and HTTP statuses (#15)
+- **dynamodb:** Copy items on RestoreTableToPointInTime (#7)
+- **dynamodb:** Honor and validate StreamViewType (#1)
+- **dynamodb:** Reject ConsistentRead on GSI query and scan
+- **scheduler:** Return ListTagsForResource Tags as an array
+- Serialize timestamp members as epoch-second numbers
+- **conformance:** Don't flag unmodeled service errors as deserialization failures
+- **iam:** ChangePassword operates on the caller, not a UserName param
+- **opensearch:** Apply source.query filter in _reindex
+- **dynamodb:** Reject Query FilterExpression that references key attributes
+- **iam:** Return invalid-token for unknown keys without echoing the key
+- **cognito:** Enforce IAM auth on management-plane operations
+- **mq:** Derive DescribeBroker endpoint region from the broker ARN
+- **ses:** Parse identity ARNs in any partition
+- **secretsmanager:** Resolve full secret ARN in any partition
+- **sns:** Accept any partition in RedrivePolicy DLQ ARN validation
+- **eventbridge:** Drop bus segment from default-bus rule ARN
+- **ecs:** Include region and account in capacity-provider and stub ARNs
+- **firehose:** Honor request partition in delivery stream ARN
+- **kms:** Honor request partition and region in alias ARNs and lookup
+- **stepfunctions:** Honor request partition in emitted ARNs
+- **sqs:** Honor request partition in queue ARNs
+- **ecr:** Honor request partition in repository ARN
+- **kinesis:** Honor request partition in stream ARN
+- **lambda:** Order ListVersionsByFunction pages by numeric version
+- **rds:** Paginate DescribeDBInstances, DBClusters, and DBSnapshots
+- **ssm:** Paginate DescribeParameters and GetParameterHistory
+- **eks:** Paginate cluster, nodegroup, fargate, and addon list ops
+- **servicediscovery:** Paginate ListOperations
+- **stepfunctions:** Paginate ListExecutions and ListStateMachines
+- **ecr:** Paginate ListImages, DescribeImages, and DescribeRepositories
+- **secretsmanager:** Paginate ListSecrets and ListSecretVersionIds
+- **kms:** Paginate ListKeys, ListAliases, and ListGrants
+- **core:** Keep paginate() from re-emitting items with duplicate keys
+- **iam-policy:** Correct condition evaluation for absent and empty keys
+- **cognito:** Default AdminSetUserPassword Permanent to false
+- **cognito:** Challenge MFA_SETUP when MFA is required but unconfigured
+- **cognito:** Enforce refresh-token revocation on sign-out
+- **cognito:** Verify TOTP code in AdminRespondToAuthChallenge
+- **dynamodb:** Reject malformed ExclusiveStartKey on Query/Scan
+- **dynamodb:** Paginate ListBackups and ListStreams
+- **dynamodb:** Apply Query/Scan Limit to evaluated items not matches
+- **dynamodb:** Carry base key in GSI LastEvaluatedKey for resume
+- **servicediscovery:** Honor request partition in namespace/service ARNs
+- **core:** Record the error message on failed API-call events
+- **core:** Honor request partition in every emitted ARN
+
+### Documentation
+
+- **iam:** Document how to wire a service into IAM enforcement
+
+### Features
+
+- **s3:** Implement SelectObjectContent over CSV and JSON (#56)
+- **s3:** EventBridge notifications and test events (#55)
+- **s3:** Honor notification object key filter rules (#54)
+- **s3:** Complete S3 event notification coverage (#52)
+- **s3:** Browser POST form uploads (PostObject) (#51)
+- **ui:** Add Aurora clusters tab to the RDS console (#48)
+- **rds-data:** Add RDS Data API backed by real PostgreSQL (#46)
+- **rds:** Add Serverless v2 scaling, cluster roles, and HTTP endpoint (#45)
+- **rds:** Restore instances and clusters from snapshots (#44)
+- **rds:** Add DB cluster parameter groups (#43)
+- **rds:** Add Aurora cluster lifecycle operations (#42)
+- **rds:** Add DB cluster snapshots (#41)
+- **rds:** Advertise Aurora engines in discovery APIs (#40)
+- **rds:** Create Aurora DB instances as cluster members (#39)
+- **ui:** Manage user MFA from the console user detail (#36)
+- **cognito:** Federated IdP buttons on the hosted login page (#35)
+- **cognito:** SAML 2.0 federation for the hosted UI (#32)
+- **cognito:** Deliver verification and invitation emails via SES (#31)
+- **cognito:** Persist JWT signing key and serve JWKS at issuer root (#30)
+- **cognito:** Apply PreTokenGeneration claim and group overrides (#29)
+- **cognito:** Lambda-driven CUSTOM_AUTH and nested trigger config (#19)
+- **ui:** DynamoDB console upgrades (#14)
+- **dynamodb:** Real S3 data movement for export and import (#13)
+- **dynamodb:** Make PITR and Contributor Insights describes stateful (#12)
+- **dynamodb:** Report ConsumedCapacity for PartiQL statements (#11)
+- **dynamodb:** Report ConsumedCapacity for transactions (#10)
+- **dynamodb:** Validate item numbers and reject empty key values (#9)
+- **dynamodb:** Complete Kinesis streaming destination lifecycle (#8)
+- **dynamodb:** Align PartiQL write statement semantics with AWS (#6)
+- **dynamodb:** Reject reserved keywords in expressions (#5)
+- **dynamodb:** Honor ClientRequestToken on transactions (#4)
+- **dynamodb:** Translate legacy pre-expression parameters (#3)
+- **dynamodb:** Return ItemCollectionMetrics for LSI tables (#2)
+- **cloudformation:** Roll back stacks that exceed TimeoutInMinutes
+- **cloudformation:** Custom resources and CreationPolicy signals
+- **cloudformation:** Expand AWS::Serverless transforms
+- **stepfunctions:** Distributed Map S3 CSV ItemReader and ItemBatcher
+- **stepfunctions:** Suspend and resume .waitForTaskToken tasks
+- **stepfunctions:** Export execution history to CloudWatch Logs
+- **firehose:** Deliver records to S3 with processor backup routing
+- **firehose:** Tick-driven encryption status state machine
+- **servicediscovery:** Fan out DNS records to embedded Route53
+- **servicediscovery:** Async operation lifecycle, health prober, weighted routing
+- **sns:** Delivery feedback metrics and Lambda fan-out with DLQ
+- **ses:** Store and synthetically invoke receipt rule actions
+- **ses:** Fan out configuration-set event destinations
+- **cognito:** SMS/EMAIL MFA arms, ExplicitAuthFlows, cursor pagination
+- **kinesis:** SubscribeToShard, EFO idle cleanup, shard lifecycle
+- **secretsmanager:** Tick-driven rotation + cross-region replicas
+- **mq:** Broker state machine via tick and a tag API
+- **ses:** Apply v2 SendEmail routing params and account suppression
+- **eks:** Observable cluster/nodegroup lifecycle via tick
+- **ecr:** Stream layer uploads and replicate images on a tick
+- **dynamodb:** Per-index ConsumedCapacity and document-path limit
+- **ssm:** Drive run-command status transitions
+- **rds:** Apply pending modified values at the maintenance window
+- **eventbridge:** Expire archives past RetentionDays
+- **s3:** Verify CRC32/CRC32C/CRC64NVME object checksums
+- **core:** Serialize concurrent same-token idempotency calls
+- **tags:** Enforce limits on the remaining services' tag writes
+
+### Performance
+
+- **stepfunctions:** Bound the JSONPath segment cache
+
+### Tests
+
+- **conformance:** Aurora cluster SDK integration and conformance coverage (#50)
+- **core:** Expect invalid-token code for unknown access keys
+- **conformance:** Add IAM-enforced profile and Cognito auth-gating test
+- **conformance:** Assert behavior via real SDK, not just envelope shape
+- **dynamodb:** Cover GSI begins_with+filter pagination at scale
+
 ## 0.5.0 — 2026-06-02
 
 ### Bug Fixes

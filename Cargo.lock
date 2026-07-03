@@ -1601,7 +1601,7 @@ dependencies = [
 
 [[package]]
 name = "awsim"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1714,7 +1714,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-acm"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -1728,7 +1728,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-apigateway"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -1746,7 +1746,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-appconfig"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -1760,7 +1760,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-application-autoscaling"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -1773,7 +1773,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-appsync"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -1786,7 +1786,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-athena"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -1799,7 +1799,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-backup"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -1812,7 +1812,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-batch"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -1825,7 +1825,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-bedrock"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -1847,7 +1847,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-billing"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "awsim-core",
@@ -1861,7 +1861,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-chaos"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "rand 0.8.6",
  "serde",
@@ -1873,7 +1873,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-cloudformation"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -1889,7 +1889,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-cloudfront"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -1902,7 +1902,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-cloudtrail"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -1916,7 +1916,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-cloudwatch-logs"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -1934,7 +1934,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-cloudwatch-metrics"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -1952,7 +1952,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-cognito"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -1982,7 +1982,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-comprehend"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -1993,7 +1993,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-conformance"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "aws-config",
  "aws-credential-types",
@@ -2101,7 +2101,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-chaos",
@@ -2132,7 +2132,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-datasync"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2145,7 +2145,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-dynamodb"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2167,7 +2167,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-ec2"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2180,7 +2180,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-ecr"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2199,7 +2199,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-ecs"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2212,7 +2212,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-efs"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2225,7 +2225,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-eks"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2238,7 +2238,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-elb"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2251,7 +2251,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-enforcement-tests"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "aws-config",
  "aws-credential-types",
@@ -2288,7 +2288,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-eventbridge"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2301,7 +2301,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-firehose"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2316,7 +2316,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-glacier"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2331,7 +2331,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-glue"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2344,7 +2344,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-iam"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2361,7 +2361,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-iam-policy"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "dashmap",
@@ -2372,7 +2372,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-identitystore"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2385,7 +2385,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-kendra"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2398,7 +2398,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-kinesis"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2417,7 +2417,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-kms"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -2435,7 +2435,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-lambda"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2453,7 +2453,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-memorydb"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2466,7 +2466,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-mq"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2481,7 +2481,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-opensearch"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "axum",
  "dashmap",
@@ -2494,7 +2494,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-organizations"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2508,7 +2508,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-pinpoint"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2521,7 +2521,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-pipes"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2533,7 +2533,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-polly"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2547,7 +2547,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-qldb"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2560,7 +2560,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-rds"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2573,7 +2573,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-rds-data"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2588,7 +2588,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-resourcegroupstagging"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2602,7 +2602,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-route53"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2615,7 +2615,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-s3"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2636,7 +2636,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-scheduler"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2649,7 +2649,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-secretsmanager"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2664,7 +2664,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-servicediscovery"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2677,7 +2677,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-ses"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2695,7 +2695,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-sns"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2712,7 +2712,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-sqs"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2732,7 +2732,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-ssm"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2746,7 +2746,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-sso-admin"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2759,7 +2759,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-stepfunctions"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2775,7 +2775,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-sts"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2790,7 +2790,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-transfer"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2803,7 +2803,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-waf"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -2816,7 +2816,7 @@ dependencies = [
 
 [[package]]
 name = "awsim-xray"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "awsim-core",
@@ -7120,7 +7120,7 @@ checksum = "66fee0b777b0f5ac1c69bb06d361268faafa61cd4682ae064a171c16c433e9e4"
 
 [[package]]
 name = "xtask"
-version = "0.5.0"
+version = "0.6.0"
 
 [[package]]
 name = "xz2"
