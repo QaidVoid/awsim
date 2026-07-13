@@ -50,12 +50,24 @@ pub fn batch_get_item(
         sk: String,
     }
     let mut pending: Vec<PendingKey> = Vec::new();
+    // Tables whose request entry asks for strongly consistent reads.
+    // ConsistentRead is a per-table flag in BatchGetItem, and it
+    // doubles that table's RCU charge below.
+    let mut consistent_tables: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for (table_name, table_request) in request_items {
         let keys = table_request
             .get("Keys")
             .and_then(|v| v.as_array())
             .ok_or_else(|| AwsError::validation(format!("Keys required for table {table_name}")))?;
+
+        if table_request
+            .get("ConsistentRead")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            consistent_tables.insert(table_name.clone());
+        }
 
         let table = match state.tables.get(table_name) {
             Some(t) => t,
@@ -144,9 +156,10 @@ pub fn batch_get_item(
     // Charge each touched table's read bucket with the bytes we
     // ended up returning for it. Eventually-consistent reads
     // (the BatchGetItem default) round to 4 KiB / 0.5 RCU per
-    // chunk via `read_capacity_units`.
+    // chunk via `read_capacity_units`; ConsistentRead=true tables
+    // pay the full 1 RCU per chunk.
     for (table, bytes) in &per_table_bytes {
-        let units = read_capacity_units(*bytes, false, false);
+        let units = read_capacity_units(*bytes, consistent_tables.contains(table), false);
         state.enforce_throughput(table, BucketKind::Read, units)?;
     }
 
@@ -399,6 +412,59 @@ mod tests {
         let entries = res["ItemCollectionMetrics"]["t"].as_array().unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0]["ItemCollectionKey"], json!({"pk": {"S": "a"}}));
+    }
+
+    /// ConsistentRead=true doubles a table's RCU charge: a ~5 KiB item
+    /// spans two 4 KiB chunks, costing 1 RCU eventually consistent but
+    /// 2 RCU strongly consistent. With the read bucket drained to one
+    /// token, the consistent read throttles and the eventual one passes.
+    #[test]
+    fn batch_get_charges_double_rcu_for_consistent_read() {
+        let state = state_with_lsi_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let big = "x".repeat(5000);
+        batch_write_item(
+            &state,
+            &sqlite,
+            &json!({
+                "RequestItems": {
+                    "t": [{"PutRequest": {"Item": {
+                        "pk": {"S": "a"}, "sk": {"S": "1"}, "blob": {"S": big}
+                    }}}]
+                }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        // 1 RCU -> 300 burst read tokens; leave exactly one.
+        state.tables.alter("t", |_, mut t| {
+            t.billing_mode = "PROVISIONED".into();
+            t.read_capacity_units = 1;
+            t
+        });
+        state
+            .enforce_throughput("t", BucketKind::Read, 299.0)
+            .unwrap();
+
+        let get_input = |consistent: bool| {
+            json!({
+                "RequestItems": {
+                    "t": {
+                        "Keys": [{"pk": {"S": "a"}, "sk": {"S": "1"}}],
+                        "ConsistentRead": consistent,
+                    }
+                }
+            })
+        };
+
+        let err = batch_get_item(&state, &sqlite, &get_input(true), &ctx()).unwrap_err();
+        assert_eq!(err.code, "ProvisionedThroughputExceededException");
+
+        // A failed charge doesn't drain the bucket, so the remaining
+        // token still covers the eventually-consistent read.
+        let res = batch_get_item(&state, &sqlite, &get_input(false), &ctx()).unwrap();
+        assert_eq!(res["Responses"]["t"].as_array().unwrap().len(), 1);
     }
 
     #[test]
