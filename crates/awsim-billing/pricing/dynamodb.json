@@ -3,7 +3,7 @@
   "display_name": "Amazon DynamoDB",
   "region": "us-east-1",
   "currency": "USD",
-  "source": "AWS Pricing Bulk JSON (AmazonDynamoDB, 2025-08-28T15:38:19Z)",
+  "source": "AWS Pricing Bulk JSON (AmazonDynamoDB, 2026-07-22T00:38:27Z)",
   "request_dimensions": [
     {
       "description": "$0.625 per million write request units (N. Virginia)",
@@ -12,9 +12,13 @@
         "UpdateItem",
         "DeleteItem",
         "BatchWriteItem",
-        "TransactWriteItems"
+        "TransactWriteItems",
+        "ExecuteStatement",
+        "BatchExecuteStatement",
+        "ExecuteTransaction"
       ],
-      "price_per_request": 6.25e-7
+      "price_per_request": 6.25e-7,
+      "metered_units": "write"
     },
     {
       "description": "$0.125 per million read request units (N. Virginia)",
@@ -23,9 +27,21 @@
         "BatchGetItem",
         "Query",
         "Scan",
-        "TransactGetItems"
+        "TransactGetItems",
+        "ExecuteStatement",
+        "BatchExecuteStatement",
+        "ExecuteTransaction"
       ],
-      "price_per_request": 1.25e-7
+      "price_per_request": 1.25e-7,
+      "metered_units": "read"
+    },
+    {
+      "description": "$0.0000002 per DynamoDB Streams read request unit beyond free tier (US East (N. Virginia))",
+      "operations": [
+        "GetRecords"
+      ],
+      "price_per_request": 2e-7,
+      "metered_units": null
     },
     {
       "description": "Control-plane requests",
@@ -52,12 +68,16 @@
         "DescribeGlobalTable",
         "ListGlobalTables"
       ],
-      "price_per_request": 0.0
+      "price_per_request": 0.0,
+      "metered_units": null
     }
   ],
   "default_request_rate": 0.0,
   "data_transfer_out_per_gb": 0.09,
   "data_ingest_per_gb": null,
   "storage_per_gb_month": 0.25,
-  "compute_per_gb_second": null
+  "compute_per_gb_second": null,
+  "provisioned_rcu_per_hour": 0.00013,
+  "provisioned_wcu_per_hour": 0.00065,
+  "instance_hour_per_instance": null
 }

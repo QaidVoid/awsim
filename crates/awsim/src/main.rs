@@ -954,6 +954,7 @@ async fn async_main() -> Result<()> {
         let rds_for_storage = Arc::clone(&rds_service);
         let mq_for_storage = Arc::clone(&mq_service);
         let memorydb_for_storage = Arc::clone(&memorydb_service);
+        let dynamodb_for_capacity = Arc::clone(&dynamodb_service);
         tokio::spawn(async move {
             let interval = std::time::Duration::from_secs(30);
             loop {
@@ -1027,6 +1028,19 @@ async fn async_main() -> Result<()> {
                     &account_for_storage,
                     &region_for_storage,
                     memorydb_count,
+                );
+
+                // Provisioned-capacity billing: DynamoDB PROVISIONED
+                // tables pay for configured RCU/WCU by the hour
+                // regardless of traffic.
+                let (rcu, wcu) = dynamodb_for_capacity
+                    .provisioned_capacity(&account_for_storage, &region_for_storage);
+                billing_for_storage.record_capacity_sample(
+                    "dynamodb",
+                    &account_for_storage,
+                    &region_for_storage,
+                    rcu,
+                    wcu,
                 );
             }
         });
@@ -2051,7 +2065,7 @@ fn spawn_event_router(state: &AppState) {
                                     source_ip: None,
                                     is_secure: false,
                                     internal_bypass: false,
-                                    request_units_milli: Default::default(),
+                                    request_units: Default::default(),
                                 };
 
                                 // RawMessageDelivery=true subscriptions skip the SNS

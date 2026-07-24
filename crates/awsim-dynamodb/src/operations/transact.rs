@@ -169,8 +169,7 @@ pub fn transact_get_items(
     })?;
 
     for (table, units) in &per_table_units {
-        state.enforce_throughput(table, BucketKind::Read, *units)?;
-        ctx.add_request_units(*units);
+        state.charge_throughput(ctx, table, BucketKind::Read, *units)?;
     }
 
     let mut response = json!({ "Responses": responses });
@@ -270,7 +269,7 @@ pub fn transact_write_items(
     // Track per-table write units so each table's WCU bucket gets
     // charged once at the end of the action-building phase. AWS
     // charges every action individually (1 KiB chunks per item, 2x
-    // transactional), sized by the images it touches — which takes a
+    // transactional), sized by the images it touches - which takes a
     // pre-read of the current row. The pre-reads run outside the
     // write transaction, so a concurrent writer can skew a size
     // between here and commit; that only affects the estimate.
@@ -545,8 +544,7 @@ pub fn transact_write_items(
     // transact aborts (consistent with AWS's "either everything
     // commits or nothing does" contract).
     for (table, units) in &write_units_by_table {
-        state.enforce_throughput(table, BucketKind::Write, *units)?;
-        ctx.add_request_units(*units);
+        state.charge_throughput(ctx, table, BucketKind::Write, *units)?;
     }
 
     // Run the entire validation + mutation sequence inside one sqlite

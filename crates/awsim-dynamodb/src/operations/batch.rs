@@ -162,8 +162,7 @@ pub fn batch_get_item(
     // RCU per chunk eventually consistent, 1 RCU with ConsistentRead)
     // rather than summing bytes across the batch first.
     for (table, units) in &per_table_units {
-        state.enforce_throughput(table, BucketKind::Read, *units)?;
-        ctx.add_request_units(*units);
+        state.charge_throughput(ctx, table, BucketKind::Read, *units)?;
     }
 
     let responses_json: serde_json::Map<String, Value> = responses
@@ -323,8 +322,7 @@ pub fn batch_write_item(
     // other table's writes either) land. Matches what the SDK
     // expects for a batch op that hits a capacity wall.
     for (table, units) in &write_units_by_table {
-        state.enforce_throughput(table, BucketKind::Write, *units)?;
-        ctx.add_request_units(*units);
+        state.charge_throughput(ctx, table, BucketKind::Write, *units)?;
     }
 
     for op in sqlite_ops {

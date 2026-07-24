@@ -263,6 +263,23 @@ impl DynamoDbService {
         self._tempdir.as_ref().map(|d| d.path())
     }
 
+    /// Sum the provisioned RCU / WCU across every PROVISIONED table in
+    /// `(account, region)`, for the billing meter's capacity-hour
+    /// sampling. GSIs aren't counted: awsim doesn't model per-index
+    /// provisioned throughput.
+    pub fn provisioned_capacity(&self, account_id: &str, region: &str) -> (u64, u64) {
+        let state = self.store.get(account_id, region);
+        let mut rcu = 0u64;
+        let mut wcu = 0u64;
+        for t in state.tables.iter() {
+            if t.billing_mode.eq_ignore_ascii_case("PROVISIONED") {
+                rcu += t.read_capacity_units;
+                wcu += t.write_capacity_units;
+            }
+        }
+        (rcu, wcu)
+    }
+
     fn get_state(&self, ctx: &RequestContext) -> Arc<DynamoState> {
         self.store.get(&ctx.account_id, &ctx.region)
     }
@@ -809,13 +826,17 @@ impl ServiceHandler for DynamoDbService {
 
         // Surface the RCU/WCU the operation consumed to the billing
         // meter (AWS bills on-demand tables per request unit, not per
-        // API call). The gateway strips this header off the wire and
-        // onto the RequestEvent.
+        // API call). The gateway strips these headers off the wire
+        // and onto the RequestEvent.
         match result {
             Ok(mut value) => {
-                let units = ctx.request_units();
-                if units > 0.0 {
-                    value["__headers"]["X-Awsim-Request-Units"] = units.to_string().into();
+                let read = ctx.request_units.read();
+                if read > 0.0 {
+                    value["__headers"]["X-Awsim-Read-Units"] = read.to_string().into();
+                }
+                let write = ctx.request_units.write();
+                if write > 0.0 {
+                    value["__headers"]["X-Awsim-Write-Units"] = write.to_string().into();
                 }
                 Ok(value)
             }
@@ -1043,7 +1064,7 @@ mod handler_tests {
         )
         .await
         .unwrap();
-        assert!(ctx.request_units() == 0.0);
+        assert!(ctx.request_units.read() == 0.0 && ctx.request_units.write() == 0.0);
 
         let ctx = RequestContext::new("dynamodb", "us-east-1");
         let res = svc
@@ -1054,7 +1075,8 @@ mod handler_tests {
             )
             .await
             .unwrap();
-        assert_eq!(res["__headers"]["X-Awsim-Request-Units"], json!("1"));
+        assert_eq!(res["__headers"]["X-Awsim-Write-Units"], json!("1"));
+        assert!(res["__headers"].get("X-Awsim-Read-Units").is_none());
 
         // An eventually consistent read of a tiny item is half a unit.
         let ctx = RequestContext::new("dynamodb", "us-east-1");
@@ -1066,7 +1088,7 @@ mod handler_tests {
             )
             .await
             .unwrap();
-        assert_eq!(res["__headers"]["X-Awsim-Request-Units"], json!("0.5"));
+        assert_eq!(res["__headers"]["X-Awsim-Read-Units"], json!("0.5"));
 
         // Control-plane calls consume no units and carry no header.
         let ctx = RequestContext::new("dynamodb", "us-east-1");

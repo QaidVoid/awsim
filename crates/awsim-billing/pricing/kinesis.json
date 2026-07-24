@@ -3,7 +3,7 @@
   "display_name": "Amazon Kinesis",
   "region": "us-east-1",
   "currency": "USD",
-  "source": "AWS Pricing Bulk JSON (AmazonKinesis, 2025-11-18T00:56:55Z)",
+  "source": "AWS Pricing Bulk JSON (AmazonKinesis, 2026-07-17T05:48:56Z)",
   "request_dimensions": [
     {
       "description": "$0.014 per 1 million payload units",
@@ -11,7 +11,8 @@
         "PutRecord",
         "PutRecords"
       ],
-      "price_per_request": 1.4e-8
+      "price_per_request": 1.4e-8,
+      "metered_units": null
     },
     {
       "description": "Control-plane requests",
@@ -41,12 +42,16 @@
         "StartStreamEncryption",
         "StopStreamEncryption"
       ],
-      "price_per_request": 0.0
+      "price_per_request": 0.0,
+      "metered_units": null
     }
   ],
   "default_request_rate": 0.0,
   "data_transfer_out_per_gb": 0.09,
   "data_ingest_per_gb": null,
   "storage_per_gb_month": null,
-  "compute_per_gb_second": null
+  "compute_per_gb_second": null,
+  "provisioned_rcu_per_hour": null,
+  "provisioned_wcu_per_hour": null,
+  "instance_hour_per_instance": null
 }

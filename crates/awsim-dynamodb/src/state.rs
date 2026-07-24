@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
-use awsim_core::AwsError;
+use awsim_core::{AwsError, RequestContext};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -448,6 +448,35 @@ impl DynamoState {
         drop(table);
         self.throttle
             .enforce(table_name, kind, charge, read_rate, write_rate)
+    }
+
+    /// Enforce provisioned throughput, then surface the charge to the
+    /// billing meter via the request context. Only PAY_PER_REQUEST
+    /// tables report request units - PROVISIONED tables pay for
+    /// configured capacity-hours (sampled by the billing poll loop),
+    /// not per request. The un-floored `units` figure is what AWS
+    /// bills (an eventually consistent read of a tiny item is 0.5
+    /// RRU), so metering happens before the 1-unit throttle floor.
+    pub fn charge_throughput(
+        &self,
+        ctx: &RequestContext,
+        table_name: &str,
+        kind: BucketKind,
+        units: f64,
+    ) -> Result<(), AwsError> {
+        self.enforce_throughput(table_name, kind, units)?;
+        let on_demand = self
+            .tables
+            .get(table_name)
+            .map(|t| !t.billing_mode.eq_ignore_ascii_case("PROVISIONED"))
+            .unwrap_or(false);
+        if on_demand {
+            match kind {
+                BucketKind::Read => ctx.request_units.add_read(units),
+                BucketKind::Write => ctx.request_units.add_write(units),
+            }
+        }
+        Ok(())
     }
 }
 

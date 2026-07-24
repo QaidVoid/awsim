@@ -3,12 +3,13 @@
   "display_name": "Amazon Route 53",
   "region": "us-east-1",
   "currency": "USD",
-  "source": "AWS Pricing Bulk JSON (AmazonRoute53, 2026-03-13T21:05:36Z)",
+  "source": "AWS Pricing Bulk JSON (AmazonRoute53, 2026-05-27T09:24:59Z)",
   "request_dimensions": [
     {
       "description": "$0.40 per 1,000,000 resolver queries for the first 1 Billion queries",
       "operations": [],
-      "price_per_request": 4e-7
+      "price_per_request": 4e-7,
+      "metered_units": null
     },
     {
       "description": "Control-plane requests",
@@ -31,12 +32,16 @@
         "ListTagsForResource",
         "ListTagsForResources"
       ],
-      "price_per_request": 0.0
+      "price_per_request": 0.0,
+      "metered_units": null
     }
   ],
   "default_request_rate": 0.0,
   "data_transfer_out_per_gb": 0.09,
   "data_ingest_per_gb": null,
   "storage_per_gb_month": null,
-  "compute_per_gb_second": null
+  "compute_per_gb_second": null,
+  "provisioned_rcu_per_hour": null,
+  "provisioned_wcu_per_hour": null,
+  "instance_hour_per_instance": null
 }

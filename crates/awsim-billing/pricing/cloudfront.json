@@ -8,7 +8,8 @@
     {
       "description": "$0.0100 per 10,000 HTTPS Requests",
       "operations": [],
-      "price_per_request": 1e-6
+      "price_per_request": 1e-6,
+      "metered_units": null
     },
     {
       "description": "Control-plane requests",
@@ -31,12 +32,16 @@
         "UntagResource",
         "ListTagsForResource"
       ],
-      "price_per_request": 0.0
+      "price_per_request": 0.0,
+      "metered_units": null
     }
   ],
   "default_request_rate": 0.0,
   "data_transfer_out_per_gb": 0.09,
   "data_ingest_per_gb": null,
   "storage_per_gb_month": null,
-  "compute_per_gb_second": null
+  "compute_per_gb_second": null,
+  "provisioned_rcu_per_hour": null,
+  "provisioned_wcu_per_hour": null,
+  "instance_hour_per_instance": null
 }

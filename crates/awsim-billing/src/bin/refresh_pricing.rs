@@ -52,6 +52,12 @@ struct ServiceConfig {
     /// (Lambda's GB-second axis). AWS publishes these in $/GB-Second,
     /// emitted as `compute_per_gb_second` in the slim file.
     compute_matcher: Option<DimensionMatcher>,
+    /// Optional matchers for provisioned capacity-hour rates
+    /// (DynamoDB PROVISIONED mode). AWS publishes them in
+    /// $/CapacityUnit-Hr, emitted as `provisioned_rcu_per_hour` /
+    /// `provisioned_wcu_per_hour` in the slim file.
+    provisioned_rcu_matcher: Option<DimensionMatcher>,
+    provisioned_wcu_matcher: Option<DimensionMatcher>,
     dimensions: &'static [DimensionConfig],
 }
 
@@ -66,6 +72,10 @@ struct DimensionConfig {
     fixed_description: &'static str,
     /// Used when `matcher` is `None`.
     fixed_rate: f64,
+    /// Which per-request unit axis this dimension bills, when the
+    /// service reports consumed units (DynamoDB RCU/WCU). Project
+    /// knowledge, like the operation lists.
+    metered_units: Option<awsim_billing::MeteredUnits>,
 }
 
 struct DimensionMatcher {
@@ -91,6 +101,8 @@ const SERVICES: &[ServiceConfig] = &[
             attributes: &[("usagetype", "TimedStorage-ByteHrs")],
         }),
         compute_matcher: None,
+        provisioned_rcu_matcher: None,
+        provisioned_wcu_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &[
@@ -141,6 +153,7 @@ const SERVICES: &[ServiceConfig] = &[
                 }),
                 fixed_description: "",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
             DimensionConfig {
                 operations: &[
@@ -167,6 +180,7 @@ const SERVICES: &[ServiceConfig] = &[
                 }),
                 fixed_description: "",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
             DimensionConfig {
                 operations: &[
@@ -182,6 +196,7 @@ const SERVICES: &[ServiceConfig] = &[
                 matcher: None,
                 fixed_description: "Delete and Cancel requests",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
         ],
     },
@@ -202,6 +217,8 @@ const SERVICES: &[ServiceConfig] = &[
                 ("group", "AWS-Lambda-Duration"),
             ],
         }),
+        provisioned_rcu_matcher: None,
+        provisioned_wcu_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &["Invoke", "InvokeAsync", "InvokeWithResponseStream"],
@@ -211,6 +228,7 @@ const SERVICES: &[ServiceConfig] = &[
                 }),
                 fixed_description: "",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
             DimensionConfig {
                 operations: &[
@@ -249,6 +267,7 @@ const SERVICES: &[ServiceConfig] = &[
                 matcher: None,
                 fixed_description: "Control-plane requests",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
         ],
     },
@@ -266,6 +285,20 @@ const SERVICES: &[ServiceConfig] = &[
             attributes: &[("usagetype", "TimedStorage-ByteHrs")],
         }),
         compute_matcher: None,
+        // PROVISIONED-mode tables bill for configured capacity-hours
+        // rather than per request; the billing meter samples each
+        // table's provisioned RCU/WCU against these rates.
+        provisioned_rcu_matcher: Some(DimensionMatcher {
+            product_family: "Provisioned IOPS",
+            attributes: &[("group", "DDB-ReadUnits")],
+        }),
+        provisioned_wcu_matcher: Some(DimensionMatcher {
+            product_family: "Provisioned IOPS",
+            attributes: &[("group", "DDB-WriteUnits")],
+        }),
+        // The PartiQL ops appear in both the read and the write
+        // dimension: a statement can consume either kind of unit, and
+        // metered dimensions each bill only their own axis.
         dimensions: &[
             DimensionConfig {
                 operations: &[
@@ -274,6 +307,9 @@ const SERVICES: &[ServiceConfig] = &[
                     "DeleteItem",
                     "BatchWriteItem",
                     "TransactWriteItems",
+                    "ExecuteStatement",
+                    "BatchExecuteStatement",
+                    "ExecuteTransaction",
                 ],
                 matcher: Some(DimensionMatcher {
                     product_family: "Amazon DynamoDB PayPerRequest Throughput",
@@ -281,6 +317,7 @@ const SERVICES: &[ServiceConfig] = &[
                 }),
                 fixed_description: "",
                 fixed_rate: 0.0,
+                metered_units: Some(awsim_billing::MeteredUnits::Write),
             },
             DimensionConfig {
                 operations: &[
@@ -289,6 +326,9 @@ const SERVICES: &[ServiceConfig] = &[
                     "Query",
                     "Scan",
                     "TransactGetItems",
+                    "ExecuteStatement",
+                    "BatchExecuteStatement",
+                    "ExecuteTransaction",
                 ],
                 matcher: Some(DimensionMatcher {
                     product_family: "Amazon DynamoDB PayPerRequest Throughput",
@@ -296,6 +336,17 @@ const SERVICES: &[ServiceConfig] = &[
                 }),
                 fixed_description: "",
                 fixed_rate: 0.0,
+                metered_units: Some(awsim_billing::MeteredUnits::Read),
+            },
+            DimensionConfig {
+                operations: &["GetRecords"],
+                matcher: Some(DimensionMatcher {
+                    product_family: "API Request",
+                    attributes: &[("group", "DDB-StreamsReadRequests")],
+                }),
+                fixed_description: "",
+                fixed_rate: 0.0,
+                metered_units: None,
             },
             DimensionConfig {
                 operations: &[
@@ -324,6 +375,7 @@ const SERVICES: &[ServiceConfig] = &[
                 matcher: None,
                 fixed_description: "Control-plane requests",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
         ],
     },
@@ -335,6 +387,8 @@ const SERVICES: &[ServiceConfig] = &[
         ingest_matcher: None,
         storage_matcher: None,
         compute_matcher: None,
+        provisioned_rcu_matcher: None,
+        provisioned_wcu_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &[
@@ -363,6 +417,7 @@ const SERVICES: &[ServiceConfig] = &[
                 }),
                 fixed_description: "",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
             DimensionConfig {
                 // FIFO ops aren't named differently from standard ones
@@ -378,12 +433,14 @@ const SERVICES: &[ServiceConfig] = &[
                 }),
                 fixed_description: "",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
             DimensionConfig {
                 operations: &["CreateQueue", "DeleteQueue"],
                 matcher: None,
                 fixed_description: "Control-plane requests",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
         ],
     },
@@ -395,6 +452,8 @@ const SERVICES: &[ServiceConfig] = &[
         ingest_matcher: None,
         storage_matcher: None,
         compute_matcher: None,
+        provisioned_rcu_matcher: None,
+        provisioned_wcu_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &[
@@ -422,6 +481,7 @@ const SERVICES: &[ServiceConfig] = &[
                 }),
                 fixed_description: "",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
             DimensionConfig {
                 operations: &[
@@ -434,6 +494,7 @@ const SERVICES: &[ServiceConfig] = &[
                 matcher: None,
                 fixed_description: "Control-plane requests",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
         ],
     },
@@ -445,6 +506,8 @@ const SERVICES: &[ServiceConfig] = &[
         ingest_matcher: None,
         storage_matcher: None,
         compute_matcher: None,
+        provisioned_rcu_matcher: None,
+        provisioned_wcu_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &[
@@ -466,6 +529,7 @@ const SERVICES: &[ServiceConfig] = &[
                 }),
                 fixed_description: "",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
             DimensionConfig {
                 // Per-key-month is point-in-time and metered separately
@@ -501,6 +565,7 @@ const SERVICES: &[ServiceConfig] = &[
                 matcher: None,
                 fixed_description: "Control-plane requests",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
         ],
     },
@@ -512,6 +577,8 @@ const SERVICES: &[ServiceConfig] = &[
         ingest_matcher: None,
         storage_matcher: None,
         compute_matcher: None,
+        provisioned_rcu_matcher: None,
+        provisioned_wcu_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &[
@@ -535,6 +602,7 @@ const SERVICES: &[ServiceConfig] = &[
                 }),
                 fixed_description: "",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
             DimensionConfig {
                 operations: &[
@@ -550,6 +618,7 @@ const SERVICES: &[ServiceConfig] = &[
                 matcher: None,
                 fixed_description: "Control-plane requests",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
         ],
     },
@@ -561,6 +630,8 @@ const SERVICES: &[ServiceConfig] = &[
         ingest_matcher: None,
         storage_matcher: None,
         compute_matcher: None,
+        provisioned_rcu_matcher: None,
+        provisioned_wcu_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &["PutEvents"],
@@ -576,6 +647,7 @@ const SERVICES: &[ServiceConfig] = &[
                 }),
                 fixed_description: "",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
             DimensionConfig {
                 operations: &[
@@ -602,6 +674,7 @@ const SERVICES: &[ServiceConfig] = &[
                 matcher: None,
                 fixed_description: "Control-plane requests",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
         ],
     },
@@ -613,6 +686,8 @@ const SERVICES: &[ServiceConfig] = &[
         ingest_matcher: None,
         storage_matcher: None,
         compute_matcher: None,
+        provisioned_rcu_matcher: None,
+        provisioned_wcu_matcher: None,
         dimensions: &[
             // REST API requests are billed per-call. The
             // `usagetype=USE1-ApiGatewayRequest` SKU's first paid tier
@@ -630,6 +705,7 @@ const SERVICES: &[ServiceConfig] = &[
                 }),
                 fixed_description: "",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
             DimensionConfig {
                 operations: &[
@@ -683,6 +759,7 @@ const SERVICES: &[ServiceConfig] = &[
                 matcher: None,
                 fixed_description: "Control-plane requests",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
         ],
     },
@@ -694,6 +771,8 @@ const SERVICES: &[ServiceConfig] = &[
         ingest_matcher: None,
         storage_matcher: None,
         compute_matcher: None,
+        provisioned_rcu_matcher: None,
+        provisioned_wcu_matcher: None,
         dimensions: &[
             // AWS bills per state transition, not per execution. We
             // can only see StartExecution from the request event, so
@@ -709,6 +788,7 @@ const SERVICES: &[ServiceConfig] = &[
                 }),
                 fixed_description: "",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
             DimensionConfig {
                 operations: &[
@@ -736,6 +816,7 @@ const SERVICES: &[ServiceConfig] = &[
                 matcher: None,
                 fixed_description: "Control-plane requests",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
         ],
     },
@@ -747,6 +828,8 @@ const SERVICES: &[ServiceConfig] = &[
         ingest_matcher: None,
         storage_matcher: None,
         compute_matcher: None,
+        provisioned_rcu_matcher: None,
+        provisioned_wcu_matcher: None,
         dimensions: &[
             // AWS bills per recipient, not per send. SDK callers
             // typically send to one recipient at a time, so per-call
@@ -766,6 +849,7 @@ const SERVICES: &[ServiceConfig] = &[
                 }),
                 fixed_description: "",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
             DimensionConfig {
                 operations: &[
@@ -792,6 +876,7 @@ const SERVICES: &[ServiceConfig] = &[
                 matcher: None,
                 fixed_description: "Control-plane requests",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
         ],
     },
@@ -803,6 +888,8 @@ const SERVICES: &[ServiceConfig] = &[
         ingest_matcher: None,
         storage_matcher: None,
         compute_matcher: None,
+        provisioned_rcu_matcher: None,
+        provisioned_wcu_matcher: None,
         dimensions: &[
             // AWS bills CloudWatch API requests at $0.01 per 1,000.
             // PutMetricData is in the same bucket — its per-metric
@@ -833,6 +920,7 @@ const SERVICES: &[ServiceConfig] = &[
                 }),
                 fixed_description: "",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
             DimensionConfig {
                 operations: &[
@@ -846,6 +934,7 @@ const SERVICES: &[ServiceConfig] = &[
                 matcher: None,
                 fixed_description: "Control-plane requests",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
         ],
     },
@@ -857,6 +946,8 @@ const SERVICES: &[ServiceConfig] = &[
         ingest_matcher: None,
         storage_matcher: None,
         compute_matcher: None,
+        provisioned_rcu_matcher: None,
+        provisioned_wcu_matcher: None,
         dimensions: &[
             // The Route53 resolver is metered server-side (DNS resolves
             // never reach the AWSim AWS-API gateway) so this dimension
@@ -870,6 +961,7 @@ const SERVICES: &[ServiceConfig] = &[
                 }),
                 fixed_description: "",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
             DimensionConfig {
                 operations: &[
@@ -894,6 +986,7 @@ const SERVICES: &[ServiceConfig] = &[
                 matcher: None,
                 fixed_description: "Control-plane requests",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
         ],
     },
@@ -905,6 +998,8 @@ const SERVICES: &[ServiceConfig] = &[
         ingest_matcher: None,
         storage_matcher: None,
         compute_matcher: None,
+        provisioned_rcu_matcher: None,
+        provisioned_wcu_matcher: None,
         dimensions: &[
             // Provisioned-mode put-payload-units is what AWS actually
             // bills against — one unit per 25KB rounded up. We charge
@@ -917,6 +1012,7 @@ const SERVICES: &[ServiceConfig] = &[
                 }),
                 fixed_description: "",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
             DimensionConfig {
                 operations: &[
@@ -948,6 +1044,7 @@ const SERVICES: &[ServiceConfig] = &[
                 matcher: None,
                 fixed_description: "Control-plane requests",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
         ],
     },
@@ -962,6 +1059,8 @@ const SERVICES: &[ServiceConfig] = &[
         ingest_matcher: None,
         storage_matcher: None,
         compute_matcher: None,
+        provisioned_rcu_matcher: None,
+        provisioned_wcu_matcher: None,
         dimensions: &[
             DimensionConfig {
                 // CloudFront proxied traffic doesn't typically reach
@@ -974,6 +1073,7 @@ const SERVICES: &[ServiceConfig] = &[
                 }),
                 fixed_description: "",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
             DimensionConfig {
                 operations: &[
@@ -998,6 +1098,7 @@ const SERVICES: &[ServiceConfig] = &[
                 matcher: None,
                 fixed_description: "Control-plane requests",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
         ],
     },
@@ -1017,6 +1118,8 @@ const SERVICES: &[ServiceConfig] = &[
         }),
         storage_matcher: None,
         compute_matcher: None,
+        provisioned_rcu_matcher: None,
+        provisioned_wcu_matcher: None,
         dimensions: &[
             // Per-request rate is $0 — Firehose bills purely on
             // ingested bytes — but listing PutRecord/PutRecordBatch
@@ -1026,6 +1129,7 @@ const SERVICES: &[ServiceConfig] = &[
                 matcher: None,
                 fixed_description: "PutRecord / PutRecordBatch",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
             DimensionConfig {
                 operations: &[
@@ -1043,6 +1147,7 @@ const SERVICES: &[ServiceConfig] = &[
                 matcher: None,
                 fixed_description: "Control-plane requests",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
         ],
     },
@@ -1071,12 +1176,15 @@ const SERVICES: &[ServiceConfig] = &[
             attributes: &[("usagetype", "USE1-TimedStorage-ByteHrs")],
         }),
         compute_matcher: None,
+        provisioned_rcu_matcher: None,
+        provisioned_wcu_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &["PutLogEvents"],
                 matcher: None,
                 fixed_description: "PutLogEvents (billed by GB ingested)",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
             DimensionConfig {
                 operations: &[
@@ -1117,6 +1225,7 @@ const SERVICES: &[ServiceConfig] = &[
                 matcher: None,
                 fixed_description: "Control-plane requests",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
         ],
     },
@@ -1135,6 +1244,8 @@ const SERVICES: &[ServiceConfig] = &[
         ingest_matcher: None,
         storage_matcher: None,
         compute_matcher: None,
+        provisioned_rcu_matcher: None,
+        provisioned_wcu_matcher: None,
         dimensions: &[
             DimensionConfig {
                 operations: &[
@@ -1188,6 +1299,7 @@ const SERVICES: &[ServiceConfig] = &[
                 matcher: None,
                 fixed_description: "API requests (free — billed via MAU)",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
             // Informational MAU dimension. count_for never increments
             // (AWSim doesn't track unique principals over a month);
@@ -1201,6 +1313,7 @@ const SERVICES: &[ServiceConfig] = &[
                 }),
                 fixed_description: "",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
         ],
     },
@@ -1212,6 +1325,8 @@ const SERVICES: &[ServiceConfig] = &[
         ingest_matcher: None,
         storage_matcher: None,
         compute_matcher: None,
+        provisioned_rcu_matcher: None,
+        provisioned_wcu_matcher: None,
         dimensions: &[DimensionConfig {
             operations: &[
                 "GetId",
@@ -1239,6 +1354,7 @@ const SERVICES: &[ServiceConfig] = &[
             matcher: None,
             fixed_description: "Identity Pool API (free)",
             fixed_rate: 0.0,
+            metered_units: None,
         }],
     },
     ServiceConfig {
@@ -1254,6 +1370,8 @@ const SERVICES: &[ServiceConfig] = &[
             attributes: &[("usagetype", "TimedStorage-ByteHrs")],
         }),
         compute_matcher: None,
+        provisioned_rcu_matcher: None,
+        provisioned_wcu_matcher: None,
         dimensions: &[
             // Per-request rate is $0 for the ECR API — billing is
             // entirely on stored bytes + cross-region transfer.
@@ -1270,6 +1388,7 @@ const SERVICES: &[ServiceConfig] = &[
                 matcher: None,
                 fixed_description: "Read API requests",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
             DimensionConfig {
                 operations: &[
@@ -1294,6 +1413,7 @@ const SERVICES: &[ServiceConfig] = &[
                 matcher: None,
                 fixed_description: "Write / control-plane requests",
                 fixed_rate: 0.0,
+                metered_units: None,
             },
         ],
     },
@@ -1495,6 +1615,7 @@ async fn build_service(
             description,
             operations: dim.operations.iter().map(|s| s.to_string()).collect(),
             price_per_request: rate,
+            metered_units: dim.metered_units,
         });
     }
 
@@ -1544,6 +1665,26 @@ async fn build_service(
             }
         });
 
+    // Provisioned capacity-hour rates (DynamoDB PROVISIONED mode).
+    let extract_rate = |m: &DimensionMatcher, what: &str| match extract_dimension(&doc, m) {
+        Some((rate, _desc)) => Some(rate),
+        None => {
+            eprintln!(
+                "  WARN: no {what} SKU for {}/{:?} - leaving null",
+                m.product_family, m.attributes
+            );
+            None
+        }
+    };
+    let provisioned_rcu_per_hour = cfg
+        .provisioned_rcu_matcher
+        .as_ref()
+        .and_then(|m| extract_rate(m, "provisioned RCU"));
+    let provisioned_wcu_per_hour = cfg
+        .provisioned_wcu_matcher
+        .as_ref()
+        .and_then(|m| extract_rate(m, "provisioned WCU"));
+
     Ok(ServicePricing {
         service: cfg.service.to_string(),
         display_name,
@@ -1559,6 +1700,8 @@ async fn build_service(
         data_ingest_per_gb,
         storage_per_gb_month,
         compute_per_gb_second,
+        provisioned_rcu_per_hour,
+        provisioned_wcu_per_hour,
         instance_hour_per_instance: None,
     })
 }

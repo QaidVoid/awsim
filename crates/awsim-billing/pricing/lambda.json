@@ -3,7 +3,7 @@
   "display_name": "AWS Lambda",
   "region": "us-east-1",
   "currency": "USD",
-  "source": "AWS Pricing Bulk JSON (AWSLambda, 2026-04-28T22:16:02Z)",
+  "source": "AWS Pricing Bulk JSON (AWSLambda, 2026-07-17T07:52:16Z)",
   "request_dimensions": [
     {
       "description": "AWS Lambda - Total Requests - US East (Northern Virginia)",
@@ -12,7 +12,8 @@
         "InvokeAsync",
         "InvokeWithResponseStream"
       ],
-      "price_per_request": 2e-7
+      "price_per_request": 2e-7,
+      "metered_units": null
     },
     {
       "description": "Control-plane requests",
@@ -49,12 +50,16 @@
         "ListEventSourceMappings",
         "GetEventSourceMapping"
       ],
-      "price_per_request": 0.0
+      "price_per_request": 0.0,
+      "metered_units": null
     }
   ],
   "default_request_rate": 0.0,
   "data_transfer_out_per_gb": 0.09,
   "data_ingest_per_gb": null,
   "storage_per_gb_month": null,
-  "compute_per_gb_second": 0.0000166667
+  "compute_per_gb_second": 0.0000166667,
+  "provisioned_rcu_per_hour": null,
+  "provisioned_wcu_per_hour": null,
+  "instance_hour_per_instance": null
 }

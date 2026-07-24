@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::pricing::PricingCatalog;
+use crate::pricing::{MeteredUnits, PricingCatalog};
 use crate::state::{BillingStateStore, OpCounterSnapshot};
 
 const SECONDS_PER_MONTH: f64 = 30.0 * 24.0 * 60.0 * 60.0;
@@ -52,6 +52,13 @@ pub struct ServiceCost {
     pub resource_cost_usd: f64,
     /// Most recent sampled count of running instances.
     pub resource_count: u64,
+    /// Accumulated provisioned-capacity cost (DynamoDB PROVISIONED
+    /// RCU/WCU-hours). Zero for services without provisioned rates.
+    pub capacity_cost_usd: f64,
+    /// Most recent sampled total of provisioned read capacity units.
+    pub provisioned_rcu: u64,
+    /// Most recent sampled total of provisioned write capacity units.
+    pub provisioned_wcu: u64,
     pub dimensions: Vec<DimensionCost>,
 }
 
@@ -76,6 +83,8 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
     let mut compute_agg: BTreeMap<String, (u64, u64)> = BTreeMap::new();
     // (cost picos, max running-instance count seen).
     let mut resources_agg: BTreeMap<String, (u64, u64)> = BTreeMap::new();
+    // (cost picos, max provisioned RCU, max provisioned WCU).
+    let mut capacity_agg: BTreeMap<String, (u64, u64, u64)> = BTreeMap::new();
     let mut earliest_start: u64 = 0;
 
     for ((_acct, _region), state) in store.iter_all() {
@@ -91,7 +100,8 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
                 entry.bytes_in += snap.bytes_in;
                 entry.bytes_out += snap.bytes_out;
                 entry.error_count += snap.error_count;
-                entry.units_milli += snap.units_milli;
+                entry.read_units_milli += snap.read_units_milli;
+                entry.write_units_milli += snap.write_units_milli;
             }
         }
         for (svc, st) in state.iter_storage() {
@@ -108,6 +118,12 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
             let entry = resources_agg.entry(svc).or_default();
             entry.0 += r.accumulated_cost_picos;
             entry.1 = entry.1.max(r.last_sample_count);
+        }
+        for (svc, c) in state.iter_capacity() {
+            let entry = capacity_agg.entry(svc).or_default();
+            entry.0 += c.accumulated_cost_picos;
+            entry.1 = entry.1.max(c.last_sample_rcu);
+            entry.2 = entry.2.max(c.last_sample_wcu);
         }
     }
 
@@ -168,31 +184,46 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
             svc_bytes_out += snap.bytes_out;
             svc_error_count += snap.error_count;
 
-            // Services that report metered units (DynamoDB RCU/WCU)
-            // bill on those; everything else bills per call via
-            // `count` (which Step Functions / Polly already scale to
-            // their own billing units at record time).
-            let billable_units = if snap.units_milli > 0 {
-                snap.units_milli as f64 / 1000.0
-            } else {
-                snap.count as f64
-            };
-
+            // Metered dimensions (DynamoDB read/write request units)
+            // bill the units the service reported on their own axis;
+            // count-based dimensions bill per call (Step Functions /
+            // Polly already scale `count` to their billing units at
+            // record time). An operation can sit in one metered
+            // dimension per axis - PartiQL statements consume both
+            // kinds - so metered matches don't stop the scan, while a
+            // count-based match still wins exclusively.
             let mut matched = false;
+            let mut counted = false;
             if let Some(p) = pricing {
                 for (idx, dim) in p.request_dimensions.iter().enumerate() {
-                    if dim.operations.iter().any(|o| o == &op_name) {
-                        let cost = billable_units * dim.price_per_request;
+                    if !dim.operations.iter().any(|o| o == &op_name) {
+                        continue;
+                    }
+                    let billable_units = match dim.metered_units {
+                        Some(MeteredUnits::Read) => snap.read_units_milli as f64 / 1000.0,
+                        Some(MeteredUnits::Write) => snap.write_units_milli as f64 / 1000.0,
+                        None if matched => continue,
+                        None => snap.count as f64,
+                    };
+                    let cost = billable_units * dim.price_per_request;
+                    // The call count belongs to the first matching
+                    // dimension only, so per-dimension request counts
+                    // still sum to the service total.
+                    if !counted {
                         dim_buckets[idx].request_count += snap.count;
-                        dim_buckets[idx].cost_usd += cost;
-                        svc_request_cost += cost;
-                        matched = true;
+                        counted = true;
+                    }
+                    dim_buckets[idx].cost_usd += cost;
+                    svc_request_cost += cost;
+                    let is_metered = dim.metered_units.is_some();
+                    matched = true;
+                    if !is_metered {
                         break;
                     }
                 }
             }
             if !matched {
-                let cost = billable_units * other.price_per_request;
+                let cost = snap.count as f64 * other.price_per_request;
                 other.request_count += snap.count;
                 other.cost_usd += cost;
                 svc_request_cost += cost;
@@ -224,12 +255,17 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
             .remove(&svc_name)
             .map(|(picos, count)| (picos as f64 / 1e12, count))
             .unwrap_or((0.0, 0));
+        let (capacity_cost_usd, provisioned_rcu, provisioned_wcu) = capacity_agg
+            .remove(&svc_name)
+            .map(|(picos, rcu, wcu)| (picos as f64 / 1e12, rcu, wcu))
+            .unwrap_or((0.0, 0, 0));
         let svc_total = svc_request_cost
             + transfer_cost
             + ingest_cost
             + storage_cost_usd
             + compute_cost_usd
-            + resource_cost_usd;
+            + resource_cost_usd
+            + capacity_cost_usd;
         total_cost += svc_total;
 
         services_out.push(ServiceCost {
@@ -249,6 +285,9 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
             compute_gb_seconds,
             resource_cost_usd,
             resource_count,
+            capacity_cost_usd,
+            provisioned_rcu,
+            provisioned_wcu,
             dimensions: dim_buckets,
         });
     }
@@ -279,6 +318,12 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
                 .filter(|(_, (picos, count))| *picos > 0 || *count > 0)
                 .map(|(k, _)| k.clone()),
         )
+        .chain(
+            capacity_agg
+                .iter()
+                .filter(|(_, (picos, rcu, wcu))| *picos > 0 || *rcu > 0 || *wcu > 0)
+                .map(|(k, _)| k.clone()),
+        )
         .collect();
     for svc_name in leftover_keys {
         let pricing = catalog.get(&svc_name);
@@ -300,6 +345,10 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
             .remove(&svc_name)
             .map(|(picos, count)| (picos as f64 / 1e12, count))
             .unwrap_or((0.0, 0));
+        let (capacity_cost_usd, provisioned_rcu, provisioned_wcu) = capacity_agg
+            .remove(&svc_name)
+            .map(|(picos, rcu, wcu)| (picos as f64 / 1e12, rcu, wcu))
+            .unwrap_or((0.0, 0, 0));
         let dim_buckets: Vec<DimensionCost> = pricing
             .map(|p| {
                 p.request_dimensions
@@ -313,7 +362,8 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
                     .collect()
             })
             .unwrap_or_default();
-        let svc_total = storage_cost_usd + compute_cost_usd + resource_cost_usd;
+        let svc_total =
+            storage_cost_usd + compute_cost_usd + resource_cost_usd + capacity_cost_usd;
         total_cost += svc_total;
         services_out.push(ServiceCost {
             service: svc_name,
@@ -332,6 +382,9 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
             compute_gb_seconds,
             resource_cost_usd,
             resource_count,
+            capacity_cost_usd,
+            provisioned_rcu,
+            provisioned_wcu,
             dimensions: dim_buckets,
         });
     }

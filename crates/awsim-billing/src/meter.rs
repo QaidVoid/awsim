@@ -68,6 +68,43 @@ impl BillingMeter {
             .record_sample(current_count, now, per_count_per_sec);
     }
 
+    /// Record a point-in-time provisioned-capacity sample (DynamoDB
+    /// PROVISIONED tables' summed RCU/WCU). Cost accrues against the
+    /// service's published capacity-hour rates; nothing happens if the
+    /// pricing catalogue has none.
+    pub fn record_capacity_sample(
+        &self,
+        service: &str,
+        account_id: &str,
+        region: &str,
+        rcu: u64,
+        wcu: u64,
+    ) {
+        let Some(pricing) = self.pricing.get(service) else {
+            return;
+        };
+        let (Some(rcu_per_hour), Some(wcu_per_hour)) = (
+            pricing.provisioned_rcu_per_hour,
+            pricing.provisioned_wcu_per_hour,
+        ) else {
+            return;
+        };
+        const SECONDS_PER_HOUR: f64 = 3600.0;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let state = self.store.get(account_id, region);
+        state.ensure_started(now);
+        state.capacity_for(service).record_sample(
+            rcu,
+            wcu,
+            now,
+            rcu_per_hour / SECONDS_PER_HOUR,
+            wcu_per_hour / SECONDS_PER_HOUR,
+        );
+    }
+
     /// Record a point-in-time storage sample for a metered service.
     /// Cost since the last sample accrues into the per-service
     /// `StorageMetering` bucket; nothing happens if the service has
@@ -133,7 +170,8 @@ impl BillingMeter {
             event.request_size,
             event.response_size,
             event.error_code.is_some(),
-            event.request_units,
+            event.read_units,
+            event.write_units,
         );
 
         // Compute billing — Lambda's GB-second axis. We only accrue

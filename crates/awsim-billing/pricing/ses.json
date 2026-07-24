@@ -3,7 +3,7 @@
   "display_name": "Amazon Simple Email Service",
   "region": "us-east-1",
   "currency": "USD",
-  "source": "AWS Pricing Bulk JSON (AmazonSES, 2026-04-28T18:18:24Z)",
+  "source": "AWS Pricing Bulk JSON (AmazonSES, 2026-07-22T17:20:54Z)",
   "request_dimensions": [
     {
       "description": "Cost per recipient of SendEmail or SendRawEmail",
@@ -14,7 +14,8 @@
         "SendBulkTemplatedEmail",
         "SendTemplatedEmail"
       ],
-      "price_per_request": 0.0001
+      "price_per_request": 0.0001,
+      "metered_units": null
     },
     {
       "description": "Control-plane requests",
@@ -39,12 +40,16 @@
         "TagResource",
         "UntagResource"
       ],
-      "price_per_request": 0.0
+      "price_per_request": 0.0,
+      "metered_units": null
     }
   ],
   "default_request_rate": 0.0,
   "data_transfer_out_per_gb": 0.09,
   "data_ingest_per_gb": null,
   "storage_per_gb_month": null,
-  "compute_per_gb_second": null
+  "compute_per_gb_second": null,
+  "provisioned_rcu_per_hour": null,
+  "provisioned_wcu_per_hour": null,
+  "instance_hour_per_instance": null
 }

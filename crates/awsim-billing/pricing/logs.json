@@ -3,14 +3,15 @@
   "display_name": "AmazonCloudWatch",
   "region": "us-east-1",
   "currency": "USD",
-  "source": "AWS Pricing Bulk JSON (AmazonCloudWatch, 2026-03-13T17:42:19Z)",
+  "source": "AWS Pricing Bulk JSON (AmazonCloudWatch, 2026-07-16T12:46:06Z)",
   "request_dimensions": [
     {
       "description": "PutLogEvents (billed by GB ingested)",
       "operations": [
         "PutLogEvents"
       ],
-      "price_per_request": 0.0
+      "price_per_request": 0.0,
+      "metered_units": null
     },
     {
       "description": "Control-plane requests",
@@ -49,12 +50,16 @@
         "ListTagsForResource",
         "ListTagsLogGroup"
       ],
-      "price_per_request": 0.0
+      "price_per_request": 0.0,
+      "metered_units": null
     }
   ],
   "default_request_rate": 0.0,
   "data_transfer_out_per_gb": 0.09,
   "data_ingest_per_gb": 0.5,
   "storage_per_gb_month": 0.03,
-  "compute_per_gb_second": null
+  "compute_per_gb_second": null,
+  "provisioned_rcu_per_hour": null,
+  "provisioned_wcu_per_hour": null,
+  "instance_hour_per_instance": null
 }

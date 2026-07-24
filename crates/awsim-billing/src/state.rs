@@ -11,27 +11,30 @@ pub struct OpCounter {
     pub bytes_in: AtomicU64,
     pub bytes_out: AtomicU64,
     pub error_count: AtomicU64,
-    /// Metered billable units in thousandths, populated when the
+    /// Metered billable read units in thousandths, populated when the
     /// responding service reports per-request units (DynamoDB's
-    /// consumed RCU/WCU). Zero for services billed per call — the
-    /// report falls back to `count` for those.
-    pub units_milli: AtomicU64,
+    /// consumed RCU). Zero for services billed per call.
+    pub read_units_milli: AtomicU64,
+    /// Metered billable write units in thousandths (DynamoDB's
+    /// consumed WCU); see `read_units_milli`.
+    pub write_units_milli: AtomicU64,
 }
 
 impl OpCounter {
     /// Record one request's billable units. For most services `units` is 1
     /// (one billable unit per API call). Step Functions passes the
     /// number of state transitions executed by the call so the cost
-    /// math matches AWS's per-transition billing. `metered_units`
-    /// carries fractional per-request units (DynamoDB RCU/WCU) when
-    /// the service reports them.
+    /// math matches AWS's per-transition billing. `read_units` /
+    /// `write_units` carry fractional per-request units (DynamoDB
+    /// RCU/WCU) when the service reports them.
     fn record(
         &self,
         units: u64,
         bytes_in: u64,
         bytes_out: u64,
         is_error: bool,
-        metered_units: Option<f64>,
+        read_units: Option<f64>,
+        write_units: Option<f64>,
     ) {
         self.count.fetch_add(units, Ordering::Relaxed);
         self.bytes_in.fetch_add(bytes_in, Ordering::Relaxed);
@@ -39,12 +42,15 @@ impl OpCounter {
         if is_error {
             self.error_count.fetch_add(1, Ordering::Relaxed);
         }
-        if let Some(u) = metered_units
-            && u > 0.0
-        {
-            self.units_milli
-                .fetch_add((u * 1000.0).round() as u64, Ordering::Relaxed);
-        }
+        let add_milli = |cell: &AtomicU64, units: Option<f64>| {
+            if let Some(u) = units
+                && u > 0.0
+            {
+                cell.fetch_add((u * 1000.0).round() as u64, Ordering::Relaxed);
+            }
+        };
+        add_milli(&self.read_units_milli, read_units);
+        add_milli(&self.write_units_milli, write_units);
     }
 
     pub fn snapshot(&self) -> OpCounterSnapshot {
@@ -53,7 +59,8 @@ impl OpCounter {
             bytes_in: self.bytes_in.load(Ordering::Relaxed),
             bytes_out: self.bytes_out.load(Ordering::Relaxed),
             error_count: self.error_count.load(Ordering::Relaxed),
-            units_milli: self.units_milli.load(Ordering::Relaxed),
+            read_units_milli: self.read_units_milli.load(Ordering::Relaxed),
+            write_units_milli: self.write_units_milli.load(Ordering::Relaxed),
         }
     }
 
@@ -63,7 +70,8 @@ impl OpCounter {
             bytes_in: AtomicU64::new(snap.bytes_in),
             bytes_out: AtomicU64::new(snap.bytes_out),
             error_count: AtomicU64::new(snap.error_count),
-            units_milli: AtomicU64::new(snap.units_milli),
+            read_units_milli: AtomicU64::new(snap.read_units_milli),
+            write_units_milli: AtomicU64::new(snap.write_units_milli),
         }
     }
 }
@@ -79,7 +87,9 @@ pub struct OpCounterSnapshot {
     #[serde(default)]
     pub error_count: u64,
     #[serde(default)]
-    pub units_milli: u64,
+    pub read_units_milli: u64,
+    #[serde(default)]
+    pub write_units_milli: u64,
 }
 
 /// Per-service point-in-time storage tracker.
@@ -265,6 +275,75 @@ pub struct ResourceMeteringSnapshot {
     pub accumulated_cost_picos: u64,
 }
 
+/// Per-service provisioned-capacity tracker (DynamoDB PROVISIONED
+/// billing). AWS charges for configured RCU/WCU by the hour whether or
+/// not requests arrive, so the poll loop samples the summed provisioned
+/// capacity across tables and accrues cost over elapsed time. Same
+/// trapezoidal sample-and-accrue shape as the storage tracker.
+#[derive(Debug, Default)]
+pub struct CapacityMetering {
+    pub last_sample_rcu: AtomicU64,
+    pub last_sample_wcu: AtomicU64,
+    pub last_sample_ts: AtomicU64,
+    /// Accumulated capacity cost in pico-USD (1e-12 USD).
+    pub accumulated_cost_picos: AtomicU64,
+}
+
+impl CapacityMetering {
+    fn snapshot(&self) -> CapacityMeteringSnapshot {
+        CapacityMeteringSnapshot {
+            last_sample_rcu: self.last_sample_rcu.load(Ordering::Relaxed),
+            last_sample_wcu: self.last_sample_wcu.load(Ordering::Relaxed),
+            last_sample_ts: self.last_sample_ts.load(Ordering::Relaxed),
+            accumulated_cost_picos: self.accumulated_cost_picos.load(Ordering::Relaxed),
+        }
+    }
+
+    fn from_snapshot(s: CapacityMeteringSnapshot) -> Self {
+        Self {
+            last_sample_rcu: AtomicU64::new(s.last_sample_rcu),
+            last_sample_wcu: AtomicU64::new(s.last_sample_wcu),
+            last_sample_ts: AtomicU64::new(s.last_sample_ts),
+            accumulated_cost_picos: AtomicU64::new(s.accumulated_cost_picos),
+        }
+    }
+
+    /// Accrue cost for the interval since the previous sample, given
+    /// per-unit-per-second rates for the two capacity axes.
+    pub fn record_sample(
+        &self,
+        rcu: u64,
+        wcu: u64,
+        now_secs: u64,
+        rcu_per_sec_usd: f64,
+        wcu_per_sec_usd: f64,
+    ) {
+        let last_ts = self.last_sample_ts.swap(now_secs, Ordering::Relaxed);
+        let last_rcu = self.last_sample_rcu.swap(rcu, Ordering::Relaxed);
+        let last_wcu = self.last_sample_wcu.swap(wcu, Ordering::Relaxed);
+        if last_ts == 0 || now_secs <= last_ts {
+            return;
+        }
+        let elapsed = (now_secs - last_ts) as f64;
+        let avg_rcu = (last_rcu as f64 + rcu as f64) / 2.0;
+        let avg_wcu = (last_wcu as f64 + wcu as f64) / 2.0;
+        let cost_usd = elapsed * (avg_rcu * rcu_per_sec_usd + avg_wcu * wcu_per_sec_usd);
+        if cost_usd > 0.0 {
+            let picos = (cost_usd * 1e12) as u64;
+            self.accumulated_cost_picos
+                .fetch_add(picos, Ordering::Relaxed);
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct CapacityMeteringSnapshot {
+    pub last_sample_rcu: u64,
+    pub last_sample_wcu: u64,
+    pub last_sample_ts: u64,
+    pub accumulated_cost_picos: u64,
+}
+
 /// Per-(account, region) usage bucket.
 ///
 /// Outer DashMap keyed by service signing name (e.g. `s3`), inner DashMap
@@ -282,6 +361,9 @@ pub struct BillingState {
     /// Per-service running-instance trackers (EC2/RDS/OpenSearch
     /// instance-hour billing).
     resources: DashMap<String, ResourceMetering>,
+    /// Per-service provisioned-capacity trackers (DynamoDB
+    /// PROVISIONED RCU/WCU-hour billing).
+    capacity: DashMap<String, CapacityMetering>,
 }
 
 impl BillingState {
@@ -293,12 +375,18 @@ impl BillingState {
         bytes_in: u64,
         bytes_out: u64,
         is_error: bool,
-        metered_units: Option<f64>,
+        read_units: Option<f64>,
+        write_units: Option<f64>,
     ) {
         let svc = self.services.entry(service.to_string()).or_default();
-        svc.entry(operation.to_string())
-            .or_default()
-            .record(units, bytes_in, bytes_out, is_error, metered_units);
+        svc.entry(operation.to_string()).or_default().record(
+            units,
+            bytes_in,
+            bytes_out,
+            is_error,
+            read_units,
+            write_units,
+        );
     }
 
     pub fn ensure_started(&self, now_secs: u64) {
@@ -391,6 +479,29 @@ impl BillingState {
             .map(|r| (r.key().clone(), r.value().snapshot()))
             .collect()
     }
+
+    pub fn snapshot_capacity(&self) -> HashMap<String, CapacityMeteringSnapshot> {
+        self.capacity
+            .iter()
+            .map(|c| (c.key().clone(), c.value().snapshot()))
+            .collect()
+    }
+
+    /// Look up (creating if absent) the provisioned-capacity tracker
+    /// for `service`.
+    pub fn capacity_for(
+        &self,
+        service: &str,
+    ) -> dashmap::mapref::one::RefMut<'_, String, CapacityMetering> {
+        self.capacity.entry(service.to_string()).or_default()
+    }
+
+    pub fn iter_capacity(&self) -> Vec<(String, CapacityMeteringSnapshot)> {
+        self.capacity
+            .iter()
+            .map(|c| (c.key().clone(), c.value().snapshot()))
+            .collect()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -406,6 +517,8 @@ pub struct BillingSnapshot {
     pub compute: HashMap<String, ComputeMeteringSnapshot>,
     #[serde(default)]
     pub resources: HashMap<String, ResourceMeteringSnapshot>,
+    #[serde(default)]
+    pub capacity: HashMap<String, CapacityMeteringSnapshot>,
 }
 
 impl Snapshottable for BillingState {
@@ -420,6 +533,7 @@ impl Snapshottable for BillingState {
             storage: self.snapshot_storage(),
             compute: self.snapshot_compute(),
             resources: self.snapshot_resources(),
+            capacity: self.snapshot_capacity(),
         }
     }
 
@@ -444,6 +558,10 @@ impl Snapshottable for BillingState {
         for (svc_name, r) in snap.resources {
             resources.insert(svc_name, ResourceMetering::from_snapshot(r));
         }
+        let capacity: DashMap<String, CapacityMetering> = DashMap::new();
+        for (svc_name, c) in snap.capacity {
+            capacity.insert(svc_name, CapacityMetering::from_snapshot(c));
+        }
         (
             snap.account_id,
             snap.region,
@@ -453,6 +571,7 @@ impl Snapshottable for BillingState {
                 storage,
                 compute,
                 resources,
+                capacity,
             },
         )
     }

@@ -3,14 +3,15 @@
   "display_name": "CloudWatch Events",
   "region": "us-east-1",
   "currency": "USD",
-  "source": "AWS Pricing Bulk JSON (AWSEvents, 2026-02-03T18:57:46Z)",
+  "source": "AWS Pricing Bulk JSON (AWSEvents, 2026-05-29T20:53:01Z)",
   "request_dimensions": [
     {
       "description": "$1.00 per million EventBridge custom events received in US East (N. Virginia)",
       "operations": [
         "PutEvents"
       ],
-      "price_per_request": 1e-6
+      "price_per_request": 1e-6,
+      "metered_units": null
     },
     {
       "description": "Control-plane requests",
@@ -35,12 +36,16 @@
         "ListTagsForResource",
         "TestEventPattern"
       ],
-      "price_per_request": 0.0
+      "price_per_request": 0.0,
+      "metered_units": null
     }
   ],
   "default_request_rate": 0.0,
   "data_transfer_out_per_gb": 0.09,
   "data_ingest_per_gb": null,
   "storage_per_gb_month": null,
-  "compute_per_gb_second": null
+  "compute_per_gb_second": null,
+  "provisioned_rcu_per_hour": null,
+  "provisioned_wcu_per_hour": null,
+  "instance_hour_per_instance": null
 }

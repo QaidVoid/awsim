@@ -527,8 +527,7 @@ pub fn put_item(
     }
     // An overwrite charges the larger of the old and new item sizes.
     let write_units = write_capacity_units(item_bytes.max(old_bytes), false);
-    state.enforce_throughput(&table_name, BucketKind::Write, write_units)?;
-    ctx.add_request_units(write_units);
+    state.charge_throughput(ctx, &table_name, BucketKind::Write, write_units)?;
     if let Some(cc) = build_consumed_capacity(input, &table_name, 0.0, write_units, None) {
         result["ConsumedCapacity"] = cc;
     }
@@ -582,8 +581,7 @@ pub fn get_item(
         }
     };
     let read_units = read_capacity_units(bytes, consistent_read, false);
-    state.enforce_throughput(table_name, BucketKind::Read, read_units)?;
-    ctx.add_request_units(read_units);
+    state.charge_throughput(ctx, table_name, BucketKind::Read, read_units)?;
     if let Some(cc) = build_consumed_capacity(input, table_name, read_units, 0.0, None) {
         response["ConsumedCapacity"] = cc;
     }
@@ -672,8 +670,7 @@ pub fn delete_item(
         result["Attributes"] = item_to_json(&old);
     }
     let write_units = write_capacity_units(old_bytes, false);
-    state.enforce_throughput(&table_name, BucketKind::Write, write_units)?;
-    ctx.add_request_units(write_units);
+    state.charge_throughput(ctx, &table_name, BucketKind::Write, write_units)?;
     if let Some(cc) = build_consumed_capacity(input, &table_name, 0.0, write_units, None) {
         result["ConsumedCapacity"] = cc;
     }
@@ -859,8 +856,7 @@ pub fn update_item(
 
     // An update charges the larger of the pre- and post-update sizes.
     let write_units = write_capacity_units(new_item_bytes.max(old_bytes), false);
-    state.enforce_throughput(&table_name, BucketKind::Write, write_units)?;
-    ctx.add_request_units(write_units);
+    state.charge_throughput(ctx, &table_name, BucketKind::Write, write_units)?;
     if let Some(cc) = build_consumed_capacity(input, &table_name, 0.0, write_units, None) {
         result["ConsumedCapacity"] = cc;
     }
@@ -1618,6 +1614,41 @@ mod tests {
             .unwrap()
             .expect("sqlite mirror");
         assert_eq!(stored["value"], json!({"S": "hello"}));
+    }
+
+    /// PROVISIONED tables pay for capacity-hours, not per request, so
+    /// their operations must not report request units to the billing
+    /// meter; on-demand tables must.
+    #[test]
+    fn provisioned_tables_do_not_report_request_units() {
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        put_item(
+            &state,
+            &sqlite,
+            &json!({ "TableName": "t", "Item": { "pk": {"S": "p"}, "sk": {"S": "s"} } }),
+            &c,
+        )
+        .unwrap();
+        // On-demand (the default): the put reported 1 WCU.
+        assert_eq!(c.request_units.write(), 1.0);
+
+        state.tables.alter("t", |_, mut t| {
+            t.billing_mode = "PROVISIONED".into();
+            t.read_capacity_units = 5;
+            t.write_capacity_units = 5;
+            t
+        });
+        let c = ctx();
+        get_item(
+            &state,
+            &sqlite,
+            &json!({ "TableName": "t", "Key": { "pk": {"S": "p"}, "sk": {"S": "s"} } }),
+            &c,
+        )
+        .unwrap();
+        assert_eq!(c.request_units.read(), 0.0);
     }
 
     /// Overwriting an item charges the larger of the old and new

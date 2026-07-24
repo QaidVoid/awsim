@@ -553,8 +553,7 @@ pub fn query(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     let read_units = read_capacity_units(response_bytes, consistent_read, false);
-    state.enforce_throughput(table_name, BucketKind::Read, read_units)?;
-    ctx.add_request_units(read_units);
+    state.charge_throughput(ctx, table_name, BucketKind::Read, read_units)?;
     if let Some(cc) = build_consumed_capacity(
         input,
         table_name,
@@ -757,8 +756,7 @@ pub fn scan(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     let read_units = read_capacity_units(response_bytes, consistent_read, false);
-    state.enforce_throughput(table_name, BucketKind::Read, read_units)?;
-    ctx.add_request_units(read_units);
+    state.charge_throughput(ctx, table_name, BucketKind::Read, read_units)?;
     if let Some(cc) = build_consumed_capacity(
         input,
         table_name,

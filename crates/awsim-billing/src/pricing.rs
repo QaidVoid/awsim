@@ -83,6 +83,18 @@ pub struct ServicePricing {
     /// this rate.
     #[serde(default)]
     pub compute_per_gb_second: Option<f64>,
+    /// Cost per provisioned read capacity unit per hour - DynamoDB's
+    /// PROVISIONED billing mode charges for configured capacity
+    /// regardless of traffic. The meter samples each table's
+    /// provisioned RCU/WCU periodically and accrues cost over
+    /// elapsed time; per-request charges don't apply to provisioned
+    /// tables.
+    #[serde(default)]
+    pub provisioned_rcu_per_hour: Option<f64>,
+    /// Cost per provisioned write capacity unit per hour - see
+    /// `provisioned_rcu_per_hour`.
+    #[serde(default)]
+    pub provisioned_wcu_per_hour: Option<f64>,
     /// Cost per running instance per hour — for "always on" services
     /// like EC2 / RDS / OpenSearch where AWS bills by instance-type
     /// hours regardless of API activity. AWSim doesn't carry the
@@ -107,6 +119,25 @@ pub struct RequestDimension {
     pub operations: Vec<String>,
     /// USD per single request.
     pub price_per_request: f64,
+    /// When set, this dimension bills the read or write units the
+    /// service reported per request (DynamoDB's consumed RCU/WCU)
+    /// instead of the call count. Calls that reported nothing -
+    /// errors, idempotent replays, provisioned-mode tables - then
+    /// cost nothing, matching AWS's on-demand billing. The axis
+    /// matters because reads and writes are priced differently and a
+    /// single call (PartiQL transactions) can consume both, so such
+    /// operations appear in one dimension per axis.
+    #[serde(default)]
+    pub metered_units: Option<MeteredUnits>,
+}
+
+/// Which per-request unit axis a dimension bills. See
+/// [`RequestDimension::metered_units`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MeteredUnits {
+    Read,
+    Write,
 }
 
 impl ServicePricing {
