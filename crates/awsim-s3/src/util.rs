@@ -11,19 +11,25 @@ pub fn compute_etag(data: &[u8]) -> String {
     format!("\"{:x}\"", result)
 }
 
-/// Decode an `aws-chunked` framed body into its raw bytes.
+/// Decode an `aws-chunked` framed body into its raw bytes plus any trailers.
 ///
-/// AWS SDKs use this encoding when uploading with SigV4 streaming. Each
-/// chunk is prefixed with `<hex-size>;chunk-signature=<sig>\r\n`, followed
-/// by `<data>\r\n`, and the body terminates with a zero-sized chunk plus
-/// optional trailers. We don't currently re-verify the per-chunk
-/// signatures (SigV4 verification is skipped at the gateway anyway), so
-/// the decoder just strips the framing and concatenates the data.
+/// AWS SDKs use this encoding when uploading with SigV4 streaming. Each chunk
+/// is prefixed with `<hex-size>;chunk-signature=<sig>\r\n`, followed by
+/// `<data>\r\n`, and the body terminates with a zero-sized chunk. We don't
+/// re-verify the per-chunk signatures (SigV4 verification is skipped at the
+/// gateway anyway), so the decoder just strips the framing and concatenates
+/// the data. Returns Err on malformed framing (truncated mid-chunk, garbage
+/// hex size) so callers surface InvalidRequest rather than storing a corrupt
+/// object body.
 ///
-/// Returns Err if the framing is malformed (truncated mid-chunk, garbage
-/// hex size, etc.) so callers surface InvalidRequest rather than storing
-/// a corrupt object body.
-pub fn decode_aws_chunked(framed: &[u8]) -> Result<Vec<u8>, AwsError> {
+/// Modern SDKs default to sending a flexible checksum
+/// (`x-amz-checksum-crc32`, etc.) in a *trailer* after the terminating
+/// zero-sized chunk rather than a request header. The trailer is a block of
+/// `name: value` lines ended by a blank line; names are lower-cased and
+/// values trimmed. Malformed trailer lines are skipped rather than fatal.
+pub fn decode_aws_chunked_with_trailers(
+    framed: &[u8],
+) -> Result<(Vec<u8>, Vec<(String, String)>), AwsError> {
     let mut out = Vec::with_capacity(framed.len());
     let mut i = 0usize;
     while i < framed.len() {
@@ -50,8 +56,8 @@ pub fn decode_aws_chunked(framed: &[u8]) -> Result<Vec<u8>, AwsError> {
         })?;
         let data_start = nl + 2;
         if size == 0 {
-            // Final chunk; trailers (if any) follow but we don't need them.
-            return Ok(out);
+            // Final chunk; parse any trailing headers that follow.
+            return Ok((out, parse_chunk_trailers(&framed[data_start..])));
         }
         let data_end = data_start.checked_add(size).ok_or_else(|| {
             AwsError::bad_request("InvalidRequest", "aws-chunked: chunk size overflow")
@@ -73,7 +79,25 @@ pub fn decode_aws_chunked(framed: &[u8]) -> Result<Vec<u8>, AwsError> {
     }
     // Body ended without a 0-sized terminator. Some clients still send
     // valid chunks back-to-back without one; accept what we decoded.
-    Ok(out)
+    Ok((out, Vec::new()))
+}
+
+/// Parse the `name: value` trailer block that follows the zero-sized chunk,
+/// stopping at the first blank line or the end of the buffer.
+fn parse_chunk_trailers(mut rest: &[u8]) -> Vec<(String, String)> {
+    let mut trailers = Vec::new();
+    while let Some(nl) = find_crlf(rest, 0) {
+        if nl == 0 {
+            break; // blank line terminates the trailer block
+        }
+        if let Ok(line) = std::str::from_utf8(&rest[..nl])
+            && let Some((name, value)) = line.split_once(':')
+        {
+            trailers.push((name.trim().to_ascii_lowercase(), value.trim().to_string()));
+        }
+        rest = &rest[nl + 2..];
+    }
+    trailers
 }
 
 fn find_crlf(buf: &[u8], from: usize) -> Option<usize> {
@@ -520,7 +544,7 @@ mod tests {
     fn aws_chunked_single_chunk_decodes() {
         // 5-byte payload "hello" framed as a single SigV4-streaming chunk.
         let framed = b"5;chunk-signature=abc\r\nhello\r\n0;chunk-signature=def\r\n\r\n";
-        let decoded = decode_aws_chunked(framed).unwrap();
+        let decoded = decode_aws_chunked_with_trailers(framed).unwrap().0;
         assert_eq!(decoded, b"hello");
     }
 
@@ -528,7 +552,7 @@ mod tests {
     fn aws_chunked_multi_chunk_concatenates() {
         let framed =
             b"3;chunk-signature=a\r\nfoo\r\n3;chunk-signature=b\r\nbar\r\n0;chunk-signature=c\r\n";
-        let decoded = decode_aws_chunked(framed).unwrap();
+        let decoded = decode_aws_chunked_with_trailers(framed).unwrap().0;
         assert_eq!(decoded, b"foobar");
     }
 
@@ -536,14 +560,14 @@ mod tests {
     fn aws_chunked_rejects_truncated_chunk_body() {
         // Header says 10 bytes but body is shorter.
         let framed = b"a;chunk-signature=x\r\nfoo";
-        let err = decode_aws_chunked(framed).unwrap_err();
+        let err = decode_aws_chunked_with_trailers(framed).unwrap_err();
         assert_eq!(err.code, "InvalidRequest");
     }
 
     #[test]
     fn aws_chunked_rejects_bad_hex_size() {
         let framed = b"zz;chunk-signature=x\r\nhello\r\n";
-        let err = decode_aws_chunked(framed).unwrap_err();
+        let err = decode_aws_chunked_with_trailers(framed).unwrap_err();
         assert_eq!(err.code, "InvalidRequest");
     }
 }

@@ -470,6 +470,19 @@ fn parse_request_checksum(input: &Value) -> Result<(Option<String>, Option<Strin
     Ok((None, None))
 }
 
+/// Map an `x-amz-checksum-*` trailer name (lower-cased) to the algorithm name
+/// `verify_object_checksum` expects, or `None` if it is not a checksum trailer.
+fn trailer_checksum_algorithm(name: &str) -> Option<&'static str> {
+    match name {
+        "x-amz-checksum-crc32" => Some("CRC32"),
+        "x-amz-checksum-crc32c" => Some("CRC32C"),
+        "x-amz-checksum-crc64nvme" => Some("CRC64NVME"),
+        "x-amz-checksum-sha1" => Some("SHA1"),
+        "x-amz-checksum-sha256" => Some("SHA256"),
+        _ => None,
+    }
+}
+
 /// Pull the user-metadata sub-map out of the input. The protocol layer
 /// converts incoming `x-amz-meta-*` headers into PascalCase keys
 /// (`Meta<Suffix>`); this reverses that to the wire form so we store
@@ -586,8 +599,11 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
         || opt_str(input, "ContentSha256")
             .map(|v| v.starts_with("STREAMING-"))
             .unwrap_or(false);
+    let mut chunk_trailers: Vec<(String, String)> = Vec::new();
     if is_chunked {
-        data = crate::util::decode_aws_chunked(&data)?;
+        let (decoded, trailers) = crate::util::decode_aws_chunked_with_trailers(&data)?;
+        data = decoded;
+        chunk_trailers = trailers;
         if let Some(expected) =
             opt_str(input, "DecodedContentLength").and_then(|s| s.parse::<usize>().ok())
             && expected != data.len()
@@ -624,7 +640,18 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
     let expires = opt_str(input, "Expires").map(String::from);
 
     let metadata = extract_user_metadata(input);
-    let (checksum_algorithm, checksum_value) = parse_request_checksum(input)?;
+    let (mut checksum_algorithm, mut checksum_value) = parse_request_checksum(input)?;
+    // Modern SDKs send the flexible checksum in a chunk trailer, not a header.
+    // Fall back to it so the value is validated below and stored on the object.
+    if checksum_value.is_none() {
+        for (name, value) in &chunk_trailers {
+            if let Some(algo) = trailer_checksum_algorithm(name) {
+                checksum_algorithm = Some(algo.to_string());
+                checksum_value = Some(value.clone());
+                break;
+            }
+        }
+    }
     let sse = extract_sse_params(state, input, bucket_name)?;
     let bypass_governance = input
         .get("BypassGovernanceRetention")
@@ -1851,6 +1878,63 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "InvalidRequest");
+    }
+
+    #[test]
+    fn put_object_validates_trailer_checksum() {
+        // Streaming upload with the CRC32 in a trailer (not a header), as
+        // modern SDKs default to. A correct trailer checksum must be accepted
+        // and the body stored without the framing or trailer.
+        use base64::Engine as _;
+        let bucket = Bucket::new("b", "us-east-1", "now");
+        let state = state_with(bucket);
+        const C: crc::Crc<u32> = crc::Crc::<u32>::new(&crc::CRC_32_ISO_HDLC);
+        let crc_b64 =
+            base64::engine::general_purpose::STANDARD.encode(C.checksum(b"hello").to_be_bytes());
+        let framed = format!("5\r\nhello\r\n0\r\nx-amz-checksum-crc32:{crc_b64}\r\n\r\n");
+        let raw_b64 = base64::engine::general_purpose::STANDARD.encode(framed.as_bytes());
+        put_object(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "Key": "k",
+                "__raw_body": raw_b64,
+                "ContentEncoding": "aws-chunked",
+                "ContentSha256": "STREAMING-UNSIGNED-PAYLOAD-TRAILER",
+                "DecodedContentLength": "5",
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let got = get_object(&state, &json!({ "Bucket": "b", "Key": "k" }), &ctx()).unwrap();
+        let body = base64::engine::general_purpose::STANDARD
+            .decode(got["Body"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(body, b"hello");
+    }
+
+    #[test]
+    fn put_object_rejects_bad_trailer_checksum() {
+        use base64::Engine as _;
+        let bucket = Bucket::new("b", "us-east-1", "now");
+        let state = state_with(bucket);
+        let bad = base64::engine::general_purpose::STANDARD.encode([0u8; 4]);
+        let framed = format!("5\r\nhello\r\n0\r\nx-amz-checksum-crc32:{bad}\r\n\r\n");
+        let raw_b64 = base64::engine::general_purpose::STANDARD.encode(framed.as_bytes());
+        let err = put_object(
+            &state,
+            &json!({
+                "Bucket": "b",
+                "Key": "k",
+                "__raw_body": raw_b64,
+                "ContentEncoding": "aws-chunked",
+                "ContentSha256": "STREAMING-UNSIGNED-PAYLOAD-TRAILER",
+                "DecodedContentLength": "5",
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "BadDigest");
     }
 
     #[test]
