@@ -114,6 +114,14 @@ axum-server = { version = "0.7", features = ["tls-rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"] }
 
+# Lower-level HTTP serving: the connection accept loop bounds concurrent
+# connections and reaps idle keep-alive sockets (a per-connection
+# `header_read_timeout`), which `axum::serve` / `axum-server` do not
+# expose. `tokio-rustls` terminates TLS per connection from the
+# `axum-server` `RustlsConfig` so hot cert reload still works.
+hyper-util = { version = "0.1", features = ["server-auto", "tokio", "service"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+
 # The RDS Data API is opt-in: it backs SQL execution with a real
 # PostgreSQL launched via Docker, so it is left out of the default build.
 [features]

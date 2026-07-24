@@ -119,6 +119,25 @@ struct Cli {
     #[arg(long, env = "AWSIM_MAX_CONCURRENT_REQUESTS", default_value_t = 5_000)]
     max_concurrent_requests: usize,
 
+    /// Maximum concurrent TCP connections held open across both listeners.
+    /// A newly accepted socket beyond this cap waits for a slot, so a
+    /// client leaking idle keep-alive connections cannot grow the open
+    /// socket count without bound. This is a coarse backstop; idle
+    /// connections are reaped by `--conn-idle-timeout-secs` and new
+    /// connections are shed dynamically once fd usage passes 80% of the
+    /// process limit.
+    #[arg(long, env = "AWSIM_MAX_CONNECTIONS", default_value_t = 4_096)]
+    max_connections: usize,
+
+    /// Idle timeout (seconds) for a kept-alive connection: if the next
+    /// request's headers do not arrive within this window, the connection
+    /// is closed and its socket reclaimed. This is the primary defense
+    /// against idle keep-alive sockets accumulating to the fd ceiling.
+    /// 0 disables the timeout (connections stay open until the client
+    /// closes them).
+    #[arg(long, env = "AWSIM_CONN_IDLE_TIMEOUT_SECS", default_value_t = 90)]
+    conn_idle_timeout_secs: u64,
+
     /// Cap on tokio's blocking-pool threads (the pool that runs sync
     /// SQLite calls via `spawn_blocking`). Each thread reserves ~2 MiB
     /// of stack, so this directly bounds RSS contribution from
@@ -1657,6 +1676,18 @@ async fn async_main() -> Result<()> {
         "AWSim started"
     );
 
+    // One global connection budget shared by both listeners, so the fd cap
+    // is a true ceiling rather than per-listener. Idle connections are reaped
+    // by the per-connection header-read timeout below.
+    let connections = Arc::new(tokio::sync::Semaphore::new(cli.max_connections.max(1)));
+    let idle_timeout = (cli.conn_idle_timeout_secs > 0)
+        .then(|| std::time::Duration::from_secs(cli.conn_idle_timeout_secs));
+    info!(
+        max_connections = cli.max_connections,
+        conn_idle_timeout_secs = cli.conn_idle_timeout_secs,
+        "Connection limits enabled"
+    );
+
     match https_runtime {
         Some(tls) => {
             // Both listeners share the same `Router`. `Router` is
@@ -1669,25 +1700,113 @@ async fn async_main() -> Result<()> {
             // (e.g. Cognito's OIDC discovery doc).
             let http_app = app.clone();
             let https_app = app.layer(axum::middleware::from_fn(mark_request_https));
-            let http_fut = async move {
-                axum::serve(listener, http_app)
-                    .await
-                    .context("HTTP listener failed")
-            };
-            let https_fut = async move {
-                axum_server::from_tcp_rustls(tls.std_listener, tls.assets.config)
-                    .serve(https_app.into_make_service())
-                    .await
-                    .context("HTTPS listener failed")
-            };
+            tls.std_listener
+                .set_nonblocking(true)
+                .context("set HTTPS listener non-blocking")?;
+            let https_listener = tokio::net::TcpListener::from_std(tls.std_listener)
+                .context("adopt HTTPS listener")?;
+            let http_fut = serve_with_limits(
+                listener,
+                None,
+                http_app,
+                connections.clone(),
+                idle_timeout,
+            );
+            let https_fut = serve_with_limits(
+                https_listener,
+                Some(tls.assets.config),
+                https_app,
+                connections.clone(),
+                idle_timeout,
+            );
             tokio::try_join!(http_fut, https_fut)?;
         }
         None => {
-            axum::serve(listener, app).await?;
+            serve_with_limits(listener, None, app, connections, idle_timeout).await?;
         }
     }
 
     Ok(())
+}
+
+/// Accept loop with a bounded connection budget and idle keep-alive reaping.
+///
+/// A permit from `connections` is held for each connection's lifetime, so the
+/// number of open sockets cannot exceed the shared cap. `idle_timeout` is
+/// applied as an HTTP/1 header-read timeout, so a kept-alive connection whose
+/// next request never arrives is closed and its fd reclaimed instead of
+/// lingering forever. While [`FD_SHED`] is set (fd pressure critical) newly
+/// accepted sockets are dropped immediately.
+///
+/// TLS, when present, is terminated per connection from the `axum-server`
+/// [`RustlsConfig`], which keeps the `/_awsim/tls` hot-reload path working:
+/// each connection reads the current config via `get_inner()`.
+async fn serve_with_limits(
+    listener: tokio::net::TcpListener,
+    tls: Option<axum_server::tls_rustls::RustlsConfig>,
+    app: axum::Router,
+    connections: Arc<tokio::sync::Semaphore>,
+    idle_timeout: Option<std::time::Duration>,
+) -> Result<()> {
+    use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
+    use hyper_util::server::conn::auto::Builder;
+    use hyper_util::service::TowerToHyperService;
+    use std::sync::atomic::Ordering;
+
+    loop {
+        // Reserve a slot before accepting so open sockets never exceed the cap.
+        let permit = match connections.clone().acquire_owned().await {
+            Ok(permit) => permit,
+            Err(_) => return Ok(()), // semaphore closed: shutting down
+        };
+        let (stream, _peer) = match listener.accept().await {
+            Ok(pair) => pair,
+            Err(e) => {
+                // EMFILE / ENFILE and other transient accept errors: back off
+                // briefly rather than spin the CPU retrying a failing accept.
+                warn!(error = %e, "accept failed; backing off");
+                drop(permit);
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                continue;
+            }
+        };
+        if FD_SHED.load(Ordering::Relaxed) {
+            // Under critical fd pressure: close the socket immediately so the
+            // process can recover instead of piling on more connections.
+            drop(stream);
+            drop(permit);
+            continue;
+        }
+        let app = app.clone();
+        let tls = tls.clone();
+        tokio::spawn(async move {
+            let _permit = permit; // released when the connection ends
+            let mut builder = Builder::new(TokioExecutor::new());
+            if let Some(timeout) = idle_timeout {
+                // hyper requires a timer registered before `header_read_timeout`,
+                // otherwise it panics at runtime when the timeout is armed.
+                builder.http1().timer(TokioTimer::new()).header_read_timeout(timeout);
+            }
+            let service = TowerToHyperService::new(app);
+            match tls {
+                Some(tls) => {
+                    let acceptor = tokio_rustls::TlsAcceptor::from(tls.get_inner());
+                    let tls_stream = match acceptor.accept(stream).await {
+                        Ok(stream) => stream,
+                        Err(_) => return, // handshake failed: drop quietly
+                    };
+                    let _ = builder
+                        .serve_connection_with_upgrades(TokioIo::new(tls_stream), service)
+                        .await;
+                }
+                None => {
+                    let _ = builder
+                        .serve_connection_with_upgrades(TokioIo::new(stream), service)
+                        .await;
+                }
+            }
+        });
+    }
 }
 
 struct HttpsRuntime {
@@ -1870,11 +1989,16 @@ async fn handle_overload_error(err: BoxError) -> impl IntoResponse {
     }
 }
 
-/// Background task that polls the process's open-fd count and warns when
-/// the soft limit is being approached. Catches the runaway-connection
+/// Set by the fd-pressure watcher once open descriptors cross the critical
+/// threshold. The accept loop sheds newly accepted connections while this is
+/// set, so the process reclaims sockets instead of hitting the hard limit.
+static FD_SHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Background task that polls the process's open-fd count, warns as the
+/// limit is approached, and flips [`FD_SHED`] so the accept loop drops new
+/// connections under critical pressure. Catches the runaway-connection
 /// pattern (client leaks sockets, fds creep up) before the OS slams the
-/// listener with EMFILE / ENFILE — gives the user a chance to spot it
-/// in the logs and tune the client.
+/// listener with EMFILE / ENFILE.
 ///
 /// Linux-only (reads /proc/self/fd). On non-Linux it gracefully exits
 /// after the first read failure.
@@ -1901,13 +2025,17 @@ fn spawn_fd_pressure_watcher() {
                 Err(_) => break, // fs went away (proc unmounted? rare) — stop watching
             };
             if count >= crit_at {
+                FD_SHED.store(true, std::sync::atomic::Ordering::Relaxed);
                 error!(
                     open_fds = count,
                     hard_limit = hard,
                     threshold_pct = 80,
-                    "fd usage critical — listener will start dropping connections"
+                    "fd usage critical — shedding new connections until it recovers"
                 );
             } else if count >= warn_at {
+                // Between the warn and critical marks: leave any active
+                // shedding in place (hysteresis) so we don't flap around
+                // the threshold.
                 warn!(
                     open_fds = count,
                     hard_limit = hard,
@@ -1915,6 +2043,7 @@ fn spawn_fd_pressure_watcher() {
                     "fd usage elevated — check for client connection leaks"
                 );
             } else {
+                FD_SHED.store(false, std::sync::atomic::Ordering::Relaxed);
                 debug!(open_fds = count, hard_limit = hard);
             }
         }
@@ -1932,7 +2061,11 @@ fn spawn_fd_pressure_watcher() {
 /// No-op on Windows (the rlimit crate's NOFILE doesn't exist there).
 #[cfg(unix)]
 fn raise_nofile_limit() {
-    const TARGET: u64 = 65_536;
+    // The soft limit can only be raised as high as the inherited hard limit,
+    // which a non-root process cannot lift. Aim high so a generous hard limit
+    // is fully used, and warn when the hard limit itself is the bottleneck.
+    const TARGET: u64 = 1_048_576;
+    const LOW_HARD_LIMIT: u64 = 65_536;
     let (soft, hard) = match rlimit::getrlimit(rlimit::Resource::NOFILE) {
         Ok(pair) => pair,
         Err(e) => {
@@ -1941,25 +2074,26 @@ fn raise_nofile_limit() {
         }
     };
     let desired = TARGET.min(hard);
-    if soft >= desired {
-        return;
+    if soft < desired {
+        match rlimit::setrlimit(rlimit::Resource::NOFILE, desired, hard) {
+            Ok(()) => info!(from = soft, to = desired, hard = hard, "Raised NOFILE rlimit"),
+            Err(e) => warn!(
+                from = soft,
+                to = desired,
+                hard = hard,
+                error = %e,
+                "Could not raise NOFILE rlimit; heavy client load may hit fd exhaustion",
+            ),
+        }
     }
-    if let Err(e) = rlimit::setrlimit(rlimit::Resource::NOFILE, desired, hard) {
+    if hard < LOW_HARD_LIMIT {
         warn!(
-            from = soft,
-            to = desired,
             hard = hard,
-            error = %e,
-            "Could not raise NOFILE rlimit; bulk imports may hit fd exhaustion",
+            "NOFILE hard limit is low; idle-connection reaping mitigates this, but raise the \
+             hard limit (e.g. /etc/security/limits.d, or `prlimit --pid <pid> --nofile=...`) \
+             for headroom under heavy client load",
         );
-        return;
     }
-    info!(
-        from = soft,
-        to = desired,
-        hard = hard,
-        "Raised NOFILE rlimit"
-    );
 }
 
 #[cfg(not(unix))]
