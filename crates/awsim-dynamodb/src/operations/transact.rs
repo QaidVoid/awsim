@@ -136,23 +136,28 @@ pub fn transact_get_items(
 
     // Snapshot read across all gets — a deferred sqlite txn pins the
     // visible commit point.
-    let (responses, per_table_bytes) = sqlite.with_read_transaction(|tx: &ReadTx<'_>| -> Result<
-        (Vec<Value>, std::collections::HashMap<String, usize>),
+    let (responses, per_table_units) = sqlite.with_read_transaction(|tx: &ReadTx<'_>| -> Result<
+        (Vec<Value>, std::collections::HashMap<String, f64>),
         AwsError,
     > {
         let mut out = Vec::with_capacity(gets.len());
         let mut response_bytes = 0usize;
-        let mut per_table: std::collections::HashMap<String, usize> =
+        let mut per_table: std::collections::HashMap<String, f64> =
             std::collections::HashMap::new();
         for g in &gets {
             let stored = tx.get_item(&ctx.account_id, &ctx.region, &g.table_name, &g.pk, &g.sk)?;
-            let entry = match decode_existing(stored)? {
+            let item = decode_existing(stored)?;
+            // AWS charges each Get on its own: the item size rounds up
+            // to 4 KiB chunks per item at the transactional (2x) rate,
+            // and a miss pays the minimum like a standalone GetItem.
+            let item_bytes = item.as_ref().map(estimate_item_bytes).unwrap_or(0);
+            *per_table.entry(g.table_name.clone()).or_default() +=
+                read_capacity_units(item_bytes, false, true);
+            let entry = match item {
                 None => json!({}),
                 Some(item) => json!({ "Item": item_to_json(&item) }),
             };
-            let entry_bytes = estimate_value_bytes(&entry);
-            response_bytes += entry_bytes;
-            *per_table.entry(g.table_name.clone()).or_default() += entry_bytes;
+            response_bytes += estimate_value_bytes(&entry);
             if response_bytes > TRANSACT_GET_MAX_RESPONSE_BYTES {
                 return Err(AwsError::validation(format!(
                     "TransactGetItems response exceeds the {TRANSACT_GET_MAX_RESPONSE_BYTES}-byte cap"
@@ -163,20 +168,15 @@ pub fn transact_get_items(
         Ok((out, per_table))
     })?;
 
-    // TransactGet uses the transactional read multiplier (2x).
-    for (table, bytes) in &per_table_bytes {
-        let units = read_capacity_units(*bytes, false, true);
-        state.enforce_throughput(table, BucketKind::Read, units)?;
+    for (table, units) in &per_table_units {
+        state.enforce_throughput(table, BucketKind::Read, *units)?;
     }
 
     let mut response = json!({ "Responses": responses });
     // ConsumedCapacity is a per-table list at the transactional read rate.
-    let caps: Vec<Value> = per_table_bytes
+    let caps: Vec<Value> = per_table_units
         .iter()
-        .filter_map(|(table, bytes)| {
-            let units = read_capacity_units(*bytes, false, true);
-            build_consumed_capacity(input, table, units, 0.0, None)
-        })
+        .filter_map(|(table, units)| build_consumed_capacity(input, table, *units, 0.0, None))
         .collect();
     if !caps.is_empty() {
         response["ConsumedCapacity"] = Value::Array(caps);
@@ -266,11 +266,22 @@ pub fn transact_write_items(
         action: Action,
     }
     let mut mutations: Vec<Mutation> = Vec::new();
-    // Track per-table write bytes so each table's WCU bucket gets
-    // charged once at the end of the action-building phase. Real
-    // DynamoDB transactional writes charge at the 2x multiplier.
-    let mut write_bytes_by_table: std::collections::HashMap<String, usize> =
+    // Track per-table write units so each table's WCU bucket gets
+    // charged once at the end of the action-building phase. AWS
+    // charges every action individually (1 KiB chunks per item, 2x
+    // transactional), sized by the images it touches — which takes a
+    // pre-read of the current row. The pre-reads run outside the
+    // write transaction, so a concurrent writer can skew a size
+    // between here and commit; that only affects the estimate.
+    let mut write_units_by_table: std::collections::HashMap<String, f64> =
         std::collections::HashMap::new();
+    let stored_item_bytes = |table_name: &str, pk: &str, sk: &str| -> Result<usize, AwsError> {
+        Ok(
+            decode_existing(sqlite.get_item(&ctx.account_id, &ctx.region, table_name, pk, sk)?)?
+                .map(|i| estimate_item_bytes(&i))
+                .unwrap_or(0),
+        )
+    };
     // ItemCollectionMetrics, when requested, is a per-table array of one
     // entry per written item in a table that has an LSI. ConditionCheck
     // actions don't write, so they don't contribute. Collected during the
@@ -301,8 +312,11 @@ pub fn transact_write_items(
                 extract_item_keys(&table, &item)
                     .ok_or_else(|| AwsError::validation("Could not construct key"))?
             };
-            *write_bytes_by_table.entry(table_name.clone()).or_default() +=
-                estimate_item_bytes(&item);
+            // A Put that replaces an item charges the larger of the
+            // old and new images.
+            let old_bytes = stored_item_bytes(&table_name, &sqlite_keys.pk, &sqlite_keys.sk)?;
+            *write_units_by_table.entry(table_name.clone()).or_default() +=
+                write_capacity_units(estimate_item_bytes(&item).max(old_bytes), true);
             mutations.push(Mutation {
                 table_name,
                 action: Action::Put {
@@ -339,10 +353,10 @@ pub fn transact_write_items(
                 extract_pk_sk(&table, &key)
                     .ok_or_else(|| AwsError::validation("Could not construct key"))?
             };
-            // No upfront read of the existing item, so charge the
-            // 1 KiB-per-WCU minimum the same way BatchWriteItem
-            // approximates Delete.
-            *write_bytes_by_table.entry(table_name.clone()).or_default() += 1;
+            // A Delete charges by the size of the removed item (1 KiB
+            // minimum when the key doesn't exist).
+            *write_units_by_table.entry(table_name.clone()).or_default() +=
+                write_capacity_units(stored_item_bytes(&table_name, &pk, &sk)?, true);
             mutations.push(Mutation {
                 table_name,
                 action: Action::Delete {
@@ -380,11 +394,32 @@ pub fn transact_write_items(
                 extract_pk_sk(&table, &key)
                     .ok_or_else(|| AwsError::validation("Could not construct key"))?
             };
-            // Updates charge based on the larger of pre/post item
-            // sizes. Without a pre-read here, fall back to the 1 KiB
-            // minimum; the per-item Update path in `item.rs`
-            // computes the precise figure.
-            *write_bytes_by_table.entry(table_name.clone()).or_default() += 1;
+            validate_expr_attr_values(update)?;
+            let expr_attr_names = get_expr_attr_names(update);
+            let expr_attr_values = get_expr_attr_values(update);
+            // An Update charges the larger of the pre- and post-update
+            // images, so build the post-image the same way the
+            // transaction body will.
+            let existing = decode_existing(sqlite.get_item(
+                &ctx.account_id,
+                &ctx.region,
+                &table_name,
+                &pk,
+                &sk,
+            )?)?;
+            let before_bytes = existing.as_ref().map(estimate_item_bytes).unwrap_or(0);
+            let mut post_image = existing.unwrap_or_else(|| key.clone());
+            apply_update_expression(
+                &mut post_image,
+                &update_expr,
+                &expr_attr_names,
+                &expr_attr_values,
+            )?;
+            for (k, v) in &key {
+                post_image.insert(k.clone(), v.clone());
+            }
+            *write_units_by_table.entry(table_name.clone()).or_default() +=
+                write_capacity_units(before_bytes.max(estimate_item_bytes(&post_image)), true);
             mutations.push(Mutation {
                 table_name,
                 action: Action::Update {
@@ -392,11 +427,8 @@ pub fn transact_write_items(
                     sk,
                     update_expr,
                     condition_expr: opt_str(update, "ConditionExpression").map(str::to_string),
-                    expr_attr_names: get_expr_attr_names(update),
-                    expr_attr_values: {
-                        validate_expr_attr_values(update)?;
-                        get_expr_attr_values(update)
-                    },
+                    expr_attr_names,
+                    expr_attr_values,
                     key,
                 },
             });
@@ -418,8 +450,10 @@ pub fn transact_write_items(
                 extract_pk_sk(&table, &key)
                     .ok_or_else(|| AwsError::validation("Could not construct key"))?
             };
-            // ConditionCheck still consumes 1 WCU per call.
-            *write_bytes_by_table.entry(table_name.clone()).or_default() += 1;
+            // A ConditionCheck charges by the size of the item it
+            // examines (1 KiB minimum), like the other actions.
+            *write_units_by_table.entry(table_name.clone()).or_default() +=
+                write_capacity_units(stored_item_bytes(&table_name, &pk, &sk)?, true);
             mutations.push(Mutation {
                 table_name,
                 action: Action::ConditionCheck {
@@ -506,13 +540,11 @@ pub fn transact_write_items(
     let mutation_count = mutations.len();
 
     // Charge each touched table's WCU bucket *before* opening the
-    // SQLite write transaction. Transactional writes carry the 2x
-    // multiplier; if any table is throttled the whole transact
-    // aborts (consistent with AWS's "either everything commits or
-    // nothing does" contract).
-    for (table, bytes) in &write_bytes_by_table {
-        let units = write_capacity_units(*bytes, true);
-        state.enforce_throughput(table, BucketKind::Write, units)?;
+    // SQLite write transaction. If any table is throttled the whole
+    // transact aborts (consistent with AWS's "either everything
+    // commits or nothing does" contract).
+    for (table, units) in &write_units_by_table {
+        state.enforce_throughput(table, BucketKind::Write, *units)?;
     }
 
     // Run the entire validation + mutation sequence inside one sqlite
@@ -698,12 +730,9 @@ pub fn transact_write_items(
     }
     // ConsumedCapacity is a per-table list reported at the transactional (2x)
     // write rate, matching the units charged above.
-    let caps: Vec<Value> = write_bytes_by_table
+    let caps: Vec<Value> = write_units_by_table
         .iter()
-        .filter_map(|(table, bytes)| {
-            let units = write_capacity_units(*bytes, true);
-            build_consumed_capacity(input, table, 0.0, units, None)
-        })
+        .filter_map(|(table, units)| build_consumed_capacity(input, table, 0.0, *units, None))
         .collect();
     if !caps.is_empty() {
         result["ConsumedCapacity"] = Value::Array(caps);
@@ -831,6 +860,83 @@ mod tests {
         assert_eq!(caps.len(), 1);
         assert_eq!(caps[0]["TableName"], json!("t"));
         assert_eq!(caps[0]["CapacityUnits"], json!(2.0));
+    }
+
+    /// Each Get is charged on its own item: a ~5 KiB item spans two
+    /// 4 KiB chunks (4 RCU at the 2x transactional rate) and a miss
+    /// pays the 2 RCU minimum, so charges don't pool across the
+    /// transaction (pooling would yield 6 RCU here only by accident;
+    /// the per-item sum is 4 + 2 = 6 for one hit and one miss).
+    #[test]
+    fn get_items_charges_each_item_individually() {
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        transact_write_items(
+            &state,
+            &sqlite,
+            &json!({
+                "TransactItems": [
+                    {"Put": {"TableName": "t", "Item": {
+                        "pk": {"S": "a"}, "sk": {"S": "1"}, "blob": {"S": "x".repeat(5000)}
+                    }}}
+                ]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        let res = transact_get_items(
+            &state,
+            &sqlite,
+            &json!({
+                "ReturnConsumedCapacity": "TOTAL",
+                "TransactItems": [
+                    {"Get": {"TableName": "t", "Key": {"pk": {"S": "a"}, "sk": {"S": "1"}}}},
+                    {"Get": {"TableName": "t", "Key": {"pk": {"S": "zzz"}, "sk": {"S": "9"}}}}
+                ]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let caps = res["ConsumedCapacity"].as_array().unwrap();
+        assert_eq!(caps[0]["CapacityUnits"], json!(6.0));
+    }
+
+    /// A transactional Delete charges by the size of the item it
+    /// removes: a ~5 KiB item costs 5 chunks at the 2x rate (10 WCU),
+    /// not the 1 KiB minimum.
+    #[test]
+    fn write_items_charges_delete_by_removed_item_size() {
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        transact_write_items(
+            &state,
+            &sqlite,
+            &json!({
+                "TransactItems": [
+                    {"Put": {"TableName": "t", "Item": {
+                        "pk": {"S": "a"}, "sk": {"S": "1"}, "blob": {"S": "x".repeat(5000)}
+                    }}}
+                ]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        let res = transact_write_items(
+            &state,
+            &sqlite,
+            &json!({
+                "ReturnConsumedCapacity": "TOTAL",
+                "TransactItems": [
+                    {"Delete": {"TableName": "t", "Key": {"pk": {"S": "a"}, "sk": {"S": "1"}}}}
+                ]
+            }),
+            &ctx(),
+        )
+        .unwrap();
+        let caps = res["ConsumedCapacity"].as_array().unwrap();
+        assert_eq!(caps[0]["CapacityUnits"], json!(10.0));
     }
 
     #[test]

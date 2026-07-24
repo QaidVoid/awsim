@@ -106,7 +106,7 @@ pub fn batch_get_item(
     let mut unprocessed: std::collections::HashMap<String, Vec<Value>> =
         std::collections::HashMap::new();
     let mut response_bytes = 0usize;
-    let mut per_table_bytes: std::collections::HashMap<String, usize> =
+    let mut per_table_units: std::collections::HashMap<String, f64> =
         std::collections::HashMap::new();
     let mut cap_reached = false;
 
@@ -118,6 +118,7 @@ pub fn batch_get_item(
                 .push(key.original_key);
             continue;
         }
+        let consistent = consistent_tables.contains(&key.table_name);
 
         let stored = sqlite.get_item(
             &ctx.account_id,
@@ -126,10 +127,12 @@ pub fn batch_get_item(
             &key.pk,
             &key.sk,
         )?;
-        let Some(stored) = stored else {
-            continue;
-        };
-        let Some(item) = storage_value_to_item(stored) else {
+        let item = stored.and_then(storage_value_to_item);
+        let Some(item) = item else {
+            // A miss still consumes the minimum read capacity, exactly
+            // like a standalone GetItem on a nonexistent key.
+            *per_table_units.entry(key.table_name).or_default() +=
+                read_capacity_units(0, consistent, false);
             continue;
         };
         let item_json = item_to_json(&item);
@@ -149,18 +152,17 @@ pub fn batch_get_item(
         }
 
         response_bytes += item_bytes;
-        *per_table_bytes.entry(key.table_name.clone()).or_default() += item_bytes;
+        *per_table_units.entry(key.table_name.clone()).or_default() +=
+            read_capacity_units(item_bytes, consistent, false);
         responses.entry(key.table_name).or_default().push(item_json);
     }
 
-    // Charge each touched table's read bucket with the bytes we
-    // ended up returning for it. Eventually-consistent reads
-    // (the BatchGetItem default) round to 4 KiB / 0.5 RCU per
-    // chunk via `read_capacity_units`; ConsistentRead=true tables
-    // pay the full 1 RCU per chunk.
-    for (table, bytes) in &per_table_bytes {
-        let units = read_capacity_units(*bytes, consistent_tables.contains(table), false);
-        state.enforce_throughput(table, BucketKind::Read, units)?;
+    // Charge each touched table's read bucket. AWS sizes BatchGetItem
+    // per item: each item rounds up to 4 KiB chunks on its own (0.5
+    // RCU per chunk eventually consistent, 1 RCU with ConsistentRead)
+    // rather than summing bytes across the batch first.
+    for (table, units) in &per_table_units {
+        state.enforce_throughput(table, BucketKind::Read, *units)?;
     }
 
     let responses_json: serde_json::Map<String, Value> = responses
@@ -224,7 +226,10 @@ pub fn batch_write_item(
         },
     }
     let mut sqlite_ops: Vec<SqliteOp> = Vec::new();
-    let mut write_bytes_by_table: std::collections::HashMap<String, usize> =
+    // Per-table WCU totals. AWS charges each PutRequest/DeleteRequest
+    // individually (1 WCU per 1 KiB chunk, per item), so units are
+    // accumulated per request rather than summing bytes per table.
+    let mut write_units_by_table: std::collections::HashMap<String, f64> =
         std::collections::HashMap::new();
     // ItemCollectionMetrics, when requested, is a per-table array of one
     // entry per affected item in a table that has an LSI.
@@ -263,7 +268,8 @@ pub fn batch_write_item(
                 reject_empty_key_values(&table, &item)?;
                 if let Some(keys) = extract_item_keys(&table, &item) {
                     let attrs = item_to_storage_value(&item);
-                    *write_bytes_by_table.entry(table_name.clone()).or_default() += item_bytes;
+                    *write_units_by_table.entry(table_name.clone()).or_default() +=
+                        write_capacity_units(item_bytes, false);
                     if let Some(icm) = item_collection_metrics(input, &table, &item) {
                         push_item_collection(&mut item_collections, table_name, icm);
                     }
@@ -281,10 +287,6 @@ pub fn batch_write_item(
                     None => continue,
                 };
                 if let Some((pk, sk)) = extract_pk_sk(&table, &key) {
-                    // DeleteRequest charges based on the deleted
-                    // item size; without an upfront SQLite read we
-                    // approximate at the 1 KiB-per-WCU minimum.
-                    *write_bytes_by_table.entry(table_name.clone()).or_default() += 1;
                     if let Some(icm) = item_collection_metrics(input, &table, &key) {
                         push_item_collection(&mut item_collections, table_name, icm);
                     }
@@ -298,13 +300,29 @@ pub fn batch_write_item(
         }
     }
 
+    // DeleteRequest charges by the size of the item it removes (1 WCU
+    // minimum when the key doesn't exist), which takes a read of the
+    // current row. Done here, after the table guards are released and
+    // before anything mutates.
+    for op in &sqlite_ops {
+        let SqliteOp::Delete { table, pk, sk } = op else {
+            continue;
+        };
+        let old_bytes = sqlite
+            .get_item(&ctx.account_id, &ctx.region, table, pk, sk)?
+            .and_then(storage_value_to_item)
+            .map(|i| estimate_item_bytes(&i))
+            .unwrap_or(0);
+        *write_units_by_table.entry(table.clone()).or_default() +=
+            write_capacity_units(old_bytes, false);
+    }
+
     // Charge each touched table's write bucket *before* mutating
     // SQLite. If a table is throttled, none of its writes (and no
     // other table's writes either) land. Matches what the SDK
     // expects for a batch op that hits a capacity wall.
-    for (table, bytes) in &write_bytes_by_table {
-        let units = write_capacity_units(*bytes, false);
-        state.enforce_throughput(table, BucketKind::Write, units)?;
+    for (table, units) in &write_units_by_table {
+        state.enforce_throughput(table, BucketKind::Write, *units)?;
     }
 
     for op in sqlite_ops {
@@ -465,6 +483,118 @@ mod tests {
         // token still covers the eventually-consistent read.
         let res = batch_get_item(&state, &sqlite, &get_input(false), &ctx()).unwrap();
         assert_eq!(res["Responses"]["t"].as_array().unwrap().len(), 1);
+    }
+
+    /// RCU is charged per item, not on pooled table bytes: two ~5 KiB
+    /// items cost 1 RCU each eventually consistent (2 total), where
+    /// pooling 10 KiB would round to 1.5 RCU. With 1.5 tokens left the
+    /// batch must throttle.
+    #[test]
+    fn batch_get_charges_rcu_per_item() {
+        let state = state_with_lsi_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let blob = "x".repeat(5000);
+        batch_write_item(
+            &state,
+            &sqlite,
+            &json!({
+                "RequestItems": {
+                    "t": [
+                        {"PutRequest": {"Item": {
+                            "pk": {"S": "a"}, "sk": {"S": "1"}, "blob": {"S": blob}
+                        }}},
+                        {"PutRequest": {"Item": {
+                            "pk": {"S": "a"}, "sk": {"S": "2"}, "blob": {"S": blob}
+                        }}},
+                    ]
+                }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        state.tables.alter("t", |_, mut t| {
+            t.billing_mode = "PROVISIONED".into();
+            t.read_capacity_units = 1;
+            t
+        });
+        state
+            .enforce_throughput("t", BucketKind::Read, 298.5)
+            .unwrap();
+
+        let err = batch_get_item(
+            &state,
+            &sqlite,
+            &json!({
+                "RequestItems": {
+                    "t": {
+                        "Keys": [
+                            {"pk": {"S": "a"}, "sk": {"S": "1"}},
+                            {"pk": {"S": "a"}, "sk": {"S": "2"}},
+                        ]
+                    }
+                }
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ProvisionedThroughputExceededException");
+    }
+
+    /// A DeleteRequest charges by the size of the item it removes:
+    /// deleting a ~5 KiB item costs 5 WCU, not the 1 WCU minimum, and
+    /// deleting a missing key still charges only the minimum.
+    #[test]
+    fn batch_write_charges_delete_by_removed_item_size() {
+        let state = state_with_lsi_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        batch_write_item(
+            &state,
+            &sqlite,
+            &json!({
+                "RequestItems": {
+                    "t": [{"PutRequest": {"Item": {
+                        "pk": {"S": "a"}, "sk": {"S": "1"}, "blob": {"S": "x".repeat(5000)}
+                    }}}]
+                }
+            }),
+            &ctx(),
+        )
+        .unwrap();
+
+        state.tables.alter("t", |_, mut t| {
+            t.billing_mode = "PROVISIONED".into();
+            t.write_capacity_units = 1;
+            t
+        });
+        state
+            .enforce_throughput("t", BucketKind::Write, 299.0)
+            .unwrap();
+
+        let err = batch_write_item(
+            &state,
+            &sqlite,
+            &json!({
+                "RequestItems": {
+                    "t": [{"DeleteRequest": {"Key": {"pk": {"S": "a"}, "sk": {"S": "1"}}}}]
+                }
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ProvisionedThroughputExceededException");
+
+        batch_write_item(
+            &state,
+            &sqlite,
+            &json!({
+                "RequestItems": {
+                    "t": [{"DeleteRequest": {"Key": {"pk": {"S": "zzz"}, "sk": {"S": "9"}}}}]
+                }
+            }),
+            &ctx(),
+        )
+        .unwrap();
     }
 
     #[test]

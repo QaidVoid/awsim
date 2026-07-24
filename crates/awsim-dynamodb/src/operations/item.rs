@@ -519,12 +519,14 @@ pub fn put_item(
     );
 
     let mut result = json!({});
+    let old_bytes = old_item.as_ref().map(estimate_item_bytes).unwrap_or(0);
     if return_values == "ALL_OLD"
         && let Some(old) = old_item
     {
         result["Attributes"] = item_to_json(&old);
     }
-    let write_units = write_capacity_units(item_bytes, false);
+    // An overwrite charges the larger of the old and new item sizes.
+    let write_units = write_capacity_units(item_bytes.max(old_bytes), false);
     state.enforce_throughput(&table_name, BucketKind::Write, write_units)?;
     if let Some(cc) = build_consumed_capacity(input, &table_name, 0.0, write_units, None) {
         result["ConsumedCapacity"] = cc;
@@ -802,6 +804,7 @@ pub fn update_item(
     );
 
     let mut result = json!({});
+    let old_bytes = old_item.as_ref().map(estimate_item_bytes).unwrap_or(0);
     match return_values {
         "ALL_OLD" => {
             if let Some(old) = old_item {
@@ -851,7 +854,8 @@ pub fn update_item(
         _ => {}
     }
 
-    let write_units = write_capacity_units(new_item_bytes, false);
+    // An update charges the larger of the pre- and post-update sizes.
+    let write_units = write_capacity_units(new_item_bytes.max(old_bytes), false);
     state.enforce_throughput(&table_name, BucketKind::Write, write_units)?;
     if let Some(cc) = build_consumed_capacity(input, &table_name, 0.0, write_units, None) {
         result["ConsumedCapacity"] = cc;
@@ -1610,6 +1614,71 @@ mod tests {
             .unwrap()
             .expect("sqlite mirror");
         assert_eq!(stored["value"], json!({"S": "hello"}));
+    }
+
+    /// Overwriting an item charges the larger of the old and new
+    /// images: replacing a ~5 KiB item with a tiny one still costs
+    /// 5 WCU.
+    #[test]
+    fn put_item_charges_larger_of_old_and_new_image() {
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        put_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Item": { "pk": {"S": "p"}, "sk": {"S": "s"}, "blob": {"S": "x".repeat(5000)} }
+            }),
+            &c,
+        )
+        .unwrap();
+        let resp = put_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "ReturnConsumedCapacity": "TOTAL",
+                "Item": { "pk": {"S": "p"}, "sk": {"S": "s"} }
+            }),
+            &c,
+        )
+        .unwrap();
+        assert_eq!(resp["ConsumedCapacity"]["CapacityUnits"], json!(5.0));
+    }
+
+    /// UpdateItem charges the larger of the pre- and post-update
+    /// sizes: removing a ~5 KiB attribute still costs 5 WCU.
+    #[test]
+    fn update_item_charges_larger_of_old_and_new_image() {
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        put_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Item": { "pk": {"S": "p"}, "sk": {"S": "s"}, "blob": {"S": "x".repeat(5000)} }
+            }),
+            &c,
+        )
+        .unwrap();
+        let resp = update_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Key": { "pk": {"S": "p"}, "sk": {"S": "s"} },
+                "UpdateExpression": "REMOVE #b",
+                "ExpressionAttributeNames": { "#b": "blob" },
+                "ReturnConsumedCapacity": "TOTAL"
+            }),
+            &c,
+        )
+        .unwrap();
+        assert_eq!(resp["ConsumedCapacity"]["CapacityUnits"], json!(5.0));
     }
 
     /// Spin up a PROVISIONED 1-WCU table with a tiny burst window

@@ -456,6 +456,7 @@ fn run_update(
         }
     }
 
+    let before_bytes = estimate_item_bytes(&item);
     for (attr, val) in set_updates {
         item.insert(attr, val);
     }
@@ -471,8 +472,9 @@ fn run_update(
             .ok_or_else(|| AwsError::validation("Could not extract SQLite keys"))?
     };
 
+    // An update charges the larger of the pre- and post-update sizes.
     let item_bytes = estimate_item_bytes(&item);
-    let write_units = write_capacity_units(item_bytes, transactional);
+    let write_units = write_capacity_units(item_bytes.max(before_bytes), transactional);
     state.enforce_throughput(&table_name, BucketKind::Write, write_units)?;
     meter.add_write(&table_name, write_units);
 
@@ -529,23 +531,24 @@ fn run_delete(
         (pk, sk, non_key)
     };
 
-    // Charge the 1 WCU AWS minimum (2x transactionally) regardless of whether
-    // a row matched.
-    let write_units = if transactional { 2.0 } else { 1.0 };
+    let stored = sqlite.get_item(&ctx.account_id, &ctx.region, &table_name, &pk, &sk)?;
+    let item = stored.map(decode_row).transpose()?;
+
+    // A delete charges by the size of the removed item (1 WCU minimum,
+    // 2x transactionally), even when no row matched.
+    let old_bytes = item.as_ref().map(estimate_item_bytes).unwrap_or(0);
+    let write_units = write_capacity_units(old_bytes, transactional);
     state.enforce_throughput(&table_name, BucketKind::Write, write_units)?;
     meter.add_write(&table_name, write_units);
 
-    let Some(stored) = sqlite.get_item(&ctx.account_id, &ctx.region, &table_name, &pk, &sk)? else {
+    let Some(item) = item else {
         return Ok(()); // Deleting a missing key is a no-op success.
     };
 
     // Non-key WHERE predicates act as a conditional check before deleting.
-    if !non_key.is_empty() {
-        let item = decode_row(stored)?;
-        for (attr, val) in &non_key {
-            if item.get(attr) != Some(val) {
-                return Err(conditional_check_failed());
-            }
+    for (attr, val) in &non_key {
+        if item.get(attr) != Some(val) {
+            return Err(conditional_check_failed());
         }
     }
 
@@ -986,6 +989,30 @@ mod tests {
         // The item is still present.
         let sel = exec(&state, &sqlite, &c, r#"SELECT * FROM "t""#).unwrap();
         assert_eq!(sel["Items"].as_array().unwrap().len(), 1);
+    }
+
+    /// A PartiQL DELETE charges by the size of the removed item: a
+    /// ~5 KiB item costs 5 WCU, not the 1 WCU minimum.
+    #[test]
+    fn delete_charges_by_removed_item_size() {
+        let (state, sqlite, c) = setup();
+        let insert = format!(
+            r#"INSERT INTO "t" VALUE {{'pk': 'a', 'sk': 'b', 'blob': '{}'}}"#,
+            "x".repeat(5000)
+        );
+        exec(&state, &sqlite, &c, &insert).unwrap();
+
+        let res = execute_statement(
+            &state,
+            &sqlite,
+            &json!({
+                "Statement": r#"DELETE FROM "t" WHERE pk = 'a' AND sk = 'b'"#,
+                "ReturnConsumedCapacity": "TOTAL"
+            }),
+            &c,
+        )
+        .unwrap();
+        assert_eq!(res["ConsumedCapacity"]["CapacityUnits"], json!(5.0));
     }
 
     #[test]
