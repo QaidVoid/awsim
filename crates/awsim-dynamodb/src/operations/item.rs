@@ -528,6 +528,7 @@ pub fn put_item(
     // An overwrite charges the larger of the old and new item sizes.
     let write_units = write_capacity_units(item_bytes.max(old_bytes), false);
     state.enforce_throughput(&table_name, BucketKind::Write, write_units)?;
+    ctx.add_request_units(write_units);
     if let Some(cc) = build_consumed_capacity(input, &table_name, 0.0, write_units, None) {
         result["ConsumedCapacity"] = cc;
     }
@@ -582,6 +583,7 @@ pub fn get_item(
     };
     let read_units = read_capacity_units(bytes, consistent_read, false);
     state.enforce_throughput(table_name, BucketKind::Read, read_units)?;
+    ctx.add_request_units(read_units);
     if let Some(cc) = build_consumed_capacity(input, table_name, read_units, 0.0, None) {
         response["ConsumedCapacity"] = cc;
     }
@@ -671,6 +673,7 @@ pub fn delete_item(
     }
     let write_units = write_capacity_units(old_bytes, false);
     state.enforce_throughput(&table_name, BucketKind::Write, write_units)?;
+    ctx.add_request_units(write_units);
     if let Some(cc) = build_consumed_capacity(input, &table_name, 0.0, write_units, None) {
         result["ConsumedCapacity"] = cc;
     }
@@ -857,6 +860,7 @@ pub fn update_item(
     // An update charges the larger of the pre- and post-update sizes.
     let write_units = write_capacity_units(new_item_bytes.max(old_bytes), false);
     state.enforce_throughput(&table_name, BucketKind::Write, write_units)?;
+    ctx.add_request_units(write_units);
     if let Some(cc) = build_consumed_capacity(input, &table_name, 0.0, write_units, None) {
         result["ConsumedCapacity"] = cc;
     }

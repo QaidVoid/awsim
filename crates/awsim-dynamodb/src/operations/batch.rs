@@ -163,6 +163,7 @@ pub fn batch_get_item(
     // rather than summing bytes across the batch first.
     for (table, units) in &per_table_units {
         state.enforce_throughput(table, BucketKind::Read, *units)?;
+        ctx.add_request_units(*units);
     }
 
     let responses_json: serde_json::Map<String, Value> = responses
@@ -323,6 +324,7 @@ pub fn batch_write_item(
     // expects for a batch op that hits a capacity wall.
     for (table, units) in &write_units_by_table {
         state.enforce_throughput(table, BucketKind::Write, *units)?;
+        ctx.add_request_units(*units);
     }
 
     for op in sqlite_ops {

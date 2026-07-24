@@ -53,6 +53,15 @@ pub struct RequestContext {
     /// the root user, but AWSim's first-run setup must be able to
     /// CreateUser("root") to provision the account-owner record.
     pub internal_bypass: bool,
+
+    /// Billable request units consumed by this call, in thousandths so
+    /// fractional charges (DynamoDB's 0.5-RRU eventually consistent
+    /// reads) stay exact. Service handlers accumulate into it at their
+    /// capacity charge sites via [`add_request_units`](Self::add_request_units);
+    /// the dispatcher surfaces the total to the billing meter through
+    /// the `X-Awsim-Request-Units` response header. Shared via `Arc`
+    /// so clones moved into blocking closures feed the same counter.
+    pub request_units_milli: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl Default for RequestContext {
@@ -70,6 +79,7 @@ impl Default for RequestContext {
             source_ip: None,
             is_secure: false,
             internal_bypass: false,
+            request_units_milli: Default::default(),
         }
     }
 }
@@ -89,6 +99,7 @@ impl RequestContext {
             source_ip: None,
             is_secure: false,
             internal_bypass: false,
+            request_units_milli: Default::default(),
         }
     }
 
@@ -112,6 +123,7 @@ impl RequestContext {
             source_ip: None,
             is_secure: false,
             internal_bypass: false,
+            request_units_milli: Default::default(),
         }
     }
 
@@ -129,6 +141,24 @@ impl RequestContext {
         let mut ctx = Self::new_with_account(service, region, account_id);
         ctx.internal_bypass = true;
         ctx
+    }
+
+    /// Record billable request units (e.g. DynamoDB RCU/WCU) consumed
+    /// by this request. No-op for non-positive values.
+    pub fn add_request_units(&self, units: f64) {
+        if units > 0.0 {
+            let milli = (units * 1000.0).round() as u64;
+            self.request_units_milli
+                .fetch_add(milli, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// Total billable units accumulated so far; 0.0 for services that
+    /// don't meter per-request units.
+    pub fn request_units(&self) -> f64 {
+        self.request_units_milli
+            .load(std::sync::atomic::Ordering::Relaxed) as f64
+            / 1000.0
     }
 
     /// Returns an ARN prefix for this partition, account, and region.

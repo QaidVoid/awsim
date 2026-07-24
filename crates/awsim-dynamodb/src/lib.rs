@@ -480,7 +480,7 @@ impl ServiceHandler for DynamoDbService {
         debug!(operation, "DynamoDB request");
         let state = self.get_state(ctx);
 
-        match operation {
+        let result = match operation {
             // Table management
             "CreateTable" => {
                 let state = state.clone();
@@ -805,6 +805,21 @@ impl ServiceHandler for DynamoDbService {
             }
 
             _ => Err(AwsError::unknown_operation(operation)),
+        };
+
+        // Surface the RCU/WCU the operation consumed to the billing
+        // meter (AWS bills on-demand tables per request unit, not per
+        // API call). The gateway strips this header off the wire and
+        // onto the RequestEvent.
+        match result {
+            Ok(mut value) => {
+                let units = ctx.request_units();
+                if units > 0.0 {
+                    value["__headers"]["X-Awsim-Request-Units"] = units.to_string().into();
+                }
+                Ok(value)
+            }
+            err => err,
         }
     }
 
@@ -1001,5 +1016,64 @@ impl ServiceHandler for DynamoDbService {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod handler_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// The dispatcher surfaces consumed RCU/WCU through the `__headers`
+    /// convention (as `X-Awsim-Request-Units`) so the billing meter can
+    /// charge per request unit; ops that consume nothing add no header.
+    #[tokio::test]
+    async fn handle_attaches_consumed_request_units_header() {
+        let svc = DynamoDbService::new();
+        let ctx = RequestContext::new("dynamodb", "us-east-1");
+        svc.handle(
+            "CreateTable",
+            json!({
+                "TableName": "t",
+                "KeySchema": [{"AttributeName": "pk", "KeyType": "HASH"}],
+                "AttributeDefinitions": [{"AttributeName": "pk", "AttributeType": "S"}],
+                "BillingMode": "PAY_PER_REQUEST"
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+        assert!(ctx.request_units() == 0.0);
+
+        let ctx = RequestContext::new("dynamodb", "us-east-1");
+        let res = svc
+            .handle(
+                "PutItem",
+                json!({ "TableName": "t", "Item": {"pk": {"S": "a"}} }),
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert_eq!(res["__headers"]["X-Awsim-Request-Units"], json!("1"));
+
+        // An eventually consistent read of a tiny item is half a unit.
+        let ctx = RequestContext::new("dynamodb", "us-east-1");
+        let res = svc
+            .handle(
+                "GetItem",
+                json!({ "TableName": "t", "Key": {"pk": {"S": "a"}} }),
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert_eq!(res["__headers"]["X-Awsim-Request-Units"], json!("0.5"));
+
+        // Control-plane calls consume no units and carry no header.
+        let ctx = RequestContext::new("dynamodb", "us-east-1");
+        let res = svc
+            .handle("DescribeTable", json!({"TableName": "t"}), &ctx)
+            .await
+            .unwrap();
+        assert!(res.get("__headers").is_none());
     }
 }

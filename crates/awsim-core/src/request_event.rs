@@ -32,6 +32,13 @@ pub struct RequestEvent {
     /// per-character (the AWS billing unit for these services). None
     /// for services that don't bill per character.
     pub character_count: Option<u64>,
+    /// Billable request units consumed by the call, populated when the
+    /// responding service sets the `X-Awsim-Request-Units` header.
+    /// DynamoDB emits its consumed RCU/WCU here so the meter can
+    /// charge per request unit (the AWS on-demand billing unit)
+    /// instead of per API call. May be fractional (eventually
+    /// consistent reads cost 0.5 RRU per 4 KiB).
+    pub request_units: Option<f64>,
 }
 
 #[derive(Clone, Debug)]
@@ -97,6 +104,7 @@ mod tests {
             memory_mb: None,
             state_transitions: None,
             character_count: None,
+            request_units: None,
         };
         bus.publish(event.clone());
         let received = rx.recv().await.expect("receive event");

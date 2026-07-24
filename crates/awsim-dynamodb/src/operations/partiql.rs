@@ -304,6 +304,7 @@ fn run_select(
     )?;
     let read_units = read_capacity_units(response_bytes, false, transactional);
     state.enforce_throughput(&table_name, BucketKind::Read, read_units)?;
+    ctx.add_request_units(read_units);
     meter.add_read(&table_name, read_units);
     Ok(items)
 }
@@ -378,6 +379,7 @@ fn run_insert(
     let item_bytes = estimate_item_bytes(&ddb_item);
     let write_units = write_capacity_units(item_bytes, transactional);
     state.enforce_throughput(&table_name, BucketKind::Write, write_units)?;
+    ctx.add_request_units(write_units);
     meter.add_write(&table_name, write_units);
 
     let attrs = item_to_storage_value(&ddb_item);
@@ -476,6 +478,7 @@ fn run_update(
     let item_bytes = estimate_item_bytes(&item);
     let write_units = write_capacity_units(item_bytes.max(before_bytes), transactional);
     state.enforce_throughput(&table_name, BucketKind::Write, write_units)?;
+    ctx.add_request_units(write_units);
     meter.add_write(&table_name, write_units);
 
     let attrs = item_to_storage_value(&item);
@@ -539,6 +542,7 @@ fn run_delete(
     let old_bytes = item.as_ref().map(estimate_item_bytes).unwrap_or(0);
     let write_units = write_capacity_units(old_bytes, transactional);
     state.enforce_throughput(&table_name, BucketKind::Write, write_units)?;
+    ctx.add_request_units(write_units);
     meter.add_write(&table_name, write_units);
 
     let Some(item) = item else {

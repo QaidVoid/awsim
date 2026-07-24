@@ -325,6 +325,7 @@ pub async fn handle_s3_event(
                         source_ip: None,
                         is_secure: false,
                         internal_bypass: false,
+                        request_units_milli: Default::default(),
                     };
                     let input = serde_json::json!({
                         "QueueUrl": queue_url,
@@ -361,6 +362,7 @@ pub async fn handle_s3_event(
                         source_ip: None,
                         is_secure: false,
                         internal_bypass: false,
+                        request_units_milli: Default::default(),
                     };
                     let input = serde_json::json!({
                         "TopicArn": dest_arn,
@@ -398,6 +400,7 @@ pub async fn handle_s3_event(
                         source_ip: None,
                         is_secure: false,
                         internal_bypass: false,
+                        request_units_milli: Default::default(),
                     };
                     let invoke_input = serde_json::json!({
                         "FunctionName": dest_arn,
@@ -448,6 +451,7 @@ pub async fn handle_s3_event(
                         source_ip: None,
                         is_secure: false,
                         internal_bypass: false,
+                        request_units_milli: Default::default(),
                     };
                     let input = serde_json::json!({
                         "Entries": [{
@@ -523,6 +527,7 @@ pub async fn handle_dynamodb_stream(
         source_ip: None,
         is_secure: false,
         internal_bypass: false,
+        request_units_milli: Default::default(),
     };
 
     let list_input = serde_json::json!({ "EventSourceArn": stream_arn });
@@ -580,6 +585,7 @@ pub async fn handle_dynamodb_stream(
             source_ip: None,
             is_secure: false,
             internal_bypass: false,
+            request_units_milli: Default::default(),
         };
 
         let invoke_input = serde_json::json!({
@@ -1372,6 +1378,7 @@ pub async fn handle_cf_create_resource(
         source_ip: None,
         is_secure: false,
         internal_bypass: false,
+        request_units_milli: Default::default(),
     };
 
     match resource_type {
@@ -1589,6 +1596,7 @@ pub async fn handle_cf_delete_resource(
         source_ip: None,
         is_secure: false,
         internal_bypass: false,
+        request_units_milli: Default::default(),
     };
 
     match resource_type {

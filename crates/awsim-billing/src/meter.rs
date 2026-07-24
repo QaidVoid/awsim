@@ -133,6 +133,7 @@ impl BillingMeter {
             event.request_size,
             event.response_size,
             event.error_code.is_some(),
+            event.request_units,
         );
 
         // Compute billing — Lambda's GB-second axis. We only accrue

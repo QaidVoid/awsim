@@ -383,6 +383,9 @@ pub async fn dispatch_request(
     let character_count = resp_headers
         .remove("x-awsim-char-count")
         .and_then(|v| v.to_str().ok().and_then(|s| s.parse::<u64>().ok()));
+    let request_units = resp_headers
+        .remove("x-awsim-request-units")
+        .and_then(|v| v.to_str().ok().and_then(|s| s.parse::<f64>().ok()));
 
     let mut builder = Response::builder().status(status);
     for (key, value) in resp_headers.drain() {
@@ -441,6 +444,7 @@ pub async fn dispatch_request(
         memory_mb,
         state_transitions,
         character_count,
+        request_units,
     };
     state.events.publish(event);
 
@@ -685,6 +689,7 @@ async fn process_request(
         // here. Only server-internal flows like bootstrap setup may
         // construct a context with `internal_bypass = true`.
         internal_bypass: false,
+        request_units_milli: Default::default(),
     };
 
     // 6b. IAM authorization (opt-in via AWSIM_IAM_ENFORCE)

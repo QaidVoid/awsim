@@ -91,6 +91,7 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
                 entry.bytes_in += snap.bytes_in;
                 entry.bytes_out += snap.bytes_out;
                 entry.error_count += snap.error_count;
+                entry.units_milli += snap.units_milli;
             }
         }
         for (svc, st) in state.iter_storage() {
@@ -167,11 +168,21 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
             svc_bytes_out += snap.bytes_out;
             svc_error_count += snap.error_count;
 
+            // Services that report metered units (DynamoDB RCU/WCU)
+            // bill on those; everything else bills per call via
+            // `count` (which Step Functions / Polly already scale to
+            // their own billing units at record time).
+            let billable_units = if snap.units_milli > 0 {
+                snap.units_milli as f64 / 1000.0
+            } else {
+                snap.count as f64
+            };
+
             let mut matched = false;
             if let Some(p) = pricing {
                 for (idx, dim) in p.request_dimensions.iter().enumerate() {
                     if dim.operations.iter().any(|o| o == &op_name) {
-                        let cost = snap.count as f64 * dim.price_per_request;
+                        let cost = billable_units * dim.price_per_request;
                         dim_buckets[idx].request_count += snap.count;
                         dim_buckets[idx].cost_usd += cost;
                         svc_request_cost += cost;
@@ -181,7 +192,7 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
                 }
             }
             if !matched {
-                let cost = snap.count as f64 * other.price_per_request;
+                let cost = billable_units * other.price_per_request;
                 other.request_count += snap.count;
                 other.cost_usd += cost;
                 svc_request_cost += cost;

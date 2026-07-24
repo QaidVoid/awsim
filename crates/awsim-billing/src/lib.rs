@@ -47,6 +47,7 @@ mod tests {
             memory_mb: None,
             state_transitions: None,
             character_count: None,
+            request_units: None,
         }
     }
 
@@ -80,6 +81,38 @@ mod tests {
             "expected ${expected}, got ${}",
             s3.total_cost_usd
         );
+    }
+
+    /// DynamoDB bills per consumed request unit, not per API call: a
+    /// Scan that reports 50 RRU costs 50x the per-unit rate, and an
+    /// eventually consistent GetItem reporting 0.5 RRU costs half a
+    /// unit. Events without units (control-plane or older services)
+    /// fall back to one unit per call.
+    #[test]
+    fn dynamodb_bills_reported_request_units() {
+        let meter = BillingMeter::new();
+        let mut scan = evt("dynamodb", "Scan", 0);
+        scan.request_units = Some(50.0);
+        meter.record(&scan);
+        let mut get = evt("dynamodb", "GetItem", 0);
+        get.request_units = Some(0.5);
+        meter.record(&get);
+        // No units reported: bills as one read request unit.
+        meter.record(&evt("dynamodb", "Query", 0));
+
+        let report = compute_report(&meter.store, &meter.pricing);
+        let ddb = report
+            .services
+            .iter()
+            .find(|s| s.service == "dynamodb")
+            .expect("dynamodb service in report");
+
+        // (50 + 0.5 + 1) read units * $1.25e-7.
+        let expected = 51.5 * 1.25e-7;
+        let diff = (ddb.total_cost_usd - expected).abs();
+        assert!(diff < 1e-12, "expected ${expected}, got ${}", ddb.total_cost_usd);
+        // request_count still reflects API calls, not units.
+        assert_eq!(ddb.request_count, 3);
     }
 
     #[test]

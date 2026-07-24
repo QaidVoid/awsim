@@ -2051,6 +2051,7 @@ fn spawn_event_router(state: &AppState) {
                                     source_ip: None,
                                     is_secure: false,
                                     internal_bypass: false,
+                                    request_units_milli: Default::default(),
                                 };
 
                                 // RawMessageDelivery=true subscriptions skip the SNS

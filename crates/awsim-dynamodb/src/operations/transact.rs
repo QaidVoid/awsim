@@ -170,6 +170,7 @@ pub fn transact_get_items(
 
     for (table, units) in &per_table_units {
         state.enforce_throughput(table, BucketKind::Read, *units)?;
+        ctx.add_request_units(*units);
     }
 
     let mut response = json!({ "Responses": responses });
@@ -545,6 +546,7 @@ pub fn transact_write_items(
     // commits or nothing does" contract).
     for (table, units) in &write_units_by_table {
         state.enforce_throughput(table, BucketKind::Write, *units)?;
+        ctx.add_request_units(*units);
     }
 
     // Run the entire validation + mutation sequence inside one sqlite

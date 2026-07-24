@@ -11,19 +11,39 @@ pub struct OpCounter {
     pub bytes_in: AtomicU64,
     pub bytes_out: AtomicU64,
     pub error_count: AtomicU64,
+    /// Metered billable units in thousandths, populated when the
+    /// responding service reports per-request units (DynamoDB's
+    /// consumed RCU/WCU). Zero for services billed per call — the
+    /// report falls back to `count` for those.
+    pub units_milli: AtomicU64,
 }
 
 impl OpCounter {
     /// Record one request's billable units. For most services `units` is 1
     /// (one billable unit per API call). Step Functions passes the
     /// number of state transitions executed by the call so the cost
-    /// math matches AWS's per-transition billing.
-    fn record(&self, units: u64, bytes_in: u64, bytes_out: u64, is_error: bool) {
+    /// math matches AWS's per-transition billing. `metered_units`
+    /// carries fractional per-request units (DynamoDB RCU/WCU) when
+    /// the service reports them.
+    fn record(
+        &self,
+        units: u64,
+        bytes_in: u64,
+        bytes_out: u64,
+        is_error: bool,
+        metered_units: Option<f64>,
+    ) {
         self.count.fetch_add(units, Ordering::Relaxed);
         self.bytes_in.fetch_add(bytes_in, Ordering::Relaxed);
         self.bytes_out.fetch_add(bytes_out, Ordering::Relaxed);
         if is_error {
             self.error_count.fetch_add(1, Ordering::Relaxed);
+        }
+        if let Some(u) = metered_units
+            && u > 0.0
+        {
+            self.units_milli
+                .fetch_add((u * 1000.0).round() as u64, Ordering::Relaxed);
         }
     }
 
@@ -33,6 +53,7 @@ impl OpCounter {
             bytes_in: self.bytes_in.load(Ordering::Relaxed),
             bytes_out: self.bytes_out.load(Ordering::Relaxed),
             error_count: self.error_count.load(Ordering::Relaxed),
+            units_milli: self.units_milli.load(Ordering::Relaxed),
         }
     }
 
@@ -42,6 +63,7 @@ impl OpCounter {
             bytes_in: AtomicU64::new(snap.bytes_in),
             bytes_out: AtomicU64::new(snap.bytes_out),
             error_count: AtomicU64::new(snap.error_count),
+            units_milli: AtomicU64::new(snap.units_milli),
         }
     }
 }
@@ -56,6 +78,8 @@ pub struct OpCounterSnapshot {
     pub bytes_out: u64,
     #[serde(default)]
     pub error_count: u64,
+    #[serde(default)]
+    pub units_milli: u64,
 }
 
 /// Per-service point-in-time storage tracker.
@@ -269,11 +293,12 @@ impl BillingState {
         bytes_in: u64,
         bytes_out: u64,
         is_error: bool,
+        metered_units: Option<f64>,
     ) {
         let svc = self.services.entry(service.to_string()).or_default();
         svc.entry(operation.to_string())
             .or_default()
-            .record(units, bytes_in, bytes_out, is_error);
+            .record(units, bytes_in, bytes_out, is_error, metered_units);
     }
 
     pub fn ensure_started(&self, now_secs: u64) {
