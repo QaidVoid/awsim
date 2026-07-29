@@ -418,7 +418,7 @@ impl Default for DynamoDbService {
 ///
 /// Best-effort: failure to read $TMPDIR or unlink any individual
 /// file is logged at debug level but never blocks startup.
-fn sweep_legacy_temp_files() {
+pub(crate) fn sweep_legacy_temp_files() {
     let tmp = std::env::temp_dir();
     let entries = match std::fs::read_dir(&tmp) {
         Ok(e) => e,

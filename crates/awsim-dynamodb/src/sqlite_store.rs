@@ -176,10 +176,15 @@ impl SqliteStore {
     /// database. Migrations run on one connection wouldn't be visible
     /// to subsequent reads/writes on a different connection. The temp
     /// file is unique per call (uuid-suffixed) so tests don't collide.
+    ///
+    /// The name deliberately avoids the `awsim-ddb-*.db` pattern that
+    /// [`crate::sweep_legacy_temp_files`] cleans up on service start:
+    /// any test constructing a service used to unlink the sqlite file
+    /// another test was still reading, which failed at random.
     #[cfg(test)]
     pub fn in_memory() -> Result<Self, AwsError> {
         let id = uuid::Uuid::new_v4();
-        let path = std::env::temp_dir().join(format!("awsim-ddb-test-{id}.db"));
+        let path = std::env::temp_dir().join(format!("awsim-ddbtest-{id}.sqlite"));
         Self::open(path)
     }
 
