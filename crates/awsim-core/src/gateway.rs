@@ -604,6 +604,13 @@ async fn process_request(
     // 3. Determine effective protocol (use service's declared protocol if detection fails)
     let mut detected = protocol::detect_protocol(headers, body).unwrap_or(protocol);
 
+    // Both query dialects put `Action=` in a form body, so detection
+    // cannot tell them apart. The service knows, and only the response
+    // envelope differs, so let its declaration win.
+    if detected == Protocol::AwsQuery && protocol == Protocol::Ec2Query {
+        detected = Protocol::Ec2Query;
+    }
+
     // 4. Get routes for REST protocols
     let empty_routes = Vec::new();
     let routes = state.routes.get(&service_name).unwrap_or(&empty_routes);

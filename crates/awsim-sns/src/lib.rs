@@ -12,13 +12,23 @@ pub use handler::SnsService;
 #[cfg(test)]
 mod tests {
     use awsim_core::RequestContext;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::handler::SnsService;
     use awsim_core::ServiceHandler;
 
     fn ctx() -> RequestContext {
         RequestContext::new("sns", "us-east-1")
+    }
+
+    /// Read one value out of the `entry` key/value list that the query
+    /// protocol uses for attribute maps.
+    fn attr<'a>(response: &'a Value, name: &str) -> Option<&'a str> {
+        response["Attributes"]["entry"]
+            .as_array()?
+            .iter()
+            .find(|e| e["key"] == name)?["value"]
+            .as_str()
     }
 
     /// Minimal blocking executor for async tests.
@@ -95,7 +105,7 @@ mod tests {
         let svc = SnsService::new();
         let ctx = ctx();
         let result = block_on(svc.handle("ListTopics", json!({}), &ctx)).unwrap();
-        assert_eq!(result["Topics"].as_array().unwrap().len(), 0);
+        assert_eq!(result["Topics"]["member"].as_array().unwrap().len(), 0);
     }
 
     #[test]
@@ -105,7 +115,7 @@ mod tests {
         block_on(svc.handle("CreateTopic", json!({ "Name": "topic-a" }), &ctx)).unwrap();
         block_on(svc.handle("CreateTopic", json!({ "Name": "topic-b" }), &ctx)).unwrap();
         let result = block_on(svc.handle("ListTopics", json!({}), &ctx)).unwrap();
-        assert_eq!(result["Topics"].as_array().unwrap().len(), 2);
+        assert_eq!(result["Topics"]["member"].as_array().unwrap().len(), 2);
     }
 
     #[test]
@@ -117,7 +127,7 @@ mod tests {
         let arn = created["TopicArn"].as_str().unwrap();
         let result =
             block_on(svc.handle("GetTopicAttributes", json!({ "TopicArn": arn }), &ctx)).unwrap();
-        assert!(result["Attributes"]["TopicArn"].as_str().is_some());
+        assert!(attr(&result, "TopicArn").is_some(), "{result:?}");
     }
 
     #[test]
@@ -141,10 +151,7 @@ mod tests {
 
         let attrs =
             block_on(svc.handle("GetTopicAttributes", json!({ "TopicArn": arn }), &ctx)).unwrap();
-        assert_eq!(
-            attrs["Attributes"]["DisplayName"].as_str().unwrap(),
-            "My Topic"
-        );
+        assert_eq!(attr(&attrs, "DisplayName"), Some("My Topic"), "{attrs:?}");
     }
 
     #[test]
@@ -158,7 +165,7 @@ mod tests {
         block_on(svc.handle("DeleteTopic", json!({ "TopicArn": arn }), &ctx)).unwrap();
 
         let list = block_on(svc.handle("ListTopics", json!({}), &ctx)).unwrap();
-        assert_eq!(list["Topics"].as_array().unwrap().len(), 0);
+        assert_eq!(list["Topics"]["member"].as_array().unwrap().len(), 0);
     }
 
     #[test]
@@ -201,7 +208,7 @@ mod tests {
 
         let tags = block_on(svc.handle("ListTagsForResource", json!({ "ResourceArn": arn }), &ctx))
             .unwrap();
-        let tag_arr = tags["Tags"].as_array().unwrap();
+        let tag_arr = tags["Tags"]["member"].as_array().unwrap();
         assert_eq!(tag_arr.len(), 2);
     }
 
@@ -232,7 +239,7 @@ mod tests {
 
         let tags = block_on(svc.handle("ListTagsForResource", json!({ "ResourceArn": arn }), &ctx))
             .unwrap();
-        assert_eq!(tags["Tags"].as_array().unwrap().len(), 0);
+        assert_eq!(tags["Tags"]["member"].as_array().unwrap().len(), 0);
     }
 
     // -----------------------------------------------------------------------
@@ -261,12 +268,18 @@ mod tests {
         assert!(sub_arn.contains(":sub-topic:"), "sub_arn={sub_arn}");
 
         let list = block_on(svc.handle("ListSubscriptions", json!({}), &ctx)).unwrap();
-        assert_eq!(list["Subscriptions"].as_array().unwrap().len(), 1);
+        assert_eq!(list["Subscriptions"]["member"].as_array().unwrap().len(), 1);
 
         let by_topic =
             block_on(svc.handle("ListSubscriptionsByTopic", json!({ "TopicArn": arn }), &ctx))
                 .unwrap();
-        assert_eq!(by_topic["Subscriptions"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            by_topic["Subscriptions"]["member"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -312,7 +325,7 @@ mod tests {
         block_on(svc.handle("Unsubscribe", json!({ "SubscriptionArn": sub_arn }), &ctx)).unwrap();
 
         let list = block_on(svc.handle("ListSubscriptions", json!({}), &ctx)).unwrap();
-        assert_eq!(list["Subscriptions"].as_array().unwrap().len(), 0);
+        assert_eq!(list["Subscriptions"]["member"].as_array().unwrap().len(), 0);
     }
 
     #[test]
@@ -337,7 +350,7 @@ mod tests {
             &ctx,
         ))
         .unwrap();
-        assert_eq!(attrs["Attributes"]["Protocol"].as_str().unwrap(), "sqs");
+        assert_eq!(attr(&attrs, "Protocol"), Some("sqs"), "{attrs:?}");
     }
 
     #[test]
@@ -739,6 +752,6 @@ mod tests {
         block_on(svc.handle("DeleteTopic", json!({ "TopicArn": arn }), &ctx)).unwrap();
 
         let subs = block_on(svc.handle("ListSubscriptions", json!({}), &ctx)).unwrap();
-        assert_eq!(subs["Subscriptions"].as_array().unwrap().len(), 0);
+        assert_eq!(subs["Subscriptions"]["member"].as_array().unwrap().len(), 0);
     }
 }

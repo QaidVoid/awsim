@@ -79,5 +79,5 @@ pub fn list_tags_for_resource(
         .map(|(k, v)| json!({ "Key": k, "Value": v }))
         .collect();
 
-    Ok(json!({ "Tags": tags }))
+    Ok(json!({ "Tags": { "member": tags } }))
 }

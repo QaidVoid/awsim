@@ -78,14 +78,19 @@ pub fn list_platform_applications(
         .iter()
         .map(|entry| {
             let app = entry.value();
+            let attrs: serde_json::Map<String, Value> = app
+                .attributes
+                .iter()
+                .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+                .collect();
             json!({
                 "PlatformApplicationArn": app.arn,
-                "Attributes": app.attributes,
+                "Attributes": super::attribute_entries(&attrs),
             })
         })
         .collect();
 
-    Ok(json!({ "PlatformApplications": apps }))
+    Ok(json!({ "PlatformApplications": { "member": apps } }))
 }
 
 // ---------------------------------------------------------------------------
@@ -111,7 +116,7 @@ pub fn get_platform_application_attributes(
         .map(|(k, v)| (k.clone(), Value::String(v.clone())))
         .collect();
 
-    Ok(json!({ "Attributes": attrs }))
+    Ok(json!({ "Attributes": super::attribute_entries(&attrs) }))
 }
 
 // ---------------------------------------------------------------------------
@@ -246,12 +251,12 @@ pub fn list_endpoints_by_platform_application(
                 .collect();
             json!({
                 "EndpointArn": e.arn,
-                "Attributes": attrs,
+                "Attributes": super::attribute_entries(&attrs),
             })
         })
         .collect();
 
-    Ok(json!({ "Endpoints": endpoints }))
+    Ok(json!({ "Endpoints": { "member": endpoints } }))
 }
 
 // ---------------------------------------------------------------------------
@@ -278,7 +283,7 @@ pub fn get_endpoint_attributes(
         .map(|(k, v)| (k.clone(), Value::String(v.clone())))
         .collect();
 
-    Ok(json!({ "Attributes": attrs }))
+    Ok(json!({ "Attributes": super::attribute_entries(&attrs) }))
 }
 
 // ---------------------------------------------------------------------------
@@ -345,5 +350,5 @@ pub fn list_origination_numbers(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     // Stub. No origination numbers in simulation.
-    Ok(json!({ "PhoneNumbers": [] }))
+    Ok(json!({ "PhoneNumbers": { "member": [] } }))
 }

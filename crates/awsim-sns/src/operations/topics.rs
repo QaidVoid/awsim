@@ -134,7 +134,7 @@ pub fn list_topics(
         .map(|entry| json!({ "TopicArn": entry.key() }))
         .collect();
 
-    Ok(json!({ "Topics": topics }))
+    Ok(json!({ "Topics": { "member": topics } }))
 }
 
 // ---------------------------------------------------------------------------
@@ -182,7 +182,7 @@ pub fn get_topic_attributes(
         Value::String(pending_count.to_string()),
     );
 
-    Ok(json!({ "Attributes": attrs }))
+    Ok(json!({ "Attributes": super::attribute_entries(&attrs) }))
 }
 
 // ---------------------------------------------------------------------------

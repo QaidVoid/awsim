@@ -59,7 +59,7 @@ impl ServiceHandler for Ec2Service {
     }
 
     fn protocol(&self) -> Protocol {
-        Protocol::AwsQuery
+        Protocol::Ec2Query
     }
 
     async fn handle(

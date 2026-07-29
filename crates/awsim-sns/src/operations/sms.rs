@@ -26,7 +26,7 @@ pub fn list_phone_numbers_opted_out(
     _input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    Ok(json!({ "phoneNumbers": [] }))
+    Ok(json!({ "phoneNumbers": { "member": [] } }))
 }
 
 // ---------------------------------------------------------------------------
@@ -66,7 +66,7 @@ pub fn get_sms_attributes(
         }
     }
 
-    Ok(json!({ "attributes": result }))
+    Ok(json!({ "attributes": super::attribute_entries(&result) }))
 }
 
 // ---------------------------------------------------------------------------
@@ -194,7 +194,7 @@ pub fn list_sms_sandbox_phone_numbers(
         })
         .collect();
 
-    Ok(json!({ "PhoneNumbers": numbers }))
+    Ok(json!({ "PhoneNumbers": { "member": numbers } }))
 }
 
 // ---------------------------------------------------------------------------

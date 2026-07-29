@@ -43,7 +43,53 @@ fn flatten_to_json(params: &[(String, String)]) -> Value {
         }
         set_nested(&mut map, key, value);
     }
-    Value::Object(map)
+    let mut value = Value::Object(map);
+    unwrap_query_containers(&mut value);
+    value
+}
+
+/// Collapse the query protocol's list and map wrappers.
+///
+/// AWS serializes a list as `X.member.N.Field` and a map as
+/// `X.entry.N.key` / `X.entry.N.value`. Dot-splitting leaves those
+/// wrapper segments in the tree, so `Attributes.entry.1.key=DisplayName`
+/// arrived as `{"entry": [{"key": ..., "value": ...}]}` and every
+/// handler reading `input["Attributes"]["DisplayName"]` saw nothing.
+/// Rewriting them here gives handlers the natural shape:
+/// `X` becomes an array, and a map becomes a plain object.
+///
+/// Only a lone `member` or `entry` key is treated as a wrapper, so a
+/// service that genuinely carries a field by that name is left alone.
+fn unwrap_query_containers(value: &mut Value) {
+    match value {
+        Value::Array(items) => items.iter_mut().for_each(unwrap_query_containers),
+        Value::Object(obj) => {
+            obj.values_mut().for_each(unwrap_query_containers);
+
+            if obj.len() == 1
+                && let Some(Value::Array(items)) = obj.get("entry")
+                && items
+                    .iter()
+                    .all(|i| i.get("key").is_some() && i.get("value").is_some())
+            {
+                let mut collapsed = serde_json::Map::new();
+                for item in items {
+                    if let Some(k) = item["key"].as_str() {
+                        collapsed.insert(k.to_string(), item["value"].clone());
+                    }
+                }
+                *value = Value::Object(collapsed);
+                return;
+            }
+
+            if obj.len() == 1
+                && let Some(Value::Array(items)) = obj.get("member")
+            {
+                *value = Value::Array(items.clone());
+            }
+        }
+        _ => {}
+    }
 }
 
 fn set_nested(map: &mut serde_json::Map<String, Value>, key: &str, value: &str) {
@@ -133,6 +179,75 @@ pub fn serialize_response(
     (StatusCode::OK, headers, Bytes::from(xml))
 }
 
+/// EC2's schema namespace. The version segment is part of the document
+/// URI, not something clients negotiate, so it is fixed.
+const EC2_XMLNS: &str = "http://ec2.amazonaws.com/doc/2016-11-15/";
+
+/// Escape text destined for an XML text node.
+///
+/// Error messages quote caller-supplied names, so an unescaped `<` or
+/// `&` in one would produce a document the client cannot parse.
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Serialize a successful ec2Query XML response.
+///
+/// EC2 differs from awsQuery in the envelope: there is no
+/// `<{Action}Result>` wrapper and no `<ResponseMetadata>`. Result fields
+/// sit directly under `<{Action}Response>` alongside a lowercase
+/// `<requestId>`. Emitting the awsQuery envelope made every EC2 response
+/// unreadable to real SDKs: `describe-vpcs` printed nothing at all even
+/// with a VPC present.
+pub fn serialize_ec2_response(
+    operation: &str,
+    output: &Value,
+    request_id: &str,
+) -> (StatusCode, HeaderMap, Bytes) {
+    let result_xml = json_to_xml_fields(output);
+
+    let xml = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <{operation}Response xmlns=\"{EC2_XMLNS}\">\n\
+         <requestId>{request_id}</requestId>\n\
+         {result_xml}\
+         </{operation}Response>"
+    );
+
+    let mut headers = HeaderMap::new();
+    headers.insert("content-type", "text/xml".parse().unwrap());
+    headers.insert("x-amzn-requestid", request_id.parse().unwrap());
+    (StatusCode::OK, headers, Bytes::from(xml))
+}
+
+/// Serialize an ec2Query error.
+///
+/// EC2 wraps errors in `<Response><Errors><Error>` and spells the id
+/// `RequestID`, unlike the `<ErrorResponse>` shape awsQuery uses.
+pub fn serialize_ec2_error(error: &AwsError, request_id: &str) -> (StatusCode, HeaderMap, Bytes) {
+    let xml = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <Response>\n\
+         <Errors>\n\
+         <Error>\n\
+         <Code>{code}</Code>\n\
+         <Message>{message}</Message>\n\
+         </Error>\n\
+         </Errors>\n\
+         <RequestID>{request_id}</RequestID>\n\
+         </Response>",
+        code = xml_escape(&error.code),
+        message = xml_escape(&error.message),
+    );
+
+    let mut headers = HeaderMap::new();
+    headers.insert("content-type", "text/xml".parse().unwrap());
+    headers.insert("x-amzn-requestid", request_id.parse().unwrap());
+    (error.status, headers, Bytes::from(xml))
+}
+
 /// Serialize an awsQuery/XML error response.
 pub fn serialize_error(error: &AwsError, request_id: &str) -> (StatusCode, HeaderMap, Bytes) {
     let error_type = match error.error_type {
@@ -176,8 +291,8 @@ pub fn serialize_error(error: &AwsError, request_id: &str) -> (StatusCode, Heade
          {extras_xml}</Error>\n\
          <RequestId>{request_id}</RequestId>\n\
          </ErrorResponse>",
-        code = error.code,
-        message = error.message,
+        code = xml_escape(&error.code),
+        message = xml_escape(&error.message),
     );
 
     let mut headers = HeaderMap::new();
@@ -298,11 +413,49 @@ mod tests {
             ("Tags.member.2.Value".to_string(), "eng".to_string()),
         ];
         let result = flatten_to_json(&params);
-        let tags = result["Tags"]["member"].as_array().unwrap();
+        let tags = result["Tags"]
+            .as_array()
+            .unwrap_or_else(|| panic!("Tags should collapse to an array: {result}"));
         assert_eq!(tags.len(), 2);
         assert_eq!(tags[0]["Key"], "Env");
         assert_eq!(tags[0]["Value"], "prod");
         assert_eq!(tags[1]["Key"], "Team");
         assert_eq!(tags[1]["Value"], "eng");
+    }
+
+    /// `X.entry.N.key` is how the query protocol spells a map. It used to
+    /// survive as an `entry` list, so `input["Attributes"]["DisplayName"]`
+    /// read nothing and SNS silently dropped every attribute on create.
+    #[test]
+    fn entry_pairs_collapse_into_a_map() {
+        let params = vec![
+            ("Action".to_string(), "CreateTopic".to_string()),
+            ("Name".to_string(), "orders".to_string()),
+            (
+                "Attributes.entry.1.key".to_string(),
+                "DisplayName".to_string(),
+            ),
+            ("Attributes.entry.1.value".to_string(), "Orders".to_string()),
+            ("Attributes.entry.2.key".to_string(), "Policy".to_string()),
+            ("Attributes.entry.2.value".to_string(), "{}".to_string()),
+        ];
+        let result = flatten_to_json(&params);
+        assert_eq!(result["Attributes"]["DisplayName"], "Orders");
+        assert_eq!(result["Attributes"]["Policy"], "{}");
+        assert_eq!(result["Name"], "orders");
+    }
+
+    /// A field genuinely called `member` or `entry` alongside siblings is
+    /// data, not a wrapper, and must survive untouched.
+    #[test]
+    fn a_real_field_named_member_is_not_unwrapped() {
+        let params = vec![
+            ("Action".to_string(), "Whatever".to_string()),
+            ("Group.member".to_string(), "alice".to_string()),
+            ("Group.Owner".to_string(), "bob".to_string()),
+        ];
+        let result = flatten_to_json(&params);
+        assert_eq!(result["Group"]["member"], "alice");
+        assert_eq!(result["Group"]["Owner"], "bob");
     }
 }

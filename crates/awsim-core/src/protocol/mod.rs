@@ -240,9 +240,8 @@ pub fn serialize_response(
         Protocol::AwsJson1_0 | Protocol::AwsJson1_1 | Protocol::RestJson1 => {
             json::serialize_response(output, request_id)
         }
-        Protocol::AwsQuery | Protocol::Ec2Query => {
-            query::serialize_response(operation, output, request_id)
-        }
+        Protocol::AwsQuery => query::serialize_response(operation, output, request_id),
+        Protocol::Ec2Query => query::serialize_ec2_response(operation, output, request_id),
         Protocol::RestXml => rest::serialize_xml_response(output, request_id),
         Protocol::RpcV2Cbor => serialize_cbor_response(output, request_id),
     }
@@ -279,7 +278,8 @@ pub fn serialize_error(
         Protocol::AwsJson1_0 | Protocol::AwsJson1_1 | Protocol::RestJson1 => {
             json::serialize_error(error, request_id)
         }
-        Protocol::AwsQuery | Protocol::Ec2Query => query::serialize_error(error, request_id),
+        Protocol::AwsQuery => query::serialize_error(error, request_id),
+        Protocol::Ec2Query => query::serialize_ec2_error(error, request_id),
         Protocol::RestXml => rest::serialize_error(error, request_id),
         Protocol::RpcV2Cbor => serialize_cbor_error(error, request_id),
     }

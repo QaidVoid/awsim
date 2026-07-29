@@ -145,7 +145,13 @@ fn parse_ip_ranges(input: &Value) -> Vec<IpRange> {
 
 pub fn create_security_group(state: &Ec2State, input: &Value) -> Result<Value, AwsError> {
     let group_name = require_str(input, "GroupName")?.to_string();
-    let description = require_str(input, "Description")?.to_string();
+    // The wire parameter is `GroupDescription`; `Description` is only the
+    // name the SDK models use. Requiring the model name rejected every
+    // request an SDK actually sends.
+    let description = match input.get("GroupDescription").and_then(Value::as_str) {
+        Some(d) => d.to_string(),
+        None => require_str(input, "Description")?.to_string(),
+    };
     let vpc_id = require_str(input, "VpcId")?.to_string();
 
     if !state.vpcs.contains_key(&vpc_id) {

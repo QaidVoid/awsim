@@ -184,7 +184,7 @@ pub fn list_subscriptions(
         .map(|e| subscription_summary(&e))
         .collect();
 
-    Ok(json!({ "Subscriptions": subs }))
+    Ok(json!({ "Subscriptions": { "member": subs } }))
 }
 
 // ---------------------------------------------------------------------------
@@ -214,7 +214,7 @@ pub fn list_subscriptions_by_topic(
         .map(|e| subscription_summary(&e))
         .collect();
 
-    Ok(json!({ "Subscriptions": subs }))
+    Ok(json!({ "Subscriptions": { "member": subs } }))
 }
 
 // ---------------------------------------------------------------------------
@@ -241,7 +241,7 @@ pub fn get_subscription_attributes(
         .map(|(k, v)| (k.clone(), Value::String(v.clone())))
         .collect();
 
-    Ok(json!({ "Attributes": attrs }))
+    Ok(json!({ "Attributes": super::attribute_entries(&attrs) }))
 }
 
 // ---------------------------------------------------------------------------
@@ -346,12 +346,15 @@ fn validate_protocol(protocol: &str) -> Result<(), AwsError> {
 }
 
 fn subscription_summary(sub: &Subscription) -> Value {
+    // AWS reports the topic owner's account. It is segment 4 of the topic
+    // ARN, so there is no need to thread the request context down here.
+    let owner = sub.topic_arn.split(':').nth(4).unwrap_or_default();
     json!({
         "SubscriptionArn": sub.arn,
         "TopicArn": sub.topic_arn,
         "Protocol": sub.protocol,
         "Endpoint": sub.endpoint,
-        "Owner": "",
+        "Owner": owner,
     })
 }
 
