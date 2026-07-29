@@ -1,7 +1,7 @@
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
-use crate::state::{Bucket, S3State};
+use crate::state::{Bucket, S3State, VersioningStatus};
 use crate::util::now_iso8601;
 
 use super::require_str;
@@ -93,10 +93,39 @@ pub fn create_bucket(
         ));
     }
 
-    let bucket = Bucket::new(bucket_name, &ctx.region, now_iso8601());
+    let mut bucket = Bucket::new(bucket_name, &ctx.region, now_iso8601());
+
+    // Object Lock can only be turned on at creation time, and doing so
+    // implicitly enables versioning: a retention rule has nothing to
+    // pin without versions. There is no API to enable it afterwards.
+    if object_lock_requested(input) {
+        bucket.versioning = VersioningStatus::Enabled;
+        bucket
+            .configs
+            .insert(OBJECT_LOCK_ENABLED.to_string(), "true".to_string());
+    }
+
     state.buckets.insert(bucket_name.to_string(), bucket);
 
     Ok(json!({ "Location": format!("/{bucket_name}") }))
+}
+
+/// Marker recorded in `Bucket::configs` when a bucket was created with
+/// Object Lock enabled. Kept in `configs` so it survives snapshots.
+pub const OBJECT_LOCK_ENABLED: &str = "object-lock-enabled";
+
+/// Read `x-amz-bucket-object-lock-enabled` off the request.
+///
+/// The REST layer derives the input name from the header, giving
+/// `BucketObjectLockEnabled`. In-process callers use the Smithy member
+/// name, so accept both.
+fn object_lock_requested(input: &Value) -> bool {
+    ["BucketObjectLockEnabled", "ObjectLockEnabledForBucket"]
+        .iter()
+        .filter_map(|k| input.get(*k))
+        .any(|v| {
+            v.as_bool() == Some(true) || v.as_str().is_some_and(|s| s.eq_ignore_ascii_case("true"))
+        })
 }
 
 /// Pull `CreateBucketConfiguration.LocationConstraint` out of the input,

@@ -81,6 +81,19 @@ pub fn put_bucket_versioning(state: &S3State, input: &Value) -> Result<Value, Aw
         .get_mut(bucket_name)
         .ok_or_else(|| no_such_bucket(bucket_name))?;
 
+    // Suspending versioning would strand every locked version, so S3
+    // refuses it while Object Lock is on.
+    if versioning != VersioningStatus::Enabled
+        && bucket
+            .configs
+            .contains_key(super::bucket::OBJECT_LOCK_ENABLED)
+    {
+        return Err(AwsError::bad_request(
+            "InvalidBucketState",
+            "Versioning cannot be suspended on a bucket with Object Lock enabled",
+        ));
+    }
+
     bucket.versioning = versioning;
     Ok(json!({}))
 }
@@ -1807,6 +1820,17 @@ pub fn get_object_lock_configuration(state: &S3State, input: &Value) -> Result<V
             }
             Ok(Value::Object(result))
         }
+        // A bucket created with Object Lock reports it as enabled even
+        // before any default retention rule is written.
+        None if bucket
+            .configs
+            .contains_key(super::bucket::OBJECT_LOCK_ENABLED) =>
+        {
+            Ok(json!({
+                "__xml_root": "ObjectLockConfiguration",
+                "ObjectLockEnabled": "Enabled",
+            }))
+        }
         None => Err(AwsError::not_found(
             "ObjectLockConfigurationNotFoundError",
             format!("Object Lock configuration does not exist for bucket '{bucket_name}'"),
@@ -1815,6 +1839,25 @@ pub fn get_object_lock_configuration(state: &S3State, input: &Value) -> Result<V
 }
 
 pub fn put_object_lock_configuration(state: &S3State, input: &Value) -> Result<Value, AwsError> {
+    let bucket_name = require_str(input, "Bucket")?;
+    let enabled = state
+        .buckets
+        .get(bucket_name)
+        .ok_or_else(|| no_such_bucket(bucket_name))?
+        .configs
+        .contains_key(super::bucket::OBJECT_LOCK_ENABLED);
+    // Object Lock is a create-time property. Writing a retention rule to
+    // a bucket that never had it enabled would silently do nothing on
+    // real S3, so reject it the way S3 does.
+    if !enabled {
+        return Err(AwsError::conflict(
+            "InvalidBucketState",
+            format!(
+                "Object Lock configuration cannot be enabled on existing buckets; \
+                 bucket '{bucket_name}' was not created with Object Lock enabled"
+            ),
+        ));
+    }
     put_bucket_config_key(state, input, "object-lock", Some("ObjectLockConfiguration"))
 }
 
