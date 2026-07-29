@@ -877,6 +877,10 @@ fn authorizer_to_json(a: &Authorizer) -> Value {
     obj
 }
 
+/// Every paginated API Gateway v1 collection goes on the wire under
+/// `item`, singular. The SDK models rename it to `items`, so returning
+/// `items` looked right but parsed as an empty result: `aws apigateway
+/// get-rest-apis` printed nothing even with an API present.
 fn get_rest_apis(state: &ApiGatewayV1State) -> Value {
     let mut items: Vec<Value> = state
         .apis
@@ -889,7 +893,7 @@ fn get_rest_apis(state: &ApiGatewayV1State) -> Value {
             .unwrap_or("")
             .cmp(b["name"].as_str().unwrap_or(""))
     });
-    json!({ "items": items })
+    json!({ "item": items })
 }
 
 fn create_rest_api(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
@@ -1029,7 +1033,7 @@ fn get_resources(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsE
             .unwrap_or("")
             .cmp(b["path"].as_str().unwrap_or(""))
     });
-    Ok(json!({ "items": items }))
+    Ok(json!({ "item": items }))
 }
 
 fn get_method(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
@@ -1071,7 +1075,6 @@ fn get_stages(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsErro
         AwsError::not_found("NotFoundException", format!("RestApi {id} not found"))
     })?;
     let item: Vec<Value> = api.stages.values().map(stage_to_json).collect();
-    // Note: AWS returns the stages array under the key `item`, not `items`.
     Ok(json!({ "item": item }))
 }
 
@@ -1081,7 +1084,7 @@ fn get_deployments(state: &ApiGatewayV1State, input: &Value) -> Result<Value, Aw
         AwsError::not_found("NotFoundException", format!("RestApi {id} not found"))
     })?;
     let items: Vec<Value> = api.deployments.iter().map(deployment_to_json).collect();
-    Ok(json!({ "items": items }))
+    Ok(json!({ "item": items }))
 }
 
 fn create_deployment(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
@@ -1130,7 +1133,7 @@ fn get_authorizers(state: &ApiGatewayV1State, input: &Value) -> Result<Value, Aw
         AwsError::not_found("NotFoundException", format!("RestApi {id} not found"))
     })?;
     let items: Vec<Value> = api.authorizers.values().map(authorizer_to_json).collect();
-    Ok(json!({ "items": items }))
+    Ok(json!({ "item": items }))
 }
 
 // --- Mutating operations -------------------------------------------------
@@ -2337,7 +2340,7 @@ fn get_api_keys(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsEr
             .unwrap_or(0)
             .cmp(&b["createdDate"].as_u64().unwrap_or(0))
     });
-    Ok(json!({"items": items}))
+    Ok(json!({"item": items}))
 }
 
 fn delete_api_key(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
@@ -2419,7 +2422,7 @@ fn get_usage_plans(state: &ApiGatewayV1State) -> Value {
             .unwrap_or("")
             .cmp(b["name"].as_str().unwrap_or(""))
     });
-    json!({"items": items})
+    json!({"item": items})
 }
 
 fn delete_usage_plan(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
@@ -2472,7 +2475,7 @@ fn get_usage_plan_keys(state: &ApiGatewayV1State, input: &Value) -> Result<Value
         .filter(|e| e.value().usage_plan_id == usage_plan_id)
         .map(|e| usage_plan_key_to_json(e.value()))
         .collect();
-    Ok(json!({"items": items}))
+    Ok(json!({"item": items}))
 }
 
 fn delete_usage_plan_key(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
@@ -3575,7 +3578,7 @@ mod tests {
         assert_eq!(created["name"], "demo");
 
         let listed = svc.handle("GetRestApis", json!({}), &ctx()).await.unwrap();
-        let items = listed["items"].as_array().unwrap();
+        let items = listed["item"].as_array().unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["name"], "demo");
     }
@@ -3664,7 +3667,7 @@ mod tests {
             .handle("GetResources", json!({"restapi_id": id}), &ctx())
             .await
             .unwrap();
-        let items = resources["items"].as_array().unwrap();
+        let items = resources["item"].as_array().unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["path"], "/");
         assert_eq!(items[0]["parentId"], "");
@@ -3682,7 +3685,7 @@ mod tests {
             .await
             .unwrap();
         let listed = svc.handle("GetRestApis", json!({}), &ctx()).await.unwrap();
-        assert_eq!(listed["items"].as_array().unwrap().len(), 0);
+        assert_eq!(listed["item"].as_array().unwrap().len(), 0);
     }
 
     #[tokio::test]
@@ -3714,7 +3717,7 @@ mod tests {
             .handle("GetDeployments", json!({"restapi_id": id}), &ctx())
             .await
             .unwrap();
-        assert_eq!(deployments["items"].as_array().unwrap().len(), 1);
+        assert_eq!(deployments["item"].as_array().unwrap().len(), 1);
     }
 
     async fn make_api(svc: &ApiGatewayV1Service) -> (String, String) {
@@ -3731,7 +3734,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let root_id = resources["items"][0]["id"].as_str().unwrap().to_string();
+        let root_id = resources["item"][0]["id"].as_str().unwrap().to_string();
         (api_id, root_id)
     }
 
@@ -3977,7 +3980,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(listed["items"].as_array().unwrap().len(), 1);
+        assert_eq!(listed["item"].as_array().unwrap().len(), 1);
 
         svc.handle(
             "DeleteAuthorizer",
@@ -3990,7 +3993,7 @@ mod tests {
             .handle("GetAuthorizers", json!({"restapi_id": api_id}), &ctx())
             .await
             .unwrap();
-        assert_eq!(listed["items"].as_array().unwrap().len(), 0);
+        assert_eq!(listed["item"].as_array().unwrap().len(), 0);
     }
 
     #[tokio::test]
@@ -4321,7 +4324,7 @@ mod tests {
 
         // Default GetApiKeys hides the value.
         let listed = svc.handle("GetApiKeys", json!({}), &ctx()).await.unwrap();
-        let item = &listed["items"][0];
+        let item = &listed["item"][0];
         assert_eq!(item["id"], id);
         assert!(item["value"].is_null());
 
@@ -4329,7 +4332,7 @@ mod tests {
             .handle("GetApiKeys", json!({"includeValues": true}), &ctx())
             .await
             .unwrap();
-        assert_eq!(with_values["items"][0]["value"], raw_value);
+        assert_eq!(with_values["item"][0]["value"], raw_value);
     }
 
     #[tokio::test]

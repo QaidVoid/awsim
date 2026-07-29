@@ -19,3 +19,6 @@ axum = { workspace = true }
 tokio = { workspace = true }
 regex = { workspace = true }
 flate2 = "1"
+
+[dev-dependencies]
+tokio = { workspace = true }

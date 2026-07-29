@@ -128,7 +128,7 @@ interface RawRestApi {
 }
 
 interface RawListRestApis {
-  items?: RawRestApi[];
+  item?: RawRestApi[];
 }
 
 interface RawResource {
@@ -140,7 +140,7 @@ interface RawResource {
 }
 
 interface RawListResources {
-  items?: RawResource[];
+  item?: RawResource[];
 }
 
 interface RawMethod {
@@ -183,7 +183,7 @@ interface RawDeployment {
 }
 
 interface RawListDeployments {
-  items?: RawDeployment[];
+  item?: RawDeployment[];
 }
 
 interface RawAuthorizer {
@@ -196,7 +196,7 @@ interface RawAuthorizer {
 }
 
 interface RawListAuthorizers {
-  items?: RawAuthorizer[];
+  item?: RawAuthorizer[];
 }
 
 // ---- Mappers ----
@@ -289,7 +289,7 @@ function mapAuthorizer(r: RawAuthorizer): Authorizer {
 
 export async function getRestApis(): Promise<RestApi[]> {
   const data = await apigwFetch<RawListRestApis>("GET", "/restapis");
-  return (data.items ?? []).map(mapRestApi);
+  return (data.item ?? []).map(mapRestApi);
 }
 
 export async function getRestApi(id: string): Promise<RestApi> {
@@ -319,7 +319,7 @@ export async function getResources(restApiId: string): Promise<Resource[]> {
     "GET",
     `/restapis/${encodeURIComponent(restApiId)}/resources?embed=methods`,
   );
-  return (data.items ?? []).map(mapResource);
+  return (data.item ?? []).map(mapResource);
 }
 
 export async function getMethod(
@@ -363,7 +363,7 @@ export async function getDeployments(restApiId: string): Promise<Deployment[]> {
     "GET",
     `/restapis/${encodeURIComponent(restApiId)}/deployments`,
   );
-  return (data.items ?? []).map(mapDeployment);
+  return (data.item ?? []).map(mapDeployment);
 }
 
 export async function createDeployment(
@@ -501,7 +501,7 @@ export async function getAuthorizers(restApiId: string): Promise<Authorizer[]> {
     "GET",
     `/restapis/${encodeURIComponent(restApiId)}/authorizers`,
   );
-  return (data.items ?? []).map(mapAuthorizer);
+  return (data.item ?? []).map(mapAuthorizer);
 }
 
 export async function createAuthorizer(
