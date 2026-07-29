@@ -85,14 +85,14 @@ fn config_arn(ctx: &RequestContext, id: &str) -> String {
 
 fn broker_summary(b: &Broker) -> Value {
     json!({
-        "BrokerId": b.broker_id,
-        "BrokerArn": b.broker_arn,
-        "BrokerName": b.broker_name,
-        "BrokerState": b.broker_state,
-        "DeploymentMode": b.deployment_mode,
-        "EngineType": b.engine_type,
-        "HostInstanceType": b.host_instance_type,
-        "Created": b.created,
+        "brokerId": b.broker_id,
+        "brokerArn": b.broker_arn,
+        "brokerName": b.broker_name,
+        "brokerState": b.broker_state,
+        "deploymentMode": b.deployment_mode,
+        "engineType": b.engine_type,
+        "hostInstanceType": b.host_instance_type,
+        "created": b.created,
     })
 }
 
@@ -102,59 +102,61 @@ fn broker_describe(b: &Broker, users: Vec<Value>) -> Value {
     // instead of hardcoding us-east-1.
     let region = b.broker_arn.split(':').nth(3).unwrap_or("us-east-1");
     let mut obj = json!({
-        "BrokerId": b.broker_id,
-        "BrokerArn": b.broker_arn,
-        "BrokerName": b.broker_name,
-        "BrokerState": b.broker_state,
-        "BrokerInstances": [{
-            "Endpoints": [format!("ssl://{}.mq.{region}.amazonaws.com:61617", b.broker_id)],
-            "ConsoleURL": format!("https://{}.mq.{region}.amazonaws.com:8162", b.broker_id),
-            "IpAddress": "10.0.0.10",
+        "brokerId": b.broker_id,
+        "brokerArn": b.broker_arn,
+        "brokerName": b.broker_name,
+        "brokerState": b.broker_state,
+        "brokerInstances": [{
+            "endpoints": [format!("ssl://{}.mq.{region}.amazonaws.com:61617", b.broker_id)],
+            "consoleURL": format!("https://{}.mq.{region}.amazonaws.com:8162", b.broker_id),
+            "ipAddress": "10.0.0.10",
         }],
-        "AutoMinorVersionUpgrade": b.auto_minor_version_upgrade,
-        "DeploymentMode": b.deployment_mode,
-        "EngineType": b.engine_type,
-        "EngineVersion": b.engine_version,
-        "HostInstanceType": b.host_instance_type,
-        "PubliclyAccessible": b.publicly_accessible,
-        "Created": b.created,
-        "AuthenticationStrategy": b.authentication_strategy,
-        "StorageType": b.storage_type,
-        "SecurityGroups": b.security_groups,
-        "SubnetIds": b.subnet_ids,
-        "Tags": b.tags,
-        "Users": users,
+        "autoMinorVersionUpgrade": b.auto_minor_version_upgrade,
+        "deploymentMode": b.deployment_mode,
+        "engineType": b.engine_type,
+        "engineVersion": b.engine_version,
+        "hostInstanceType": b.host_instance_type,
+        "publiclyAccessible": b.publicly_accessible,
+        "created": b.created,
+        "authenticationStrategy": b.authentication_strategy,
+        "storageType": b.storage_type,
+        "securityGroups": b.security_groups,
+        "subnetIds": b.subnet_ids,
+        "tags": b.tags,
+        "users": users,
     });
     if let Some(ref v) = b.encryption_options {
-        obj["EncryptionOptions"] = v.clone();
+        obj["encryptionOptions"] = v.clone();
     }
     if let Some(ref v) = b.logs {
-        obj["Logs"] = v.clone();
-        obj["LogsSummary"] = derive_logs_summary(v, &b.engine_type, &b.broker_id);
+        // DescribeBroker's `logs` member is the derived LogsSummary, not
+        // the raw toggle pair the broker was created with.
+        obj["logs"] = derive_logs_summary(v, &b.engine_type, &b.broker_id);
     }
     if let Some(ref v) = b.maintenance_window_start_time {
-        obj["MaintenanceWindowStartTime"] = v.clone();
+        obj["maintenanceWindowStartTime"] = v.clone();
     }
     // AWS always emits an `ActionsRequired` array on DescribeBroker.
     // An empty one when the broker is healthy. Surfacing it
     // unconditionally lets SDK clients iterate the field without a
     // None check.
-    obj["ActionsRequired"] = json!([]);
+    obj["actionsRequired"] = json!([]);
     if let Some(ref v) = b.ldap_server_metadata {
-        obj["LdapServerMetadata"] = v.clone();
+        obj["ldapServerMetadata"] = v.clone();
     }
     if let Some(ref v) = b.configuration {
-        obj["Configurations"] = json!({ "Current": v });
+        obj["configurations"] = json!({ "current": v });
     }
     if let Some(ref v) = b.data_replication_mode {
-        obj["DataReplicationMode"] = json!(v);
+        obj["dataReplicationMode"] = json!(v);
     }
     // `Pending*` mirrors. AWS exposes these on DescribeBroker so
     // callers can see what the next reboot will apply. We map each
     // staged key into the AWS-documented `Pending<Field>` name.
     if !b.pending.is_empty() {
         for (k, v) in &b.pending {
-            obj[format!("Pending{k}")] = v.clone();
+            // Staged keys are stored PascalCase; the wire is camelCase.
+            obj[format!("pending{k}")] = v.clone();
         }
     }
     obj
@@ -168,28 +170,28 @@ fn broker_describe(b: &Broker, users: Vec<Value>) -> Value {
 /// applies to ActiveMQ; we surface it for that engine.
 fn derive_logs_summary(logs: &Value, engine_type: &str, broker_id: &str) -> Value {
     let general = logs
-        .get("General")
+        .get("general")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     let audit =
-        logs.get("Audit").and_then(|v| v.as_bool()).unwrap_or(false) && engine_type == "ACTIVEMQ";
+        logs.get("audit").and_then(|v| v.as_bool()).unwrap_or(false) && engine_type == "ACTIVEMQ";
     let mut summary = json!({
-        "General": general,
-        "Audit": audit,
+        "general": general,
+        "audit": audit,
     });
     if general {
-        summary["GeneralLogGroup"] = json!(format!("/aws/amazonmq/{broker_id}/general"));
+        summary["generalLogGroup"] = json!(format!("/aws/amazonmq/{broker_id}/general"));
     }
     if audit {
-        summary["AuditLogGroup"] = json!(format!("/aws/amazonmq/{broker_id}/audit"));
+        summary["auditLogGroup"] = json!(format!("/aws/amazonmq/{broker_id}/audit"));
     }
     summary
 }
 
 fn user_summary(u: &BrokerUser) -> Value {
     json!({
-        "Username": u.username,
-        "PendingChange": u.pending_change,
+        "username": u.username,
+        "pendingChange": u.pending_change,
     })
 }
 
@@ -198,12 +200,12 @@ fn user_describe(u: &BrokerUser) -> Value {
     // hashed). When an UpdateUser is in flight, return its requested
     // state under `Pending`.
     json!({
-        "BrokerId": u.broker_id,
-        "Username": u.username,
-        "ConsoleAccess": u.console_access,
-        "Groups": u.groups,
-        "ReplicationUser": u.replication_user,
-        "Pending": u.pending,
+        "brokerId": u.broker_id,
+        "username": u.username,
+        "consoleAccess": u.console_access,
+        "groups": u.groups,
+        "replicationUser": u.replication_user,
+        "pending": u.pending,
     })
 }
 
@@ -216,7 +218,7 @@ pub fn create_broker(
     // return the cached response; a different request body under the
     // same token surfaces IdempotencyParameterMismatchException.
     let creator_token = input
-        .get("CreatorRequestId")
+        .get("creatorRequestId")
         .and_then(|v| v.as_str())
         .map(String::from);
     if let Some(ref token) = creator_token {
@@ -236,7 +238,7 @@ pub fn create_broker(
     }
 
     let id = new_id();
-    let name = require_str(input, "BrokerName")?.to_string();
+    let name = require_str(input, "brokerName")?.to_string();
     validate_broker_name(&name)?;
     if state.brokers.iter().any(|e| e.value().broker_name == name) {
         return Err(AwsError::conflict(
@@ -244,15 +246,15 @@ pub fn create_broker(
             format!("Broker {name} already exists"),
         ));
     }
-    let host = require_str(input, "HostInstanceType")?.to_string();
-    let engine_type = require_str(input, "EngineType")?.to_string();
-    let engine_version = require_str(input, "EngineVersion")?.to_string();
+    let host = require_str(input, "hostInstanceType")?.to_string();
+    let engine_type = require_str(input, "engineType")?.to_string();
+    let engine_version = require_str(input, "engineVersion")?.to_string();
 
     // StorageType allowlist per engine. ActiveMQ accepts EFS or EBS;
     // RabbitMQ only supports EBS. Default differs per engine, so we
     // resolve the supplied (or omitted) value against the engine.
     let storage_type = input
-        .get("StorageType")
+        .get("storageType")
         .and_then(|v| v.as_str())
         .map(str::to_string)
         .unwrap_or_else(|| match engine_type.as_str() {
@@ -276,13 +278,13 @@ pub fn create_broker(
     // matches what real MQ does instead of accepting a half-broken
     // broker config.
     let authentication_strategy = input
-        .get("AuthenticationStrategy")
+        .get("authenticationStrategy")
         .and_then(|v| v.as_str())
         .unwrap_or("SIMPLE")
         .to_string();
     if authentication_strategy == "LDAP"
         && input
-            .get("LdapServerMetadata")
+            .get("ldapServerMetadata")
             .and_then(|v| v.as_object())
             .is_none_or(|m| m.is_empty())
     {
@@ -293,7 +295,7 @@ pub fn create_broker(
     }
 
     let tags: HashMap<String, String> = input
-        .get("Tags")
+        .get("tags")
         .and_then(|v| v.as_object())
         .map(|o| {
             o.iter()
@@ -311,18 +313,18 @@ pub fn create_broker(
         broker_state: "CREATION_IN_PROGRESS".to_string(),
         broker_instance_type: host.clone(),
         deployment_mode: input
-            .get("DeploymentMode")
+            .get("deploymentMode")
             .and_then(|v| v.as_str())
             .unwrap_or("SINGLE_INSTANCE")
             .to_string(),
         engine_type,
         engine_version,
         auto_minor_version_upgrade: input
-            .get("AutoMinorVersionUpgrade")
+            .get("autoMinorVersionUpgrade")
             .and_then(|v| v.as_bool())
             .unwrap_or(true),
         publicly_accessible: input
-            .get("PubliclyAccessible")
+            .get("publiclyAccessible")
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
         host_instance_type: host,
@@ -330,7 +332,7 @@ pub fn create_broker(
         authentication_strategy,
         storage_type,
         security_groups: input
-            .get("SecurityGroups")
+            .get("securityGroups")
             .and_then(|v| v.as_array())
             .map(|a| {
                 a.iter()
@@ -339,7 +341,7 @@ pub fn create_broker(
             })
             .unwrap_or_default(),
         subnet_ids: input
-            .get("SubnetIds")
+            .get("subnetIds")
             .and_then(|v| v.as_array())
             .map(|a| {
                 a.iter()
@@ -348,25 +350,25 @@ pub fn create_broker(
             })
             .unwrap_or_default(),
         tags,
-        encryption_options: input.get("EncryptionOptions").cloned(),
-        logs: input.get("Logs").cloned(),
-        maintenance_window_start_time: input.get("MaintenanceWindowStartTime").cloned(),
-        ldap_server_metadata: input.get("LdapServerMetadata").cloned(),
-        configuration: input.get("Configuration").cloned(),
+        encryption_options: input.get("encryptionOptions").cloned(),
+        logs: input.get("logs").cloned(),
+        maintenance_window_start_time: input.get("maintenanceWindowStartTime").cloned(),
+        ldap_server_metadata: input.get("ldapServerMetadata").cloned(),
+        configuration: input.get("configuration").cloned(),
         data_replication_mode: input
-            .get("DataReplicationMode")
+            .get("dataReplicationMode")
             .and_then(|v| v.as_str())
             .map(String::from),
         pending: HashMap::new(),
         state_at: Some(now() + create_delay_secs()),
     };
-    let result = json!({ "BrokerId": id, "BrokerArn": b.broker_arn });
+    let result = json!({ "brokerId": id, "brokerArn": b.broker_arn });
     state.brokers.insert(id.clone(), b);
 
     // Initial users from CreateBroker.Users[]
-    if let Some(users) = input.get("Users").and_then(|v| v.as_array()) {
+    if let Some(users) = input.get("users").and_then(|v| v.as_array()) {
         for u in users {
-            let username = match u.get("Username").and_then(|v| v.as_str()) {
+            let username = match u.get("username").and_then(|v| v.as_str()) {
                 Some(s) => s.to_string(),
                 None => continue,
             };
@@ -374,11 +376,11 @@ pub fn create_broker(
                 broker_id: id.clone(),
                 username: username.clone(),
                 console_access: u
-                    .get("ConsoleAccess")
+                    .get("consoleAccess")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false),
                 groups: u
-                    .get("Groups")
+                    .get("groups")
                     .and_then(|v| v.as_array())
                     .map(|a| {
                         a.iter()
@@ -387,12 +389,12 @@ pub fn create_broker(
                     })
                     .unwrap_or_default(),
                 replication_user: u
-                    .get("ReplicationUser")
+                    .get("replicationUser")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false),
                 pending_change: None,
                 password_hash: u
-                    .get("Password")
+                    .get("password")
                     .and_then(|v| v.as_str())
                     .map(hash_password),
                 pending: None,
@@ -454,7 +456,7 @@ pub fn describe_broker(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let id = require_str(input, "BrokerId")?;
+    let id = require_str(input, "brokerId")?;
     // Polling DescribeBroker also drives the state machine: a broker
     // whose transition deadline has elapsed promotes to `RUNNING`
     // here, so callers that poll without a running tick loop still see
@@ -490,19 +492,19 @@ pub fn list_brokers(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let max = cap_max_results(
-        input.get("MaxResults").and_then(|v| v.as_i64()),
+        input.get("maxResults").and_then(|v| v.as_i64()),
         LIST_BROKERS_DEFAULT_MAX,
         LIST_BROKERS_DEFAULT_MAX,
     );
-    let next_token = input.get("NextToken").and_then(|v| v.as_str());
+    let next_token = input.get("nextToken").and_then(|v| v.as_str());
 
     let mut brokers: Vec<Broker> = state.brokers.iter().map(|e| e.value().clone()).collect();
     brokers.sort_by(|a, b| a.broker_id.cmp(&b.broker_id));
     let page = paginate(brokers, max, next_token, |b| b.broker_id.clone())?;
     let summaries: Vec<Value> = page.items.iter().map(broker_summary).collect();
-    let mut resp = json!({ "BrokerSummaries": summaries });
+    let mut resp = json!({ "brokerSummaries": summaries });
     if let Some(t) = page.next_token {
-        resp["NextToken"] = json!(t);
+        resp["nextToken"] = json!(t);
     }
     Ok(resp)
 }
@@ -512,13 +514,13 @@ pub fn delete_broker(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let id = require_str(input, "BrokerId")?;
+    let id = require_str(input, "brokerId")?;
     state.brokers.remove(id).ok_or_else(|| {
         AwsError::not_found("NotFoundException", format!("Broker {id} not found"))
     })?;
     let prefix = format!("{id}|");
     state.users.retain(|k, _| !k.starts_with(&prefix));
-    Ok(json!({ "BrokerId": id }))
+    Ok(json!({ "brokerId": id }))
 }
 
 /// `UpdateBroker` stages changes into the broker's `pending` mirror
@@ -530,7 +532,7 @@ pub fn update_broker(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let id = require_str(input, "BrokerId")?;
+    let id = require_str(input, "brokerId")?;
     let mut b = state.brokers.get_mut(id).ok_or_else(|| {
         AwsError::not_found("NotFoundException", format!("Broker {id} not found"))
     })?;
@@ -542,19 +544,19 @@ pub fn update_broker(
     let mut resp_engine_version = b.engine_version.clone();
     let mut resp_auto = b.auto_minor_version_upgrade;
     let mut staged_any = false;
-    if let Some(host) = input.get("HostInstanceType").and_then(|v| v.as_str()) {
+    if let Some(host) = input.get("hostInstanceType").and_then(|v| v.as_str()) {
         b.pending
             .insert("HostInstanceType".to_string(), json!(host));
         resp_host = host.to_string();
         staged_any = true;
     }
-    if let Some(v) = input.get("EngineVersion").and_then(|v| v.as_str()) {
+    if let Some(v) = input.get("engineVersion").and_then(|v| v.as_str()) {
         b.pending.insert("EngineVersion".to_string(), json!(v));
         resp_engine_version = v.to_string();
         staged_any = true;
     }
     if let Some(b2) = input
-        .get("AutoMinorVersionUpgrade")
+        .get("autoMinorVersionUpgrade")
         .and_then(|v| v.as_bool())
     {
         b.pending
@@ -562,20 +564,20 @@ pub fn update_broker(
         resp_auto = b2;
         staged_any = true;
     }
-    if let Some(v) = input.get("Logs").cloned() {
+    if let Some(v) = input.get("logs").cloned() {
         b.pending.insert("Logs".to_string(), v);
         staged_any = true;
     }
-    if let Some(v) = input.get("Configuration").cloned() {
+    if let Some(v) = input.get("configuration").cloned() {
         b.pending.insert("Configuration".to_string(), v);
         staged_any = true;
     }
     let _ = staged_any;
     Ok(json!({
-        "BrokerId": b.broker_id,
-        "AutoMinorVersionUpgrade": resp_auto,
-        "EngineVersion": resp_engine_version,
-        "HostInstanceType": resp_host,
+        "brokerId": b.broker_id,
+        "autoMinorVersionUpgrade": resp_auto,
+        "engineVersion": resp_engine_version,
+        "hostInstanceType": resp_host,
     }))
 }
 
@@ -587,7 +589,7 @@ pub fn reboot_broker(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let id = require_str(input, "BrokerId")?;
+    let id = require_str(input, "brokerId")?;
     let mut b = state.brokers.get_mut(id).ok_or_else(|| {
         AwsError::not_found("NotFoundException", format!("Broker {id} not found"))
     })?;
@@ -627,8 +629,8 @@ pub fn create_user(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let broker_id = require_str(input, "BrokerId")?.to_string();
-    let username = require_str(input, "Username")?.to_string();
+    let broker_id = require_str(input, "brokerId")?.to_string();
+    let username = require_str(input, "username")?.to_string();
     if !state.brokers.contains_key(&broker_id) {
         return Err(AwsError::not_found(
             "NotFoundException",
@@ -643,18 +645,18 @@ pub fn create_user(
         ));
     }
     let password_hash = input
-        .get("Password")
+        .get("password")
         .and_then(|v| v.as_str())
         .map(hash_password);
     let u = BrokerUser {
         broker_id,
         username,
         console_access: input
-            .get("ConsoleAccess")
+            .get("consoleAccess")
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
         groups: input
-            .get("Groups")
+            .get("groups")
             .and_then(|v| v.as_array())
             .map(|a| {
                 a.iter()
@@ -663,7 +665,7 @@ pub fn create_user(
             })
             .unwrap_or_default(),
         replication_user: input
-            .get("ReplicationUser")
+            .get("replicationUser")
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
         pending_change: Some("CREATE".to_string()),
@@ -688,8 +690,8 @@ pub fn describe_user(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let broker_id = require_str(input, "BrokerId")?;
-    let username = require_str(input, "Username")?;
+    let broker_id = require_str(input, "brokerId")?;
+    let username = require_str(input, "username")?;
     let u = state
         .users
         .get(&user_key(broker_id, username))
@@ -704,13 +706,13 @@ pub fn list_users(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let broker_id = require_str(input, "BrokerId")?;
+    let broker_id = require_str(input, "brokerId")?;
     let max = cap_max_results(
-        input.get("MaxResults").and_then(|v| v.as_i64()),
+        input.get("maxResults").and_then(|v| v.as_i64()),
         LIST_USERS_DEFAULT_MAX,
         LIST_USERS_DEFAULT_MAX,
     );
-    let next_token = input.get("NextToken").and_then(|v| v.as_str());
+    let next_token = input.get("nextToken").and_then(|v| v.as_str());
     let mut users: Vec<BrokerUser> = state
         .users
         .iter()
@@ -720,9 +722,9 @@ pub fn list_users(
     users.sort_by(|a, b| a.username.cmp(&b.username));
     let page = paginate(users, max, next_token, |u| u.username.clone())?;
     let summaries: Vec<Value> = page.items.iter().map(user_summary).collect();
-    let mut resp = json!({ "BrokerId": broker_id, "Users": summaries });
+    let mut resp = json!({ "brokerId": broker_id, "users": summaries });
     if let Some(t) = page.next_token {
-        resp["NextToken"] = json!(t);
+        resp["nextToken"] = json!(t);
     }
     Ok(resp)
 }
@@ -732,8 +734,8 @@ pub fn delete_user(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let broker_id = require_str(input, "BrokerId")?;
-    let username = require_str(input, "Username")?;
+    let broker_id = require_str(input, "brokerId")?;
+    let username = require_str(input, "username")?;
     state
         .users
         .remove(&user_key(broker_id, username))
@@ -748,8 +750,8 @@ pub fn update_user(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let broker_id = require_str(input, "BrokerId")?;
-    let username = require_str(input, "Username")?;
+    let broker_id = require_str(input, "brokerId")?;
+    let username = require_str(input, "username")?;
     let mut u = state
         .users
         .get_mut(&user_key(broker_id, username))
@@ -761,11 +763,11 @@ pub fn update_user(
     // point they replace the live values. Mirror that by writing the
     // requested fields into `pending` rather than the live fields.
     let console_access = input
-        .get("ConsoleAccess")
+        .get("consoleAccess")
         .and_then(|v| v.as_bool())
         .unwrap_or(u.console_access);
     let groups = input
-        .get("Groups")
+        .get("groups")
         .and_then(|v| v.as_array())
         .map(|g| {
             g.iter()
@@ -774,17 +776,17 @@ pub fn update_user(
         })
         .unwrap_or_else(|| u.groups.clone());
     let replication_user = input
-        .get("ReplicationUser")
+        .get("replicationUser")
         .and_then(|v| v.as_bool())
         .unwrap_or(u.replication_user);
     u.pending = Some(json!({
-        "ConsoleAccess": console_access,
-        "Groups": groups,
-        "ReplicationUser": replication_user,
+        "consoleAccess": console_access,
+        "groups": groups,
+        "replicationUser": replication_user,
     }));
     // Password changes update the hash immediately but never surface
     // back to the caller.
-    if let Some(p) = input.get("Password").and_then(|v| v.as_str()) {
+    if let Some(p) = input.get("password").and_then(|v| v.as_str()) {
         u.password_hash = Some(hash_password(p));
     }
     u.pending_change = Some("UPDATE".to_string());
@@ -799,17 +801,17 @@ pub fn create_configuration(
     let id = uuid::Uuid::new_v4().to_string();
     let created = now();
     let description = input
-        .get("Description")
+        .get("description")
         .and_then(|v| v.as_str())
         .map(String::from);
     let c = Configuration {
         configuration_id: id.clone(),
         configuration_arn: config_arn(ctx, &id),
-        name: require_str(input, "Name")?.to_string(),
-        engine_type: require_str(input, "EngineType")?.to_string(),
-        engine_version: require_str(input, "EngineVersion")?.to_string(),
+        name: require_str(input, "name")?.to_string(),
+        engine_type: require_str(input, "engineType")?.to_string(),
+        engine_version: require_str(input, "engineVersion")?.to_string(),
         authentication_strategy: input
-            .get("AuthenticationStrategy")
+            .get("authenticationStrategy")
             .and_then(|v| v.as_str())
             .unwrap_or("SIMPLE")
             .to_string(),
@@ -823,7 +825,7 @@ pub fn create_configuration(
             data: String::new(),
         }],
         tags: input
-            .get("Tags")
+            .get("tags")
             .and_then(|v| v.as_object())
             .map(|o| {
                 o.iter()
@@ -833,14 +835,14 @@ pub fn create_configuration(
             .unwrap_or_default(),
     };
     let result = json!({
-        "Id": c.configuration_id,
-        "Arn": c.configuration_arn,
-        "Name": c.name,
-        "Created": c.created,
-        "LatestRevision": {
-            "Revision": c.latest_revision,
-            "Created": c.created,
-            "Description": c.description,
+        "id": c.configuration_id,
+        "arn": c.configuration_arn,
+        "name": c.name,
+        "created": c.created,
+        "latestRevision": {
+            "revision": c.latest_revision,
+            "created": c.created,
+            "description": c.description,
         },
     });
     state.configurations.insert(id, c);
@@ -902,10 +904,10 @@ pub fn update_configuration(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let id = require_str(input, "ConfigurationId")?;
-    let data = require_str(input, "Data")?.to_string();
+    let id = require_str(input, "configurationId")?;
+    let data = require_str(input, "data")?.to_string();
     let description = input
-        .get("Description")
+        .get("description")
         .and_then(|v| v.as_str())
         .map(String::from);
 
@@ -934,19 +936,19 @@ pub fn update_configuration(
     });
 
     Ok(json!({
-        "Id": c.configuration_id,
-        "Arn": c.configuration_arn,
-        "Name": c.name,
-        "Created": c.created,
-        "LatestRevision": {
-            "Revision": new_revision,
-            "Created": created,
-            "Description": description,
+        "id": c.configuration_id,
+        "arn": c.configuration_arn,
+        "name": c.name,
+        "created": c.created,
+        "latestRevision": {
+            "revision": new_revision,
+            "created": created,
+            "description": description,
         },
         // AWS returns a `Warnings` array when the engine validator
         // flagged anything non-fatal. We don't run a real validator,
         // so the field is always empty but present for shape parity.
-        "Warnings": [],
+        "warnings": [],
     }))
 }
 
@@ -957,7 +959,7 @@ pub fn describe_configuration_revision(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let id = require_str(input, "ConfigurationId")?;
+    let id = require_str(input, "configurationId")?;
     let requested: u32 = require_str(input, "ConfigurationRevision")?
         .parse()
         .map_err(|_| {
@@ -980,10 +982,10 @@ pub fn describe_configuration_revision(
             )
         })?;
     Ok(json!({
-        "ConfigurationId": c.configuration_id,
-        "Created": rev.created,
-        "Description": rev.description,
-        "Data": rev.data,
+        "configurationId": c.configuration_id,
+        "created": rev.created,
+        "description": rev.description,
+        "data": rev.data,
     }))
 }
 
@@ -1004,20 +1006,20 @@ pub fn describe_configuration(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let id = require_str(input, "ConfigurationId")?;
+    let id = require_str(input, "configurationId")?;
     let c = state.configurations.get(id).ok_or_else(|| {
         AwsError::not_found("NotFoundException", format!("Configuration {id} not found"))
     })?;
     Ok(json!({
-        "Id": c.configuration_id,
-        "Arn": c.configuration_arn,
-        "Name": c.name,
-        "EngineType": c.engine_type,
-        "EngineVersion": c.engine_version,
-        "AuthenticationStrategy": c.authentication_strategy,
-        "Description": c.description,
-        "Created": c.created,
-        "LatestRevision": { "Revision": c.latest_revision, "Created": c.created, "Description": c.description },
+        "id": c.configuration_id,
+        "arn": c.configuration_arn,
+        "name": c.name,
+        "engineType": c.engine_type,
+        "engineVersion": c.engine_version,
+        "authenticationStrategy": c.authentication_strategy,
+        "description": c.description,
+        "created": c.created,
+        "latestRevision": { "revision": c.latest_revision, "created": c.created, "description": c.description },
     }))
 }
 
@@ -1027,11 +1029,11 @@ pub fn list_configurations(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let max = cap_max_results(
-        input.get("MaxResults").and_then(|v| v.as_i64()),
+        input.get("maxResults").and_then(|v| v.as_i64()),
         LIST_CONFIGS_DEFAULT_MAX,
         LIST_CONFIGS_DEFAULT_MAX,
     );
-    let next_token = input.get("NextToken").and_then(|v| v.as_str());
+    let next_token = input.get("nextToken").and_then(|v| v.as_str());
     let mut configurations: Vec<Configuration> = state
         .configurations
         .iter()
@@ -1046,18 +1048,18 @@ pub fn list_configurations(
         .iter()
         .map(|c| {
             json!({
-                "Id": c.configuration_id,
-                "Arn": c.configuration_arn,
-                "Name": c.name,
-                "EngineType": c.engine_type,
-                "EngineVersion": c.engine_version,
-                "Created": c.created,
+                "id": c.configuration_id,
+                "arn": c.configuration_arn,
+                "name": c.name,
+                "engineType": c.engine_type,
+                "engineVersion": c.engine_version,
+                "created": c.created,
             })
         })
         .collect();
-    let mut resp = json!({ "Configurations": items });
+    let mut resp = json!({ "configurations": items });
     if let Some(t) = page.next_token {
-        resp["NextToken"] = json!(t);
+        resp["nextToken"] = json!(t);
     }
     Ok(resp)
 }
@@ -1106,7 +1108,7 @@ pub fn create_tags(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let arn = resource_arn(input)?;
-    let tags = input.get("Tags").cloned().unwrap_or(json!({}));
+    let tags = input.get("tags").cloned().unwrap_or(json!({}));
     let map = tags.as_object().ok_or_else(|| {
         AwsError::bad_request("BadRequestException", "Tags must be a JSON object.")
     })?;
@@ -1153,10 +1155,10 @@ pub fn delete_tags(
     Ok(json!({}))
 }
 
-/// `ListTags`. Returns the resource's tags as a `{ "Tags": {...} }`
+/// `ListTags`. Returns the resource's tags as a `{ "tags": {...} }`
 /// map, matching the AWS MQ response shape.
 pub fn list_tags(state: &MqState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
     let arn = resource_arn(input)?;
     let tags = with_resource_tags(state, &arn, |t| t.clone())?;
-    Ok(json!({ "Tags": tags }))
+    Ok(json!({ "tags": tags }))
 }

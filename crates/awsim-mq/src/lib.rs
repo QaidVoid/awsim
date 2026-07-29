@@ -92,55 +92,55 @@ impl ServiceHandler for MqService {
             },
             RouteDefinition {
                 method: "GET",
-                path_pattern: "/v1/brokers/{BrokerId}",
+                path_pattern: "/v1/brokers/{brokerId}",
                 operation: "DescribeBroker",
                 required_query_param: None,
             },
             RouteDefinition {
                 method: "DELETE",
-                path_pattern: "/v1/brokers/{BrokerId}",
+                path_pattern: "/v1/brokers/{brokerId}",
                 operation: "DeleteBroker",
                 required_query_param: None,
             },
             RouteDefinition {
                 method: "PUT",
-                path_pattern: "/v1/brokers/{BrokerId}",
+                path_pattern: "/v1/brokers/{brokerId}",
                 operation: "UpdateBroker",
                 required_query_param: None,
             },
             RouteDefinition {
                 method: "POST",
-                path_pattern: "/v1/brokers/{BrokerId}/reboot",
+                path_pattern: "/v1/brokers/{brokerId}/reboot",
                 operation: "RebootBroker",
                 required_query_param: None,
             },
             RouteDefinition {
                 method: "POST",
-                path_pattern: "/v1/brokers/{BrokerId}/users/{Username}",
+                path_pattern: "/v1/brokers/{brokerId}/users/{username}",
                 operation: "CreateUser",
                 required_query_param: None,
             },
             RouteDefinition {
                 method: "GET",
-                path_pattern: "/v1/brokers/{BrokerId}/users/{Username}",
+                path_pattern: "/v1/brokers/{brokerId}/users/{username}",
                 operation: "DescribeUser",
                 required_query_param: None,
             },
             RouteDefinition {
                 method: "GET",
-                path_pattern: "/v1/brokers/{BrokerId}/users",
+                path_pattern: "/v1/brokers/{brokerId}/users",
                 operation: "ListUsers",
                 required_query_param: None,
             },
             RouteDefinition {
                 method: "DELETE",
-                path_pattern: "/v1/brokers/{BrokerId}/users/{Username}",
+                path_pattern: "/v1/brokers/{brokerId}/users/{username}",
                 operation: "DeleteUser",
                 required_query_param: None,
             },
             RouteDefinition {
                 method: "PUT",
-                path_pattern: "/v1/brokers/{BrokerId}/users/{Username}",
+                path_pattern: "/v1/brokers/{brokerId}/users/{username}",
                 operation: "UpdateUser",
                 required_query_param: None,
             },
@@ -158,19 +158,19 @@ impl ServiceHandler for MqService {
             },
             RouteDefinition {
                 method: "GET",
-                path_pattern: "/v1/configurations/{ConfigurationId}",
+                path_pattern: "/v1/configurations/{configurationId}",
                 operation: "DescribeConfiguration",
                 required_query_param: None,
             },
             RouteDefinition {
                 method: "PUT",
-                path_pattern: "/v1/configurations/{ConfigurationId}",
+                path_pattern: "/v1/configurations/{configurationId}",
                 operation: "UpdateConfiguration",
                 required_query_param: None,
             },
             RouteDefinition {
                 method: "GET",
-                path_pattern: "/v1/configurations/{ConfigurationId}/revisions/{ConfigurationRevision}",
+                path_pattern: "/v1/configurations/{configurationId}/revisions/{ConfigurationRevision}",
                 operation: "DescribeConfigurationRevision",
                 required_query_param: None,
             },
@@ -303,32 +303,32 @@ mod tests {
         let r = block_on(svc.handle(
             "CreateBroker",
             json!({
-                "BrokerName": "primary",
-                "EngineType": "RABBITMQ",
-                "EngineVersion": "3.13",
-                "HostInstanceType": "mq.m5.large",
-                "DeploymentMode": "SINGLE_INSTANCE",
-                "Users": [{ "Username": "admin", "ConsoleAccess": true }]
+                "brokerName": "primary",
+                "engineType": "RABBITMQ",
+                "engineVersion": "3.13",
+                "hostInstanceType": "mq.m5.large",
+                "deploymentMode": "SINGLE_INSTANCE",
+                "users": [{ "username": "admin", "consoleAccess": true }]
             }),
             &ctx,
         ))
         .unwrap();
-        let id = r["BrokerId"].as_str().unwrap().to_string();
+        let id = r["brokerId"].as_str().unwrap().to_string();
 
         let described =
-            block_on(svc.handle("DescribeBroker", json!({ "BrokerId": id }), &ctx)).unwrap();
-        assert_eq!(described["BrokerState"], "RUNNING");
-        assert_eq!(described["Users"].as_array().unwrap().len(), 1);
-        assert_eq!(described["EngineType"], "RABBITMQ");
+            block_on(svc.handle("DescribeBroker", json!({ "brokerId": id }), &ctx)).unwrap();
+        assert_eq!(described["brokerState"], "RUNNING");
+        assert_eq!(described["users"].as_array().unwrap().len(), 1);
+        assert_eq!(described["engineType"], "RABBITMQ");
 
         block_on(svc.handle(
             "CreateUser",
-            json!({ "BrokerId": id, "Username": "app", "Password": "x" }),
+            json!({ "brokerId": id, "username": "app", "password": "x" }),
             &ctx,
         ))
         .unwrap();
-        let users = block_on(svc.handle("ListUsers", json!({ "BrokerId": id }), &ctx)).unwrap();
-        assert_eq!(users["Users"].as_array().unwrap().len(), 2);
+        let users = block_on(svc.handle("ListUsers", json!({ "brokerId": id }), &ctx)).unwrap();
+        assert_eq!(users["users"].as_array().unwrap().len(), 2);
     }
 
     #[test]
@@ -338,10 +338,10 @@ mod tests {
         let err = block_on(svc.handle(
             "CreateBroker",
             json!({
-                "BrokerName": "bad name!",
-                "EngineType": "ACTIVEMQ",
-                "EngineVersion": "5.18",
-                "HostInstanceType": "mq.t3.micro"
+                "brokerName": "bad name!",
+                "engineType": "ACTIVEMQ",
+                "engineVersion": "5.18",
+                "hostInstanceType": "mq.t3.micro"
             }),
             &ctx,
         ))
@@ -356,11 +356,11 @@ mod tests {
         let err = block_on(svc.handle(
             "CreateBroker",
             json!({
-                "BrokerName": "rmq",
-                "EngineType": "RABBITMQ",
-                "EngineVersion": "3.13",
-                "HostInstanceType": "mq.m5.large",
-                "StorageType": "EFS"
+                "brokerName": "rmq",
+                "engineType": "RABBITMQ",
+                "engineVersion": "3.13",
+                "hostInstanceType": "mq.m5.large",
+                "storageType": "EFS"
             }),
             &ctx,
         ))
@@ -375,11 +375,11 @@ mod tests {
         let err = block_on(svc.handle(
             "CreateBroker",
             json!({
-                "BrokerName": "ldap-broker",
-                "EngineType": "ACTIVEMQ",
-                "EngineVersion": "5.18",
-                "HostInstanceType": "mq.t3.micro",
-                "AuthenticationStrategy": "LDAP"
+                "brokerName": "ldap-broker",
+                "engineType": "ACTIVEMQ",
+                "engineVersion": "5.18",
+                "hostInstanceType": "mq.t3.micro",
+                "authenticationStrategy": "LDAP"
             }),
             &ctx,
         ))
@@ -393,10 +393,10 @@ mod tests {
         let svc = MqService::new();
         let ctx = ctx();
         let body = json!({
-            "BrokerName": "dup",
-            "EngineType": "ACTIVEMQ",
-            "EngineVersion": "5.18",
-            "HostInstanceType": "mq.t3.micro"
+            "brokerName": "dup",
+            "engineType": "ACTIVEMQ",
+            "engineVersion": "5.18",
+            "hostInstanceType": "mq.t3.micro"
         });
         block_on(svc.handle("CreateBroker", body.clone(), &ctx)).unwrap();
         let err = block_on(svc.handle("CreateBroker", body, &ctx)).unwrap_err();
@@ -407,21 +407,21 @@ mod tests {
         let r = block_on(svc.handle(
             "CreateBroker",
             json!({
-                "BrokerName": "secrets",
-                "EngineType": "ACTIVEMQ",
-                "EngineVersion": "5.18",
-                "HostInstanceType": "mq.t3.micro",
-                "Users": [{
-                    "Username": "alice",
-                    "ConsoleAccess": false,
-                    "Groups": ["g1"],
-                    "Password": "hunter2"
+                "brokerName": "secrets",
+                "engineType": "ACTIVEMQ",
+                "engineVersion": "5.18",
+                "hostInstanceType": "mq.t3.micro",
+                "users": [{
+                    "username": "alice",
+                    "consoleAccess": false,
+                    "groups": ["g1"],
+                    "password": "hunter2"
                 }]
             }),
             ctx,
         ))
         .unwrap();
-        r["BrokerId"].as_str().unwrap().to_string()
+        r["brokerId"].as_str().unwrap().to_string()
     }
 
     #[test]
@@ -431,7 +431,7 @@ mod tests {
         let id = make_broker_with_user(&svc, &ctx);
         let desc = block_on(svc.handle(
             "DescribeUser",
-            json!({ "BrokerId": id, "Username": "alice" }),
+            json!({ "brokerId": id, "username": "alice" }),
             &ctx,
         ))
         .unwrap();
@@ -454,27 +454,27 @@ mod tests {
         block_on(svc.handle(
             "UpdateUser",
             json!({
-                "BrokerId": id,
-                "Username": "alice",
-                "ConsoleAccess": true,
-                "Groups": ["admins"],
+                "brokerId": id,
+                "username": "alice",
+                "consoleAccess": true,
+                "groups": ["admins"],
             }),
             &ctx,
         ))
         .unwrap();
         let desc = block_on(svc.handle(
             "DescribeUser",
-            json!({ "BrokerId": id, "Username": "alice" }),
+            json!({ "brokerId": id, "username": "alice" }),
             &ctx,
         ))
         .unwrap();
         // Live values unchanged.
-        assert_eq!(desc["ConsoleAccess"], false);
-        assert_eq!(desc["Groups"][0], "g1");
+        assert_eq!(desc["consoleAccess"], false);
+        assert_eq!(desc["groups"][0], "g1");
         // Pending mirror reflects the requested update.
-        let pending = desc["Pending"].as_object().expect("Pending populated");
-        assert_eq!(pending["ConsoleAccess"], true);
-        assert_eq!(pending["Groups"][0], "admins");
+        let pending = desc["pending"].as_object().expect("Pending populated");
+        assert_eq!(pending["consoleAccess"], true);
+        assert_eq!(pending["groups"][0], "admins");
     }
 
     #[test]
@@ -484,35 +484,35 @@ mod tests {
         let first = block_on(svc.handle(
             "CreateBroker",
             json!({
-                "BrokerName": "idemp-broker",
-                "EngineType": "RABBITMQ",
-                "EngineVersion": "3.13",
-                "HostInstanceType": "mq.m5.large",
-                "CreatorRequestId": "token-abc",
+                "brokerName": "idemp-broker",
+                "engineType": "RABBITMQ",
+                "engineVersion": "3.13",
+                "hostInstanceType": "mq.m5.large",
+                "creatorRequestId": "token-abc",
             }),
             &ctx,
         ))
         .unwrap();
-        let id_first = first["BrokerId"].as_str().unwrap().to_string();
+        let id_first = first["brokerId"].as_str().unwrap().to_string();
 
         // Same token + same body must return the cached payload, not
         // a fresh broker.
         let second = block_on(svc.handle(
             "CreateBroker",
             json!({
-                "BrokerName": "idemp-broker",
-                "EngineType": "RABBITMQ",
-                "EngineVersion": "3.13",
-                "HostInstanceType": "mq.m5.large",
-                "CreatorRequestId": "token-abc",
+                "brokerName": "idemp-broker",
+                "engineType": "RABBITMQ",
+                "engineVersion": "3.13",
+                "hostInstanceType": "mq.m5.large",
+                "creatorRequestId": "token-abc",
             }),
             &ctx,
         ))
         .unwrap();
-        assert_eq!(second["BrokerId"], json!(id_first));
+        assert_eq!(second["brokerId"], json!(id_first));
         // Only one broker should exist in state.
         let listed = block_on(svc.handle("ListBrokers", json!({}), &ctx)).unwrap();
-        assert_eq!(listed["BrokerSummaries"].as_array().unwrap().len(), 1);
+        assert_eq!(listed["brokerSummaries"].as_array().unwrap().len(), 1);
     }
 
     #[test]
@@ -522,11 +522,11 @@ mod tests {
         block_on(svc.handle(
             "CreateBroker",
             json!({
-                "BrokerName": "first",
-                "EngineType": "RABBITMQ",
-                "EngineVersion": "3.13",
-                "HostInstanceType": "mq.m5.large",
-                "CreatorRequestId": "token-xyz",
+                "brokerName": "first",
+                "engineType": "RABBITMQ",
+                "engineVersion": "3.13",
+                "hostInstanceType": "mq.m5.large",
+                "creatorRequestId": "token-xyz",
             }),
             &ctx,
         ))
@@ -534,11 +534,11 @@ mod tests {
         let err = block_on(svc.handle(
             "CreateBroker",
             json!({
-                "BrokerName": "different",
-                "EngineType": "RABBITMQ",
-                "EngineVersion": "3.13",
-                "HostInstanceType": "mq.m5.large",
-                "CreatorRequestId": "token-xyz",
+                "brokerName": "different",
+                "engineType": "RABBITMQ",
+                "engineVersion": "3.13",
+                "hostInstanceType": "mq.m5.large",
+                "creatorRequestId": "token-xyz",
             }),
             &ctx,
         ))
@@ -555,11 +555,11 @@ mod tests {
         let err = block_on(svc.handle(
             "CreateBroker",
             json!({
-                "BrokerName": "bad-token",
-                "EngineType": "RABBITMQ",
-                "EngineVersion": "3.13",
-                "HostInstanceType": "mq.m5.large",
-                "CreatorRequestId": bad,
+                "brokerName": "bad-token",
+                "engineType": "RABBITMQ",
+                "engineVersion": "3.13",
+                "hostInstanceType": "mq.m5.large",
+                "creatorRequestId": bad,
             }),
             &ctx,
         ))
@@ -579,15 +579,15 @@ mod tests {
         let c = block_on(svc.handle(
             "CreateConfiguration",
             json!({
-                "Name": "mq-config",
-                "EngineType": "ACTIVEMQ",
-                "EngineVersion": "5.18",
+                "name": "mq-config",
+                "engineType": "ACTIVEMQ",
+                "engineVersion": "5.18",
             }),
             &ctx,
         ))
         .unwrap();
-        let id = c["Id"].as_str().unwrap().to_string();
-        assert_eq!(c["LatestRevision"]["Revision"], json!(1));
+        let id = c["id"].as_str().unwrap().to_string();
+        assert_eq!(c["latestRevision"]["revision"], json!(1));
 
         // ActiveMQ payload must start with `<broker>`. Anything else
         // is rejected. The validator runs on the decoded bytes.
@@ -596,15 +596,15 @@ mod tests {
         let resp = block_on(svc.handle(
             "UpdateConfiguration",
             json!({
-                "ConfigurationId": id.clone(),
-                "Data": activemq_payload.clone(),
-                "Description": "rev2",
+                "configurationId": id.clone(),
+                "data": activemq_payload.clone(),
+                "description": "rev2",
             }),
             &ctx,
         ))
         .unwrap();
-        assert_eq!(resp["LatestRevision"]["Revision"], json!(2));
-        assert_eq!(resp["LatestRevision"]["Description"], json!("rev2"));
+        assert_eq!(resp["latestRevision"]["revision"], json!(2));
+        assert_eq!(resp["latestRevision"]["description"], json!("rev2"));
 
         // Wrong shape (cuttlefish syntax against ActiveMQ) -> 400.
         let cuttlefish =
@@ -612,8 +612,8 @@ mod tests {
         let err = block_on(svc.handle(
             "UpdateConfiguration",
             json!({
-                "ConfigurationId": id.clone(),
-                "Data": cuttlefish,
+                "configurationId": id.clone(),
+                "data": cuttlefish,
             }),
             &ctx,
         ))
@@ -629,29 +629,29 @@ mod tests {
         let r1 = block_on(svc.handle(
             "DescribeConfigurationRevision",
             json!({
-                "ConfigurationId": id.clone(),
+                "configurationId": id.clone(),
                 "ConfigurationRevision": "1",
             }),
             &ctx,
         ))
         .unwrap();
-        assert!(r1["Data"].as_str().unwrap().is_empty());
+        assert!(r1["data"].as_str().unwrap().is_empty());
 
         let r2 = block_on(svc.handle(
             "DescribeConfigurationRevision",
             json!({
-                "ConfigurationId": id.clone(),
+                "configurationId": id.clone(),
                 "ConfigurationRevision": "2",
             }),
             &ctx,
         ))
         .unwrap();
-        assert_eq!(r2["Data"], json!(activemq_payload));
+        assert_eq!(r2["data"], json!(activemq_payload));
 
         let err = block_on(svc.handle(
             "DescribeConfigurationRevision",
             json!({
-                "ConfigurationId": id,
+                "configurationId": id,
                 "ConfigurationRevision": "99",
             }),
             &ctx,
@@ -669,21 +669,21 @@ mod tests {
         let c = block_on(svc.handle(
             "CreateConfiguration",
             json!({
-                "Name": "rmq-config",
-                "EngineType": "RABBITMQ",
-                "EngineVersion": "3.13",
+                "name": "rmq-config",
+                "engineType": "RABBITMQ",
+                "engineVersion": "3.13",
             }),
             &ctx,
         ))
         .unwrap();
-        let id = c["Id"].as_str().unwrap().to_string();
+        let id = c["id"].as_str().unwrap().to_string();
 
         // ActiveMQ XML payload posted to a RabbitMQ configuration is
         // a hard reject.
         let xml = base64::engine::general_purpose::STANDARD.encode(b"<broker></broker>");
         let err = block_on(svc.handle(
             "UpdateConfiguration",
-            json!({ "ConfigurationId": id, "Data": xml }),
+            json!({ "configurationId": id, "data": xml }),
             &ctx,
         ))
         .unwrap_err();
@@ -697,34 +697,34 @@ mod tests {
         let r = block_on(svc.handle(
             "CreateBroker",
             json!({
-                "BrokerName": "logs-amq",
-                "EngineType": "ACTIVEMQ",
-                "EngineVersion": "5.18",
-                "HostInstanceType": "mq.m5.large",
-                "Logs": { "General": true, "Audit": true },
+                "brokerName": "logs-amq",
+                "engineType": "ACTIVEMQ",
+                "engineVersion": "5.18",
+                "hostInstanceType": "mq.m5.large",
+                "logs": { "general": true, "audit": true },
             }),
             &ctx,
         ))
         .unwrap();
-        let id = r["BrokerId"].as_str().unwrap().to_string();
+        let id = r["brokerId"].as_str().unwrap().to_string();
 
-        let desc = block_on(svc.handle("DescribeBroker", json!({ "BrokerId": id.clone() }), &ctx))
+        let desc = block_on(svc.handle("DescribeBroker", json!({ "brokerId": id.clone() }), &ctx))
             .unwrap();
         // LogsSummary is derived per the AWS-documented log-group
         // convention `/aws/amazonmq/{broker-id}/{general|audit}`.
-        assert_eq!(desc["LogsSummary"]["General"], json!(true));
-        assert_eq!(desc["LogsSummary"]["Audit"], json!(true));
+        assert_eq!(desc["logs"]["general"], json!(true));
+        assert_eq!(desc["logs"]["audit"], json!(true));
         assert_eq!(
-            desc["LogsSummary"]["GeneralLogGroup"],
+            desc["logs"]["generalLogGroup"],
             json!(format!("/aws/amazonmq/{id}/general"))
         );
         assert_eq!(
-            desc["LogsSummary"]["AuditLogGroup"],
+            desc["logs"]["auditLogGroup"],
             json!(format!("/aws/amazonmq/{id}/audit"))
         );
         // ActionsRequired must always be present (empty when healthy)
         // so SDK clients can iterate without nil-checking.
-        assert_eq!(desc["ActionsRequired"], json!([]));
+        assert_eq!(desc["actionsRequired"], json!([]));
     }
 
     #[test]
@@ -737,19 +737,19 @@ mod tests {
         let r = block_on(svc.handle(
             "CreateBroker",
             json!({
-                "BrokerName": "logs-rmq",
-                "EngineType": "RABBITMQ",
-                "EngineVersion": "3.13",
-                "HostInstanceType": "mq.m5.large",
-                "Logs": { "General": true, "Audit": true },
+                "brokerName": "logs-rmq",
+                "engineType": "RABBITMQ",
+                "engineVersion": "3.13",
+                "hostInstanceType": "mq.m5.large",
+                "logs": { "general": true, "audit": true },
             }),
             &ctx,
         ))
         .unwrap();
-        let id = r["BrokerId"].as_str().unwrap();
-        let desc = block_on(svc.handle("DescribeBroker", json!({ "BrokerId": id }), &ctx)).unwrap();
-        assert_eq!(desc["LogsSummary"]["Audit"], json!(false));
-        assert!(desc["LogsSummary"].get("AuditLogGroup").is_none());
+        let id = r["brokerId"].as_str().unwrap();
+        let desc = block_on(svc.handle("DescribeBroker", json!({ "brokerId": id }), &ctx)).unwrap();
+        assert_eq!(desc["logs"]["audit"], json!(false));
+        assert!(desc["logs"].get("auditLogGroup").is_none());
     }
 
     #[test]
@@ -759,21 +759,21 @@ mod tests {
         let r = block_on(svc.handle(
             "CreateBroker",
             json!({
-                "BrokerName": "no-logs",
-                "EngineType": "RABBITMQ",
-                "EngineVersion": "3.13",
-                "HostInstanceType": "mq.m5.large",
+                "brokerName": "no-logs",
+                "engineType": "RABBITMQ",
+                "engineVersion": "3.13",
+                "hostInstanceType": "mq.m5.large",
             }),
             &ctx,
         ))
         .unwrap();
-        let id = r["BrokerId"].as_str().unwrap();
-        let desc = block_on(svc.handle("DescribeBroker", json!({ "BrokerId": id }), &ctx)).unwrap();
+        let id = r["brokerId"].as_str().unwrap();
+        let desc = block_on(svc.handle("DescribeBroker", json!({ "brokerId": id }), &ctx)).unwrap();
         // ActionsRequired present even without a Logs config.
-        assert_eq!(desc["ActionsRequired"], json!([]));
+        assert_eq!(desc["actionsRequired"], json!([]));
         // LogsSummary derives only when Logs is configured; absent is
         // valid AWS behaviour for a broker created without logging.
-        assert!(desc.get("LogsSummary").is_none());
+        assert!(desc.get("logs").is_none());
     }
 
     #[test]
@@ -785,46 +785,46 @@ mod tests {
             block_on(svc.handle(
                 "CreateBroker",
                 json!({
-                    "BrokerName": format!("pg-{i}"),
-                    "EngineType": "RABBITMQ",
-                    "EngineVersion": "3.13",
-                    "HostInstanceType": "mq.t3.micro",
+                    "brokerName": format!("pg-{i}"),
+                    "engineType": "RABBITMQ",
+                    "engineVersion": "3.13",
+                    "hostInstanceType": "mq.t3.micro",
                 }),
                 &ctx,
             ))
             .unwrap();
         }
 
-        let page1 = block_on(svc.handle("ListBrokers", json!({ "MaxResults": 2 }), &ctx)).unwrap();
+        let page1 = block_on(svc.handle("ListBrokers", json!({ "maxResults": 2 }), &ctx)).unwrap();
         assert_eq!(
-            page1["BrokerSummaries"].as_array().unwrap().len(),
+            page1["brokerSummaries"].as_array().unwrap().len(),
             2,
             "first page must respect MaxResults"
         );
-        let token = page1["NextToken"]
+        let token = page1["nextToken"]
             .as_str()
             .expect("first page must hand back a NextToken when more remain");
 
         let page2 = block_on(svc.handle(
             "ListBrokers",
-            json!({ "MaxResults": 2, "NextToken": token }),
+            json!({ "maxResults": 2, "nextToken": token }),
             &ctx,
         ))
         .unwrap();
-        assert_eq!(page2["BrokerSummaries"].as_array().unwrap().len(), 2);
-        let token2 = page2["NextToken"]
+        assert_eq!(page2["brokerSummaries"].as_array().unwrap().len(), 2);
+        let token2 = page2["nextToken"]
             .as_str()
             .expect("second page must still hand back a NextToken");
 
         let page3 = block_on(svc.handle(
             "ListBrokers",
-            json!({ "MaxResults": 2, "NextToken": token2 }),
+            json!({ "maxResults": 2, "nextToken": token2 }),
             &ctx,
         ))
         .unwrap();
-        assert_eq!(page3["BrokerSummaries"].as_array().unwrap().len(), 1);
+        assert_eq!(page3["brokerSummaries"].as_array().unwrap().len(), 1);
         // No more pages -> NextToken absent.
-        assert!(page3.get("NextToken").is_none());
+        assert!(page3.get("nextToken").is_none());
     }
 
     #[test]
@@ -835,18 +835,18 @@ mod tests {
             block_on(svc.handle(
                 "CreateConfiguration",
                 json!({
-                    "Name": format!("cfg-{i}"),
-                    "EngineType": "RABBITMQ",
-                    "EngineVersion": "3.13",
+                    "name": format!("cfg-{i}"),
+                    "engineType": "RABBITMQ",
+                    "engineVersion": "3.13",
                 }),
                 &ctx,
             ))
             .unwrap();
         }
         let page1 =
-            block_on(svc.handle("ListConfigurations", json!({ "MaxResults": 1 }), &ctx)).unwrap();
-        assert_eq!(page1["Configurations"].as_array().unwrap().len(), 1);
-        assert!(page1["NextToken"].as_str().is_some());
+            block_on(svc.handle("ListConfigurations", json!({ "maxResults": 1 }), &ctx)).unwrap();
+        assert_eq!(page1["configurations"].as_array().unwrap().len(), 1);
+        assert!(page1["nextToken"].as_str().is_some());
     }
 
     #[test]
@@ -858,21 +858,21 @@ mod tests {
         let r = block_on(seed.handle(
             "CreateBroker",
             json!({
-                "BrokerName": "snap-broker",
-                "EngineType": "RABBITMQ",
-                "EngineVersion": "3.13",
-                "HostInstanceType": "mq.t3.micro",
+                "brokerName": "snap-broker",
+                "engineType": "RABBITMQ",
+                "engineVersion": "3.13",
+                "hostInstanceType": "mq.t3.micro",
             }),
             &ctx,
         ))
         .unwrap();
-        let id = r["BrokerId"].as_str().unwrap().to_string();
+        let id = r["brokerId"].as_str().unwrap().to_string();
         block_on(seed.handle(
             "UpdateBroker",
             json!({
-                "BrokerId": id.clone(),
-                "HostInstanceType": "mq.m5.large",
-                "AutoMinorVersionUpgrade": false,
+                "brokerId": id.clone(),
+                "hostInstanceType": "mq.m5.large",
+                "autoMinorVersionUpgrade": false,
             }),
             &ctx,
         ))
@@ -883,14 +883,14 @@ mod tests {
         target.restore(&bytes).expect("restore must succeed");
 
         let desc =
-            block_on(target.handle("DescribeBroker", json!({ "BrokerId": id.clone() }), &ctx))
+            block_on(target.handle("DescribeBroker", json!({ "brokerId": id.clone() }), &ctx))
                 .unwrap();
         // Pending mirror survived the round trip.
-        assert_eq!(desc["PendingHostInstanceType"], json!("mq.m5.large"));
-        assert_eq!(desc["PendingAutoMinorVersionUpgrade"], json!(false));
+        assert_eq!(desc["pendingHostInstanceType"], json!("mq.m5.large"));
+        assert_eq!(desc["pendingAutoMinorVersionUpgrade"], json!(false));
         // Live config unchanged. The reboot hasn't fired yet on the
         // restored instance either.
-        assert_eq!(desc["HostInstanceType"], json!("mq.t3.micro"));
+        assert_eq!(desc["hostInstanceType"], json!("mq.t3.micro"));
     }
 
     #[test]
@@ -901,22 +901,22 @@ mod tests {
         let c = block_on(seed.handle(
             "CreateConfiguration",
             json!({
-                "Name": "rmq-cfg",
-                "EngineType": "RABBITMQ",
-                "EngineVersion": "3.13",
+                "name": "rmq-cfg",
+                "engineType": "RABBITMQ",
+                "engineVersion": "3.13",
             }),
             &ctx,
         ))
         .unwrap();
-        let id = c["Id"].as_str().unwrap().to_string();
+        let id = c["id"].as_str().unwrap().to_string();
         let payload =
             base64::engine::general_purpose::STANDARD.encode(b"queue.mirroring = exactly\n");
         block_on(seed.handle(
             "UpdateConfiguration",
             json!({
-                "ConfigurationId": id.clone(),
-                "Data": payload.clone(),
-                "Description": "rev2",
+                "configurationId": id.clone(),
+                "data": payload.clone(),
+                "description": "rev2",
             }),
             &ctx,
         ))
@@ -929,14 +929,14 @@ mod tests {
         let rev2 = block_on(target.handle(
             "DescribeConfigurationRevision",
             json!({
-                "ConfigurationId": id,
+                "configurationId": id,
                 "ConfigurationRevision": "2",
             }),
             &ctx,
         ))
         .unwrap();
-        assert_eq!(rev2["Data"], json!(payload));
-        assert_eq!(rev2["Description"], json!("rev2"));
+        assert_eq!(rev2["data"], json!(payload));
+        assert_eq!(rev2["description"], json!("rev2"));
     }
 
     #[test]
@@ -946,22 +946,22 @@ mod tests {
         let r = block_on(svc.handle(
             "CreateBroker",
             json!({
-                "BrokerName": "pending-broker",
-                "EngineType": "RABBITMQ",
-                "EngineVersion": "3.13",
-                "HostInstanceType": "mq.t3.micro",
+                "brokerName": "pending-broker",
+                "engineType": "RABBITMQ",
+                "engineVersion": "3.13",
+                "hostInstanceType": "mq.t3.micro",
             }),
             &ctx,
         ))
         .unwrap();
-        let id = r["BrokerId"].as_str().unwrap().to_string();
+        let id = r["brokerId"].as_str().unwrap().to_string();
 
         block_on(svc.handle(
             "UpdateBroker",
             json!({
-                "BrokerId": id.clone(),
-                "HostInstanceType": "mq.m5.large",
-                "AutoMinorVersionUpgrade": false,
+                "brokerId": id.clone(),
+                "hostInstanceType": "mq.m5.large",
+                "autoMinorVersionUpgrade": false,
             }),
             &ctx,
         ))
@@ -969,21 +969,21 @@ mod tests {
 
         // Live config unchanged before reboot; pending mirror reflects
         // the staged diff via Pending* fields.
-        let pre = block_on(svc.handle("DescribeBroker", json!({ "BrokerId": id.clone() }), &ctx))
+        let pre = block_on(svc.handle("DescribeBroker", json!({ "brokerId": id.clone() }), &ctx))
             .unwrap();
-        assert_eq!(pre["HostInstanceType"], json!("mq.t3.micro"));
-        assert_eq!(pre["AutoMinorVersionUpgrade"], json!(true));
-        assert_eq!(pre["PendingHostInstanceType"], json!("mq.m5.large"));
-        assert_eq!(pre["PendingAutoMinorVersionUpgrade"], json!(false));
+        assert_eq!(pre["hostInstanceType"], json!("mq.t3.micro"));
+        assert_eq!(pre["autoMinorVersionUpgrade"], json!(true));
+        assert_eq!(pre["pendingHostInstanceType"], json!("mq.m5.large"));
+        assert_eq!(pre["pendingAutoMinorVersionUpgrade"], json!(false));
 
         // Reboot promotes the staged values and clears Pending*.
-        block_on(svc.handle("RebootBroker", json!({ "BrokerId": id.clone() }), &ctx)).unwrap();
-        let post = block_on(svc.handle("DescribeBroker", json!({ "BrokerId": id.clone() }), &ctx))
+        block_on(svc.handle("RebootBroker", json!({ "brokerId": id.clone() }), &ctx)).unwrap();
+        let post = block_on(svc.handle("DescribeBroker", json!({ "brokerId": id.clone() }), &ctx))
             .unwrap();
-        assert_eq!(post["HostInstanceType"], json!("mq.m5.large"));
-        assert_eq!(post["AutoMinorVersionUpgrade"], json!(false));
-        assert!(post.get("PendingHostInstanceType").is_none());
-        assert!(post.get("PendingAutoMinorVersionUpgrade").is_none());
+        assert_eq!(post["hostInstanceType"], json!("mq.m5.large"));
+        assert_eq!(post["autoMinorVersionUpgrade"], json!(false));
+        assert!(post.get("pendingHostInstanceType").is_none());
+        assert!(post.get("pendingAutoMinorVersionUpgrade").is_none());
     }
 
     #[test]
@@ -993,42 +993,41 @@ mod tests {
         let r = block_on(svc.handle(
             "CreateBroker",
             json!({
-                "BrokerName": "log-rotate",
-                "EngineType": "ACTIVEMQ",
-                "EngineVersion": "5.18",
-                "HostInstanceType": "mq.m5.large",
+                "brokerName": "log-rotate",
+                "engineType": "ACTIVEMQ",
+                "engineVersion": "5.18",
+                "hostInstanceType": "mq.m5.large",
             }),
             &ctx,
         ))
         .unwrap();
-        let id = r["BrokerId"].as_str().unwrap().to_string();
+        let id = r["brokerId"].as_str().unwrap().to_string();
 
         block_on(svc.handle(
             "UpdateBroker",
             json!({
-                "BrokerId": id.clone(),
-                "Logs": { "General": true, "Audit": true },
-                "Configuration": { "Id": "c-new", "Revision": 2 },
+                "brokerId": id.clone(),
+                "logs": { "general": true, "audit": true },
+                "configuration": { "id": "c-new", "revision": 2 },
             }),
             &ctx,
         ))
         .unwrap();
-        let pre = block_on(svc.handle("DescribeBroker", json!({ "BrokerId": id.clone() }), &ctx))
+        let pre = block_on(svc.handle("DescribeBroker", json!({ "brokerId": id.clone() }), &ctx))
             .unwrap();
         // No Logs yet on live config. Pending only.
-        assert!(pre.get("Logs").is_none());
-        assert_eq!(pre["PendingLogs"]["Audit"], json!(true));
-        assert_eq!(pre["PendingConfiguration"]["Id"], json!("c-new"));
+        assert!(pre.get("logs").is_none());
+        assert_eq!(pre["pendingLogs"]["audit"], json!(true));
+        assert_eq!(pre["pendingConfiguration"]["id"], json!("c-new"));
 
-        block_on(svc.handle("RebootBroker", json!({ "BrokerId": id.clone() }), &ctx)).unwrap();
-        let post = block_on(svc.handle("DescribeBroker", json!({ "BrokerId": id.clone() }), &ctx))
+        block_on(svc.handle("RebootBroker", json!({ "brokerId": id.clone() }), &ctx)).unwrap();
+        let post = block_on(svc.handle("DescribeBroker", json!({ "brokerId": id.clone() }), &ctx))
             .unwrap();
-        assert_eq!(post["Logs"]["Audit"], json!(true));
-        // LogsSummary was derived from the now-live config.
-        assert_eq!(post["LogsSummary"]["Audit"], json!(true));
-        assert_eq!(post["Configurations"]["Current"]["Id"], json!("c-new"));
-        assert!(post.get("PendingLogs").is_none());
-        assert!(post.get("PendingConfiguration").is_none());
+        // `logs` is the summary derived from the now-live config.
+        assert_eq!(post["logs"]["audit"], json!(true));
+        assert_eq!(post["configurations"]["current"]["id"], json!("c-new"));
+        assert!(post.get("pendingLogs").is_none());
+        assert!(post.get("pendingConfiguration").is_none());
     }
 
     #[test]
@@ -1038,41 +1037,41 @@ mod tests {
         let r = block_on(svc.handle(
             "CreateBroker",
             json!({
-                "BrokerName": "full-cfg",
-                "EngineType": "ACTIVEMQ",
-                "EngineVersion": "5.18",
-                "HostInstanceType": "mq.m5.large",
-                "DeploymentMode": "SINGLE_INSTANCE",
-                "EncryptionOptions": {
-                    "KmsKeyId": "arn:aws:kms:us-east-1:000000000000:key/abc",
-                    "UseAwsOwnedKey": false,
+                "brokerName": "full-cfg",
+                "engineType": "ACTIVEMQ",
+                "engineVersion": "5.18",
+                "hostInstanceType": "mq.m5.large",
+                "deploymentMode": "SINGLE_INSTANCE",
+                "encryptionOptions": {
+                    "kmsKeyId": "arn:aws:kms:us-east-1:000000000000:key/abc",
+                    "useAwsOwnedKey": false,
                 },
-                "Logs": { "General": true, "Audit": true },
-                "MaintenanceWindowStartTime": {
-                    "DayOfWeek": "SUNDAY",
-                    "TimeOfDay": "05:00",
-                    "TimeZone": "UTC",
+                "logs": { "general": true, "audit": true },
+                "maintenanceWindowStartTime": {
+                    "dayOfWeek": "SUNDAY",
+                    "timeOfDay": "05:00",
+                    "timeZone": "UTC",
                 },
-                "Configuration": { "Id": "c-abc", "Revision": 1 },
-                "DataReplicationMode": "NONE",
+                "configuration": { "id": "c-abc", "revision": 1 },
+                "dataReplicationMode": "NONE",
             }),
             &ctx,
         ))
         .unwrap();
-        let id = r["BrokerId"].as_str().unwrap().to_string();
+        let id = r["brokerId"].as_str().unwrap().to_string();
 
-        let desc = block_on(svc.handle("DescribeBroker", json!({ "BrokerId": id }), &ctx)).unwrap();
+        let desc = block_on(svc.handle("DescribeBroker", json!({ "brokerId": id }), &ctx)).unwrap();
         assert_eq!(
-            desc["EncryptionOptions"]["KmsKeyId"],
+            desc["encryptionOptions"]["kmsKeyId"],
             json!("arn:aws:kms:us-east-1:000000000000:key/abc")
         );
-        assert_eq!(desc["Logs"]["Audit"], json!(true));
+        assert_eq!(desc["logs"]["audit"], json!(true));
         assert_eq!(
-            desc["MaintenanceWindowStartTime"]["DayOfWeek"],
+            desc["maintenanceWindowStartTime"]["dayOfWeek"],
             json!("SUNDAY")
         );
-        assert_eq!(desc["Configurations"]["Current"]["Id"], json!("c-abc"));
-        assert_eq!(desc["DataReplicationMode"], json!("NONE"));
+        assert_eq!(desc["configurations"]["current"]["id"], json!("c-abc"));
+        assert_eq!(desc["dataReplicationMode"], json!("NONE"));
     }
 
     #[test]
@@ -1082,26 +1081,26 @@ mod tests {
         let r = block_on(svc.handle(
             "CreateBroker",
             json!({
-                "BrokerName": "tagged",
-                "EngineType": "RABBITMQ",
-                "EngineVersion": "3.13",
-                "HostInstanceType": "mq.t3.micro",
+                "brokerName": "tagged",
+                "engineType": "RABBITMQ",
+                "engineVersion": "3.13",
+                "hostInstanceType": "mq.t3.micro",
             }),
             &ctx,
         ))
         .unwrap();
-        let arn = r["BrokerArn"].as_str().unwrap().to_string();
+        let arn = r["brokerArn"].as_str().unwrap().to_string();
 
         // CreateTags merges (upsert) into the broker's tag map.
         block_on(svc.handle(
             "CreateTags",
-            json!({ "resourceArn": arn, "Tags": { "Owner": "alice", "Cost": "eng" } }),
+            json!({ "resourceArn": arn, "tags": { "Owner": "alice", "Cost": "eng" } }),
             &ctx,
         ))
         .unwrap();
         let listed = block_on(svc.handle("ListTags", json!({ "resourceArn": arn }), &ctx)).unwrap();
-        assert_eq!(listed["Tags"]["Owner"], json!("alice"));
-        assert_eq!(listed["Tags"]["Cost"], json!("eng"));
+        assert_eq!(listed["tags"]["Owner"], json!("alice"));
+        assert_eq!(listed["tags"]["Cost"], json!("eng"));
 
         // DeleteTags removes only the named keys.
         block_on(svc.handle(
@@ -1111,8 +1110,8 @@ mod tests {
         ))
         .unwrap();
         let after = block_on(svc.handle("ListTags", json!({ "resourceArn": arn }), &ctx)).unwrap();
-        assert_eq!(after["Tags"]["Owner"], json!("alice"));
-        assert!(after["Tags"].get("Cost").is_none());
+        assert_eq!(after["tags"]["Owner"], json!("alice"));
+        assert!(after["tags"].get("Cost").is_none());
     }
 
     #[test]
@@ -1122,18 +1121,18 @@ mod tests {
         let r = block_on(svc.handle(
             "CreateBroker",
             json!({
-                "BrokerName": "reserved-tags",
-                "EngineType": "RABBITMQ",
-                "EngineVersion": "3.13",
-                "HostInstanceType": "mq.t3.micro",
+                "brokerName": "reserved-tags",
+                "engineType": "RABBITMQ",
+                "engineVersion": "3.13",
+                "hostInstanceType": "mq.t3.micro",
             }),
             &ctx,
         ))
         .unwrap();
-        let arn = r["BrokerArn"].as_str().unwrap().to_string();
+        let arn = r["brokerArn"].as_str().unwrap().to_string();
         let err = block_on(svc.handle(
             "CreateTags",
-            json!({ "resourceArn": arn, "Tags": { "aws:internal": "x" } }),
+            json!({ "resourceArn": arn, "tags": { "aws:internal": "x" } }),
             &ctx,
         ))
         .unwrap_err();
@@ -1160,21 +1159,21 @@ mod tests {
         let c = block_on(svc.handle(
             "CreateConfiguration",
             json!({
-                "Name": "tag-cfg",
-                "EngineType": "RABBITMQ",
-                "EngineVersion": "3.13",
+                "name": "tag-cfg",
+                "engineType": "RABBITMQ",
+                "engineVersion": "3.13",
             }),
             &ctx,
         ))
         .unwrap();
-        let arn = c["Arn"].as_str().unwrap().to_string();
+        let arn = c["arn"].as_str().unwrap().to_string();
         block_on(svc.handle(
             "CreateTags",
-            json!({ "resourceArn": arn, "Tags": { "Team": "platform" } }),
+            json!({ "resourceArn": arn, "tags": { "Team": "platform" } }),
             &ctx,
         ))
         .unwrap();
         let listed = block_on(svc.handle("ListTags", json!({ "resourceArn": arn }), &ctx)).unwrap();
-        assert_eq!(listed["Tags"]["Team"], json!("platform"));
+        assert_eq!(listed["tags"]["Team"], json!("platform"));
     }
 }

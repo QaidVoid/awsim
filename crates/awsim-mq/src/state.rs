@@ -55,7 +55,7 @@ pub struct Broker {
     /// fields round-trip without a struct migration.
     #[serde(default)]
     pub encryption_options: Option<serde_json::Value>,
-    /// Logs config (`{ "General": bool, "Audit": bool }`). AWS only
+    /// Logs config (`{ "general": bool, "audit": bool }`). AWS only
     /// allows Audit on ActiveMQ.
     #[serde(default)]
     pub logs: Option<serde_json::Value>,
@@ -65,7 +65,7 @@ pub struct Broker {
     /// LDAP config. Required when `AuthenticationStrategy=LDAP`.
     #[serde(default)]
     pub ldap_server_metadata: Option<serde_json::Value>,
-    /// Initial Configuration reference: `{ "Id": "c-...", "Revision": 1 }`.
+    /// Initial Configuration reference: `{ "id": "c-...", "revision": 1 }`.
     /// AWS pins a configuration revision at create time; later
     /// `UpdateBroker` calls bump it.
     #[serde(default)]

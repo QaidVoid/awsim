@@ -49,23 +49,23 @@ fn broker_creates_in_progress_then_ticks_to_running() {
     let created = block_on(svc.handle(
         "CreateBroker",
         json!({
-            "BrokerName": "lifecycle",
-            "EngineType": "RABBITMQ",
-            "EngineVersion": "3.13",
-            "HostInstanceType": "mq.m5.large",
-            "Users": [{ "Username": "admin", "ConsoleAccess": true, "Password": "s3cr3t" }],
+            "brokerName": "lifecycle",
+            "engineType": "RABBITMQ",
+            "engineVersion": "3.13",
+            "hostInstanceType": "mq.m5.large",
+            "users": [{ "username": "admin", "consoleAccess": true, "password": "s3cr3t" }],
         }),
         &ctx,
     ))
     .unwrap();
-    let id = created["BrokerId"].as_str().unwrap().to_string();
+    let id = created["brokerId"].as_str().unwrap().to_string();
 
     // Immediately after create the broker is still spinning up. The
     // describe poll must NOT promote it yet because the deadline lies
     // in the future.
     let early = describe(&svc, &ctx, &id);
     assert_eq!(
-        early["BrokerState"], "CREATION_IN_PROGRESS",
+        early["brokerState"], "CREATION_IN_PROGRESS",
         "broker must be transitional before its deadline elapses"
     );
 
@@ -76,7 +76,7 @@ fn broker_creates_in_progress_then_ticks_to_running() {
 
     let settled = describe(&svc, &ctx, &id);
     assert_eq!(
-        settled["BrokerState"], "RUNNING",
+        settled["brokerState"], "RUNNING",
         "tick must promote the broker once its deadline elapses"
     );
 
@@ -84,7 +84,7 @@ fn broker_creates_in_progress_then_ticks_to_running() {
     // hashed) regardless of lifecycle state.
     let user = block_on(svc.handle(
         "DescribeUser",
-        json!({ "BrokerId": id, "Username": "admin" }),
+        json!({ "brokerId": id, "username": "admin" }),
         &ctx,
     ))
     .unwrap();
@@ -94,7 +94,7 @@ fn broker_creates_in_progress_then_ticks_to_running() {
         "plaintext password leaked: {serialized}"
     );
     assert!(
-        user.get("Password").is_none(),
+        user.get("password").is_none(),
         "Password field must be absent: {serialized}"
     );
 
@@ -108,22 +108,22 @@ fn broker_creates_in_progress_then_ticks_to_running() {
     let instant = block_on(svc.handle(
         "CreateBroker",
         json!({
-            "BrokerName": "instant",
-            "EngineType": "RABBITMQ",
-            "EngineVersion": "3.13",
-            "HostInstanceType": "mq.t3.micro",
+            "brokerName": "instant",
+            "engineType": "RABBITMQ",
+            "engineVersion": "3.13",
+            "hostInstanceType": "mq.t3.micro",
         }),
         &ctx,
     ))
     .unwrap();
-    let instant_id = instant["BrokerId"].as_str().unwrap().to_string();
+    let instant_id = instant["brokerId"].as_str().unwrap().to_string();
     assert_eq!(
-        describe(&svc, &ctx, &instant_id)["BrokerState"],
+        describe(&svc, &ctx, &instant_id)["brokerState"],
         "RUNNING",
         "zero-delay broker must promote on the first describe poll"
     );
 }
 
 fn describe(svc: &MqService, ctx: &RequestContext, id: &str) -> Value {
-    block_on(svc.handle("DescribeBroker", json!({ "BrokerId": id }), ctx)).unwrap()
+    block_on(svc.handle("DescribeBroker", json!({ "brokerId": id }), ctx)).unwrap()
 }
