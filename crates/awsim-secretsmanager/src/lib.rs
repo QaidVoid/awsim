@@ -199,6 +199,62 @@ impl ServiceHandler for SecretsManagerService {
             operations::secrets::run_due_rotations(&state, &account_id, &region, invoker);
         }
     }
+
+    fn snapshot(&self) -> Option<Vec<u8>> {
+        let mut buckets = Vec::new();
+        for ((account_id, region), state) in self.store.iter_all() {
+            buckets.push(SecretsBucketSnapshot {
+                account_id,
+                region,
+                secrets: state
+                    .secrets
+                    .iter()
+                    .map(|e| (e.key().clone(), e.value().clone()))
+                    .collect(),
+                resource_policies: state
+                    .resource_policies
+                    .iter()
+                    .map(|e| (e.key().clone(), e.value().clone()))
+                    .collect(),
+            });
+        }
+        serde_json::to_vec(&SecretsSnapshot { buckets }).ok()
+    }
+
+    fn restore(&self, data: &[u8]) -> Result<(), String> {
+        let snapshot: SecretsSnapshot = serde_json::from_slice(data).map_err(|e| e.to_string())?;
+        for bucket in snapshot.buckets {
+            let state = self.store.get(&bucket.account_id, &bucket.region);
+            state.secrets.clear();
+            state.resource_policies.clear();
+            for (name, secret) in bucket.secrets {
+                state.secrets.insert(name, secret);
+            }
+            for (name, policy) in bucket.resource_policies {
+                state.resource_policies.insert(name, policy);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// On-disk shape for one (account, region) pair's secrets.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SecretsBucketSnapshot {
+    account_id: String,
+    region: String,
+    secrets: Vec<(String, state::Secret)>,
+    resource_policies: Vec<(String, String)>,
+}
+
+/// Secrets Manager snapshot payload.
+///
+/// Keyed by (account, region) rather than flattened, because a secret's
+/// ARN is not a reliable way to recover its region for replicas, which
+/// deliberately carry the primary's ARN.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SecretsSnapshot {
+    buckets: Vec<SecretsBucketSnapshot>,
 }
 
 #[cfg(test)]

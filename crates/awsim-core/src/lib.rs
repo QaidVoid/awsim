@@ -82,6 +82,14 @@ impl From<Value> for HandlerResult {
     }
 }
 
+/// Error returned by the default [`ServiceHandler::restore`], marking a
+/// service that has no restore implementation.
+///
+/// Callers should treat this as "this service was not restored" rather
+/// than as a failure to restore, and report it distinctly from both a
+/// success and a genuine error.
+pub const RESTORE_UNSUPPORTED: &str = "service does not support restore";
+
 /// Trait that every AWS service crate must implement.
 ///
 /// Each service (S3, SQS, DynamoDB, etc.) implements this trait in its own crate.
@@ -138,9 +146,12 @@ pub trait ServiceHandler: Send + Sync {
 
     /// Restore the service's state from a previous snapshot.
     ///
-    /// The default implementation is a no-op and always succeeds.
+    /// The default reports non-support rather than succeeding. A silent
+    /// `Ok(())` here is indistinguishable from a real restore, so a
+    /// service that implements nothing would be reported as restored and
+    /// the caller would believe their state came back when it did not.
     fn restore(&self, _data: &[u8]) -> Result<(), String> {
-        Ok(())
+        Err(RESTORE_UNSUPPORTED.to_string())
     }
 
     /// Called after every service has been restored from its

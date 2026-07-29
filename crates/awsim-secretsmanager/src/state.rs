@@ -1,8 +1,9 @@
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// A single version of a secret value.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecretVersion {
     pub version_id: String,
     pub secret_string: Option<String>,
@@ -15,7 +16,7 @@ pub struct SecretVersion {
 }
 
 /// A secret and all its versions.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Secret {
     pub arn: String,
     pub name: String,
@@ -70,7 +71,7 @@ pub struct Secret {
 /// also gets a mirrored `Secret` record written into its region's store
 /// (flagged via `primary_region`/`primary_arn`) so a GetSecretValue
 /// routed to the replica region resolves locally.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplicaRegion {
     pub region: String,
     pub kms_key_id: Option<String>,

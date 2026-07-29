@@ -36,6 +36,7 @@ The following services write and restore JSON snapshots on graceful shutdown / s
 | SNS | `sns` |
 | Lambda | `lambda` |
 | ECR | `ecr` |
+| Secrets Manager | `secretsmanager` |
 | CloudWatch Logs | `logs` (group/stream metadata only — events in SQLite) |
 
 The following services persist their primary row data into a SQLite database under `{data_dir}/`:
@@ -50,14 +51,39 @@ The following services persist their primary row data into a SQLite database und
 
 Each DB uses WAL mode + a 16 MiB mmap with a tight 2 MiB page cache and an r2d2 connection pool (`min_idle=1, max_size=4`) so a fresh awsim process holds only ~256 KiB of resident SQLite per service until traffic arrives.
 
-Services not in either list (e.g., KMS, Secrets Manager) are in-memory only and lost on restart.
+Services not in either list (for example KMS, SSM, Step Functions, EventBridge) are in-memory only and lost on restart. This is a coverage gap rather than a design choice, and it is reported rather than hidden: a named snapshot records those services under `not_captured`, and loading one returns `complete: false`.
 
 ## Named Snapshots
 
 Beyond the automatic save-on-shutdown / restore-on-startup flow,
-AWSim supports point-in-time **named snapshots** — bundles of every
-service's serialised state plus billing + chaos rules — so you can
-freeze a complex test scenario and restore it on demand.
+AWSim supports point-in-time **named snapshots**: bundles of the
+serialised state of every service that supports snapshots, plus billing
+and chaos rules, so you can freeze a complex test scenario and restore it
+on demand.
+
+A snapshot does not capture everything. Services with no snapshot support
+are excluded, and so is data held outside handler state: DynamoDB items,
+CloudWatch log events, Kinesis records, and body-store payloads such as S3
+object contents. Table schemas, queues and buckets come back; their
+contents do not.
+
+Both gaps are reported rather than inferred. The load response is:
+
+```json
+{
+  "name": "baseline",
+  "complete": false,
+  "restored": ["s3", "sqs", "..."],
+  "unsupported": [],
+  "not_captured": ["kms", "ssm", "states", "..."],
+  "failed": []
+}
+```
+
+Check `complete` to know whether the restore was total. `not_captured`
+lists services whose state was never in the bundle, `unsupported` lists
+services that could not restore what was there, and `failed` lists real
+errors.
 
 ```bash
 # Save the current state under a name.

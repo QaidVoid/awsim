@@ -3,11 +3,17 @@
 //! `{data_dir}/named-snapshots/{name}/` and is independent of the
 //! shutdown-time `{data_dir}/snapshots/` directory.
 //!
-//! Limitations (v1): only captures JSON-serialisable handler state.
+//! Limitations: only JSON-serialisable handler state is captured.
 //! DynamoDB rows (SQLite) and body-store payloads (S3 objects, Lambda
-//! code, SQS message bodies) are NOT captured — buckets/queues/tables
-//! survive but their contents do not. This is good enough for sharing
-//! topology + IAM + chaos scenarios; deeper bundling can come later.
+//! code, SQS message bodies) are NOT captured, so buckets, queues and
+//! tables survive but their contents do not. Services that implement no
+//! `snapshot` are not captured at all.
+//!
+//! Both gaps are reported rather than hidden: the manifest records
+//! `not_captured`, and a load reports `complete: false` alongside
+//! `restored` / `unsupported` / `not_captured` / `failed`. A caller must
+//! be able to tell a full restore from a partial one, because a load that
+//! silently restores nothing is worse than one that refuses.
 
 use awsim_billing::BillingMeter;
 use awsim_core::AppState;
@@ -37,6 +43,11 @@ struct Manifest {
     created_ts: u64,
     awsim_version: String,
     services: Vec<String>,
+    /// Registered services that produced no snapshot, so this bundle does
+    /// not contain their state. Recorded explicitly so a caller can see
+    /// the gap rather than inferring it from a shorter `services` list.
+    #[serde(default)]
+    not_captured: Vec<String>,
     has_billing: bool,
     has_chaos: bool,
 }
@@ -131,7 +142,12 @@ pub async fn save(
         return err_response(StatusCode::INTERNAL_SERVER_ERROR, "IoError", e);
     }
 
+    // A service that returns no snapshot is a coverage gap, not an
+    // absence of state. Record it so the manifest, the listing, and the
+    // load report can all say plainly what this bundle does not contain
+    // rather than leaving the caller to infer it from a short list.
     let mut services = Vec::new();
+    let mut not_captured = Vec::new();
     for (svc_name, handler) in s.app.services.iter() {
         if let Some(bytes) = handler.snapshot() {
             let path = dir.join(format!("{svc_name}.json"));
@@ -139,9 +155,12 @@ pub async fn save(
                 return err_response(StatusCode::INTERNAL_SERVER_ERROR, "IoError", e);
             }
             services.push(svc_name.clone());
+        } else {
+            not_captured.push(svc_name.clone());
         }
     }
     services.sort();
+    not_captured.sort();
 
     let mut has_billing = false;
     if let Some(bytes) = s.billing.store.snapshot_to_bytes() {
@@ -164,6 +183,7 @@ pub async fn save(
         created_ts: now_secs(),
         awsim_version: env!("CARGO_PKG_VERSION").to_string(),
         services,
+        not_captured,
         has_billing,
         has_chaos,
     };
@@ -206,7 +226,11 @@ pub async fn load(
         }
     };
 
+    // Three outcomes, not two. A service with no restore implementation
+    // must not be reported alongside genuinely restored ones, otherwise a
+    // load that restored nothing still reads as complete success.
     let mut restored = Vec::new();
+    let mut unsupported: Vec<Value> = Vec::new();
     let mut failed: Vec<Value> = Vec::new();
     for svc_name in &manifest.services {
         let path = dir.join(format!("{svc_name}.json"));
@@ -223,6 +247,9 @@ pub async fn load(
         };
         match handler.restore(&bytes) {
             Ok(()) => restored.push(svc_name.clone()),
+            Err(e) if e == awsim_core::RESTORE_UNSUPPORTED => {
+                unsupported.push(json!({ "service": svc_name, "reason": e }));
+            }
             Err(e) => failed.push(json!({ "service": svc_name, "error": e })),
         }
     }
@@ -240,9 +267,17 @@ pub async fn load(
         failed.push(json!({ "service": "_chaos", "error": e.to_string() }));
     }
 
+    // `complete` lets a caller branch on whether the load actually put
+    // everything back without having to inspect the arrays. A service
+    // whose state was never captured counts against completeness just as
+    // much as one that failed to restore.
+    let complete = unsupported.is_empty() && failed.is_empty() && manifest.not_captured.is_empty();
     Json(json!({
         "name": name,
+        "complete": complete,
         "restored": restored,
+        "unsupported": unsupported,
+        "not_captured": manifest.not_captured,
         "failed": failed,
     }))
     .into_response()

@@ -249,8 +249,10 @@ enum Command {
         #[command(subcommand)]
         command: ChaosCommand,
     },
-    /// Save / load named state snapshots — point-in-time bundles of
-    /// every service's serialised state, plus billing + chaos.
+    /// Save / load named state snapshots: point-in-time bundles of the
+    /// serialised state of every service that supports snapshots, plus
+    /// billing and chaos. A load reports what it did and did not
+    /// restore; check `complete` to know whether it was total.
     Snapshot {
         #[command(subcommand)]
         command: SnapshotCommand,

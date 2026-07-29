@@ -98,7 +98,15 @@ impl PersistenceManager {
             if let Some(data) = self.load_snapshot(name)
                 && let Err(e) = handler.restore(&data)
             {
-                tracing::warn!(service = %name, error = %e, "Failed to restore snapshot");
+                // A service with no restore implementation is a coverage
+                // gap, not a failure: it never wrote a snapshot in the
+                // first place, so there is nothing to warn about beyond
+                // a stale file from an older build.
+                if e == crate::RESTORE_UNSUPPORTED {
+                    tracing::debug!(service = %name, "Snapshot present but service cannot restore");
+                } else {
+                    tracing::warn!(service = %name, error = %e, "Failed to restore snapshot");
+                }
             }
         }
         for (name, handler) in services {
