@@ -80,8 +80,17 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
         --bin awsim \
     && cp "target/$(cat /tmp/rust-target)/release/awsim" /usr/local/bin/awsim
 
+# Stage the persistence directory here, owned by the unprivileged runtime
+# uid. distroless has no shell, so the runtime stage cannot mkdir it, and
+# a VOLUME over a path that does not exist in the image is created owned
+# by root, which the non-root process then cannot write.
+RUN mkdir -p /stage/data && chown -R 65532:65532 /stage/data
+
 # ---------- Runtime stage ----------
-FROM gcr.io/distroless/static-debian12
+# `:nonroot` runs as uid 65532 rather than root. The default tag runs as
+# uid 0, which turns any file-write defect into a write anywhere in the
+# container filesystem, including over the awsim binary itself.
+FROM gcr.io/distroless/static-debian12:nonroot
 
 LABEL org.opencontainers.image.title="AWSim"
 LABEL org.opencontainers.image.description="Fully offline AWS development environment"
@@ -99,8 +108,12 @@ LABEL org.opencontainers.image.licenses="MIT OR Apache-2.0"
 ENV AWSIM_PORT=4566 \
     AWSIM_DATA_DIR=/data
 EXPOSE 4566 4567
+
+COPY --from=builder --chown=65532:65532 /stage/data /data
 VOLUME ["/data"]
 
 COPY --from=builder /usr/local/bin/awsim /usr/local/bin/awsim
+
+USER 65532:65532
 
 ENTRYPOINT ["/usr/local/bin/awsim"]

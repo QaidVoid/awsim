@@ -28,6 +28,7 @@ export default defineConfig({
           items: [
             { text: 'Persistence', link: '/guide/persistence' },
             { text: 'Admin Console', link: '/guide/admin-console' },
+            { text: 'Security Model', link: '/guide/security' },
             { text: 'Operator Auth', link: '/guide/operator-auth' },
             { text: 'Estimated Billing', link: '/guide/billing' },
             { text: 'Chaos Engine', link: '/guide/chaos' },

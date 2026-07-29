@@ -76,6 +76,12 @@ struct Cli {
     #[arg(long, default_value = "aws", env = "AWSIM_PARTITION")]
     partition: String,
 
+    /// Address to listen on. Defaults to all interfaces, which is what
+    /// container port publishing requires. Set `127.0.0.1` to restrict
+    /// AWSim to this machine.
+    #[arg(long, default_value = "::", env = "AWSIM_BIND")]
+    bind: String,
+
     /// Authority (`host` or `host:port`) to put in returned resource URLs
     /// such as SQS `QueueUrl`, API Gateway endpoints, AppSync GraphQL
     /// URLs, and Lambda function URLs.
@@ -1663,7 +1669,8 @@ async fn async_main() -> Result<()> {
 
     spawn_fd_pressure_watcher();
 
-    let listener = bind_dual_stack_tokio(cli.port).await?;
+    let listener = bind_dual_stack_tokio(cli.port, &cli.bind).await?;
+    report_trust_posture(&cli.bind);
 
     // Startup banner
     println!();
@@ -1878,7 +1885,7 @@ async fn prepare_https_runtime(cli: &Cli, https_port: u16) -> Result<HttpsRuntim
     };
 
     let assets = tls::load_or_generate(source).await?;
-    let std_listener = bind_dual_stack_std(https_port)
+    let std_listener = bind_dual_stack_std(https_port, &cli.bind)
         .with_context(|| format!("binding HTTPS listener on port {https_port}"))?;
     Ok(HttpsRuntime {
         port: https_port,
@@ -1927,7 +1934,10 @@ async fn mark_request_https(
 /// request ever reaches us. If the OS has `net.ipv6.bindv6only=1`
 /// (uncommon on dev machines) or IPv6 is disabled, fall back to
 /// plain v4.
-async fn bind_dual_stack_tokio(port: u16) -> Result<tokio::net::TcpListener> {
+async fn bind_dual_stack_tokio(port: u16, bind: &str) -> Result<tokio::net::TcpListener> {
+    if let Some(addr) = explicit_bind_addr(bind, port) {
+        return Ok(tokio::net::TcpListener::bind(addr).await?);
+    }
     let addr_v6 = std::net::SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, port));
     match tokio::net::TcpListener::bind(addr_v6).await {
         Ok(l) => Ok(l),
@@ -1942,7 +1952,12 @@ async fn bind_dual_stack_tokio(port: u16) -> Result<tokio::net::TcpListener> {
 /// Same dual-stack bind as `bind_dual_stack_tokio`, but returns a
 /// `std::net::TcpListener` (set non-blocking) so it can be handed to
 /// `axum_server::from_tcp_rustls`.
-fn bind_dual_stack_std(port: u16) -> Result<std::net::TcpListener> {
+fn bind_dual_stack_std(port: u16, bind: &str) -> Result<std::net::TcpListener> {
+    if let Some(addr) = explicit_bind_addr(bind, port) {
+        let listener = std::net::TcpListener::bind(addr)?;
+        listener.set_nonblocking(true)?;
+        return Ok(listener);
+    }
     let addr_v6 = std::net::SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, port));
     let listener = match std::net::TcpListener::bind(addr_v6) {
         Ok(l) => l,
@@ -1954,6 +1969,22 @@ fn bind_dual_stack_std(port: u16) -> Result<std::net::TcpListener> {
     };
     listener.set_nonblocking(true)?;
     Ok(listener)
+}
+
+/// Resolve an explicit `--bind` value to a socket address.
+///
+/// Returns `None` for the wildcard default so the caller keeps its
+/// dual-stack path, which is what makes `localhost` work for Node 20+
+/// clients that resolve `::1` first.
+fn explicit_bind_addr(bind: &str, port: u16) -> Option<std::net::SocketAddr> {
+    let trimmed = bind.trim();
+    if trimmed.is_empty() || trimmed == "::" || trimmed == "0.0.0.0" {
+        return None;
+    }
+    trimmed
+        .parse::<std::net::IpAddr>()
+        .ok()
+        .map(|ip| std::net::SocketAddr::new(ip, port))
 }
 
 /// Spawn a background task that consumes from the internal event bus and
@@ -2535,6 +2566,43 @@ fn spawn_event_router(state: &AppState) {
 /// On every subsequent boot the snapshot will contain the root
 /// user, so this routine flips the gate to "Complete" instead of
 /// printing a new token.
+/// State the trust posture once at startup when no security gate is on.
+///
+/// AWSim assumes a trusted local context: it trusts its callers, and
+/// several emulated features fetch caller-supplied URLs by design (API
+/// Gateway HTTP integrations, Cognito federation, the Bedrock backend).
+/// That is correct for a development emulator on a laptop and a bad
+/// surprise on a shared host.
+///
+/// Deliberately `info` rather than `warn`, and silent when bound to
+/// loopback: the default local run is the overwhelmingly common case,
+/// and a warning that fires every time is a warning nobody reads.
+fn report_trust_posture(bind: &str) {
+    let loopback = bind.starts_with("127.") || bind == "localhost" || bind == "::1";
+    if loopback {
+        return;
+    }
+    let gate = |name: &str| {
+        std::env::var(name)
+            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+            .unwrap_or(false)
+    };
+    if gate("AWSIM_IAM_ENFORCE")
+        || gate("AWSIM_REQUIRE_OPERATOR_AUTH")
+        || gate("AWSIM_REQUIRE_SIGNED_REQUESTS")
+        || gate("AWSIM_VERIFY_SIGV4")
+    {
+        return;
+    }
+    info!(
+        "Reachable on {bind} with no security gates enabled. AWSim trusts \
+         its callers, so run it on a trusted network. To restrict it, bind \
+         loopback with --bind 127.0.0.1, or enable \
+         AWSIM_REQUIRE_SIGNED_REQUESTS / AWSIM_IAM_ENFORCE / \
+         AWSIM_VERIFY_SIGV4 / AWSIM_REQUIRE_OPERATOR_AUTH."
+    );
+}
+
 /// Answer an unmatched path under the admin prefix with a plain 404.
 ///
 /// Without this the AWS service router picks the request up and reports
