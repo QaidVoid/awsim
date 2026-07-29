@@ -133,15 +133,32 @@ async fn main() {
     let mut total_tested = 0usize;
     let mut total_passed = 0usize;
     let mut total_failed = 0usize;
+    let mut no_runner: Vec<&str> = Vec::new();
 
     for r in &all_results {
-        let status = if r.failed == 0 { "OK " } else { "ERR" };
+        // Three states, not two. `NONE` marks a service the harness
+        // cannot drive: it has zero failures, but reporting that as a
+        // pass is what made this run unable to go red.
+        let status = if !r.has_runner {
+            "NONE"
+        } else if r.failed > 0 {
+            "ERR "
+        } else {
+            "OK  "
+        };
         let coverage_pct = (r.implemented * 100).checked_div(r.total).unwrap_or(0);
+        // `covered` counts distinct model operations the harness drove.
+        // `checks` counts assertions run, which is higher when a runner
+        // exercises an operation more than once. Naming them differently
+        // stops the two being read as the same quantity.
         println!(
-            "[{status}] {:<30} {}/{} ops covered ({coverage_pct}%), {} passed, {} failed",
+            "[{status}] {:<30} {}/{} ops covered ({coverage_pct}%), {} checks passed, {} failed",
             r.service, r.implemented, r.total, r.passed, r.failed
         );
 
+        if !r.has_runner {
+            no_runner.push(&r.service);
+        }
         total_smithy_ops += r.total;
         total_tested += r.implemented;
         total_passed += r.passed;
@@ -153,13 +170,26 @@ async fn main() {
         .checked_div(total_smithy_ops)
         .unwrap_or(0);
     println!("Total: {total_tested}/{total_smithy_ops} operations covered ({total_pct}%)");
-    println!("Passed: {total_passed}  Failed: {total_failed}");
+    println!("Checks: {total_passed} passed, {total_failed} failed");
+    if !no_runner.is_empty() {
+        println!(
+            "No harness coverage ({}): {}",
+            no_runner.len(),
+            no_runner.join(", ")
+        );
+    }
 
     if total_failed > 0 {
         println!(
             "\nFAILED: {} deserialization errors detected.",
             total_failed
         );
+        std::process::exit(1);
+    } else if total_tested == 0 {
+        // Every service reporting zero tested operations means the
+        // harness did not exercise anything. Passing in that state
+        // would be the most misleading outcome available.
+        println!("\nFAILED: no operations were exercised.");
         std::process::exit(1);
     } else {
         println!("\nAll tested operations passed shape validation.");

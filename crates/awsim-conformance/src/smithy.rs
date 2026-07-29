@@ -76,23 +76,34 @@ pub fn parse_model(path: &Path) -> SmithyModel {
     let all_shapes: HashMap<String, Value> =
         shapes.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
 
-    // Find the service shape.
+    // Find the service shape, then collect every operation reachable
+    // from it.
+    //
+    // Reading only the service shape's `operations` array undercounts
+    // badly: Smithy lets a service attach operations to `resources`,
+    // which may nest and which also carry lifecycle operations
+    // (create/read/update/delete/list/put). ECS declares 13 operations
+    // directly and 77 in total, so a service-only walk reported 17%
+    // coverage where the real figure was 3%.
     let mut service_id = String::new();
     let mut operation_targets: Vec<String> = Vec::new();
 
     for (shape_id, shape) in shapes {
         if shape["type"].as_str() == Some("service") {
             service_id = shape_id.clone();
-            if let Some(ops) = shape["operations"].as_array() {
-                for op in ops {
-                    if let Some(target) = op["target"].as_str() {
-                        operation_targets.push(target.to_string());
-                    }
-                }
-            }
+            let mut seen_resources = HashSet::new();
+            collect_operations(
+                shape,
+                &all_shapes,
+                &mut operation_targets,
+                &mut seen_resources,
+            );
             break;
         }
     }
+
+    operation_targets.sort();
+    operation_targets.dedup();
 
     // Parse each operation.
     let mut operations = Vec::new();
@@ -124,6 +135,50 @@ pub fn parse_model(path: &Path) -> SmithyModel {
         service_id,
         operations,
         all_shapes,
+    }
+}
+
+/// Walk a service or resource shape, collecting every operation target
+/// it reaches, recursing through nested resources.
+///
+/// `seen` guards against a resource graph that cycles back on itself.
+fn collect_operations(
+    shape: &Value,
+    all_shapes: &HashMap<String, Value>,
+    out: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+) {
+    // Operations attached directly, and on a resource, those that act on
+    // the collection rather than a single instance.
+    for key in ["operations", "collectionOperations"] {
+        if let Some(ops) = shape[key].as_array() {
+            for op in ops {
+                if let Some(target) = op["target"].as_str() {
+                    out.push(target.to_string());
+                }
+            }
+        }
+    }
+
+    // Resource lifecycle operations are single targets, not arrays.
+    for key in ["create", "read", "update", "delete", "list", "put"] {
+        if let Some(target) = shape[key]["target"].as_str() {
+            out.push(target.to_string());
+        }
+    }
+
+    if let Some(resources) = shape["resources"].as_array() {
+        for resource in resources {
+            let Some(target) = resource["target"].as_str() else {
+                continue;
+            };
+            if !seen.insert(target.to_string()) {
+                continue;
+            }
+            if let Some(resource_shape) = all_shapes.get(target) {
+                collect_operations(resource_shape, all_shapes, out, seen);
+            }
+        }
     }
 }
 

@@ -36,10 +36,19 @@ impl OpResult {
 
 pub struct ServiceResult {
     pub service: String,
+    /// Operations declared by the service's Smithy model, including
+    /// those reached through resource shapes.
     pub total: usize,
     pub implemented: usize,
     pub passed: usize,
     pub failed: usize,
+    /// Whether a runner exists for this service at all.
+    ///
+    /// Without this a service the harness cannot drive is indistinguishable
+    /// from one whose every operation passed: both report zero failures.
+    /// That made the whole run incapable of going red, which is worse
+    /// than useless for a gate.
+    pub has_runner: bool,
     pub results: Vec<OpResult>,
 }
 

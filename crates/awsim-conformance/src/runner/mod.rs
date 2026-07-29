@@ -99,6 +99,7 @@ pub async fn test_service(
                 implemented: 0,
                 passed: 0,
                 failed: 0,
+                has_runner: false,
                 results: Vec::new(),
             };
         }
@@ -137,6 +138,7 @@ pub async fn test_service(
         implemented,
         passed,
         failed,
+        has_runner: true,
         results: op_results,
     }
 }
