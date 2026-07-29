@@ -184,7 +184,9 @@ mod tests {
         // 100 RCU + 10 WCU held steady for one hour.
         m.record_sample(100, 10, 1_000, rcu_rate, wcu_rate);
         m.record_sample(100, 10, 4_600, rcu_rate, wcu_rate);
-        let cost = m.accumulated_cost_picos.load(std::sync::atomic::Ordering::Relaxed) as f64
+        let cost = m
+            .accumulated_cost_picos
+            .load(std::sync::atomic::Ordering::Relaxed) as f64
             / 1e12;
         // 100 * $0.00013 + 10 * $0.00065 = $0.0195 per hour.
         let expected = 100.0 * 0.00013 + 10.0 * 0.00065;

@@ -362,8 +362,7 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
                     .collect()
             })
             .unwrap_or_default();
-        let svc_total =
-            storage_cost_usd + compute_cost_usd + resource_cost_usd + capacity_cost_usd;
+        let svc_total = storage_cost_usd + compute_cost_usd + resource_cost_usd + capacity_cost_usd;
         total_cost += svc_total;
         services_out.push(ServiceCost {
             service: svc_name,

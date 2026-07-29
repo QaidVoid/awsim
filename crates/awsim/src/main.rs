@@ -1705,13 +1705,8 @@ async fn async_main() -> Result<()> {
                 .context("set HTTPS listener non-blocking")?;
             let https_listener = tokio::net::TcpListener::from_std(tls.std_listener)
                 .context("adopt HTTPS listener")?;
-            let http_fut = serve_with_limits(
-                listener,
-                None,
-                http_app,
-                connections.clone(),
-                idle_timeout,
-            );
+            let http_fut =
+                serve_with_limits(listener, None, http_app, connections.clone(), idle_timeout);
             let https_fut = serve_with_limits(
                 https_listener,
                 Some(tls.assets.config),
@@ -1785,7 +1780,10 @@ async fn serve_with_limits(
             if let Some(timeout) = idle_timeout {
                 // hyper requires a timer registered before `header_read_timeout`,
                 // otherwise it panics at runtime when the timeout is armed.
-                builder.http1().timer(TokioTimer::new()).header_read_timeout(timeout);
+                builder
+                    .http1()
+                    .timer(TokioTimer::new())
+                    .header_read_timeout(timeout);
             }
             let service = TowerToHyperService::new(app);
             match tls {
@@ -2076,7 +2074,12 @@ fn raise_nofile_limit() {
     let desired = TARGET.min(hard);
     if soft < desired {
         match rlimit::setrlimit(rlimit::Resource::NOFILE, desired, hard) {
-            Ok(()) => info!(from = soft, to = desired, hard = hard, "Raised NOFILE rlimit"),
+            Ok(()) => info!(
+                from = soft,
+                to = desired,
+                hard = hard,
+                "Raised NOFILE rlimit"
+            ),
             Err(e) => warn!(
                 from = soft,
                 to = desired,
