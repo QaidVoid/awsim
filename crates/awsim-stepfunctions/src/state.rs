@@ -1,8 +1,9 @@
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// An execution history event.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryEvent {
     pub id: u64,
     pub event_type: String,
@@ -11,7 +12,7 @@ pub struct HistoryEvent {
 }
 
 /// A Step Functions execution.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Execution {
     pub arn: String,
     pub state_machine_arn: String,
@@ -27,7 +28,7 @@ pub struct Execution {
 }
 
 /// A Step Functions state machine.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateMachine {
     pub name: String,
     pub arn: String,
@@ -50,7 +51,7 @@ pub struct StateMachine {
 }
 
 /// A Step Functions activity.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Activity {
     pub name: String,
     pub arn: String,
@@ -75,7 +76,7 @@ pub struct StepFunctionsState {
 /// A `.waitForTaskToken` Task whose execution is suspended pending a
 /// callback. Captures everything needed to resume the tail of the state
 /// machine when the token is answered.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingTask {
     pub exec_arn: String,
     pub definition: String,

@@ -257,6 +257,91 @@ impl ServiceHandler for KmsService {
             }
         }
     }
+
+    fn snapshot(&self) -> Option<Vec<u8>> {
+        let mut buckets = Vec::new();
+        for ((account_id, region), state) in self.store.iter_all() {
+            buckets.push(KmsBucketSnapshot {
+                account_id,
+                region,
+                keys: state
+                    .keys
+                    .iter()
+                    .map(|e| (e.key().clone(), e.value().clone()))
+                    .collect(),
+                aliases: state
+                    .aliases
+                    .iter()
+                    .map(|e| (e.key().clone(), e.value().clone()))
+                    .collect(),
+                grants: state
+                    .grants
+                    .iter()
+                    .map(|e| (e.key().clone(), e.value().clone()))
+                    .collect(),
+                custom_key_stores: state
+                    .custom_key_stores
+                    .iter()
+                    .map(|e| (e.key().clone(), e.value().clone()))
+                    .collect(),
+                key_rotations: state
+                    .key_rotations
+                    .iter()
+                    .map(|e| (e.key().clone(), e.value().clone()))
+                    .collect(),
+            });
+        }
+        serde_json::to_vec(&KmsSnapshot { buckets }).ok()
+    }
+
+    fn restore(&self, data: &[u8]) -> Result<(), String> {
+        let snapshot: KmsSnapshot = serde_json::from_slice(data).map_err(|e| e.to_string())?;
+        for bucket in snapshot.buckets {
+            let state = self.store.get(&bucket.account_id, &bucket.region);
+            state.keys.clear();
+            state.aliases.clear();
+            state.grants.clear();
+            state.custom_key_stores.clear();
+            state.key_rotations.clear();
+            for (k, v) in bucket.keys {
+                state.keys.insert(k, v);
+            }
+            for (k, v) in bucket.aliases {
+                state.aliases.insert(k, v);
+            }
+            for (k, v) in bucket.grants {
+                state.grants.insert(k, v);
+            }
+            for (k, v) in bucket.custom_key_stores {
+                state.custom_key_stores.insert(k, v);
+            }
+            for (k, v) in bucket.key_rotations {
+                state.key_rotations.insert(k, v);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// One (account, region) pair's KMS state on disk.
+///
+/// Key material is included: a key whose bytes did not survive a restart
+/// would still be listed but could no longer decrypt anything previously
+/// encrypted under it, which is a worse outcome than not persisting at all.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct KmsBucketSnapshot {
+    account_id: String,
+    region: String,
+    keys: Vec<(String, state::KmsKey)>,
+    aliases: Vec<(String, String)>,
+    grants: Vec<(String, state::KmsGrant)>,
+    custom_key_stores: Vec<(String, state::KmsCustomKeyStore)>,
+    key_rotations: Vec<(String, Vec<state::KeyRotationEvent>)>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct KmsSnapshot {
+    buckets: Vec<KmsBucketSnapshot>,
 }
 
 #[cfg(test)]

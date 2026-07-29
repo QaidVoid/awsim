@@ -37,6 +37,9 @@ The following services write and restore JSON snapshots on graceful shutdown / s
 | Lambda | `lambda` |
 | ECR | `ecr` |
 | Secrets Manager | `secretsmanager` |
+| KMS | `kms` (including key material, so ciphertext still decrypts) |
+| Step Functions | `states` (including suspended task tokens) |
+| EventBridge | `events` (buses, rules, targets, archives, connections) |
 | CloudWatch Logs | `logs` (group/stream metadata only — events in SQLite) |
 
 The following services persist their primary row data into a SQLite database under `{data_dir}/`:
@@ -51,7 +54,7 @@ The following services persist their primary row data into a SQLite database und
 
 Each DB uses WAL mode + a 16 MiB mmap with a tight 2 MiB page cache and an r2d2 connection pool (`min_idle=1, max_size=4`) so a fresh awsim process holds only ~256 KiB of resident SQLite per service until traffic arrives.
 
-Services not in either list (for example KMS, SSM, Step Functions, EventBridge) are in-memory only and lost on restart. This is a coverage gap rather than a design choice, and it is reported rather than hidden: a named snapshot records those services under `not_captured`, and loading one returns `complete: false`.
+Services not in either list (for example SSM, CloudFormation, ECS, API Gateway) are in-memory only and lost on restart. This is a coverage gap rather than a design choice, and it is reported rather than hidden: a named snapshot records those services under `not_captured`, and loading one returns `complete: false`.
 
 ## Named Snapshots
 

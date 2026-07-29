@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 
 /// A KMS grant (simplified).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KmsGrant {
     pub grant_id: String,
     pub grant_token: String,
@@ -26,7 +27,7 @@ pub struct KmsGrant {
 }
 
 /// A KMS key.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KmsKey {
     pub key_id: String,
     pub arn: String,
@@ -56,7 +57,7 @@ pub struct KmsKey {
 }
 
 /// A custom key store stub.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KmsCustomKeyStore {
     pub custom_key_store_id: String,
     pub custom_key_store_name: String,
@@ -67,7 +68,7 @@ pub struct KmsCustomKeyStore {
     pub xks_proxy_uri_endpoint: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyRotationEvent {
     pub key_id: String,
     pub rotation_date: f64,

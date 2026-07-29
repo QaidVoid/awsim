@@ -105,4 +105,79 @@ impl ServiceHandler for StepFunctionsService {
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
+
+    fn snapshot(&self) -> Option<Vec<u8>> {
+        let mut buckets = Vec::new();
+        for ((account_id, region), state) in self.store.iter_all() {
+            buckets.push(SfnBucketSnapshot {
+                account_id,
+                region,
+                state_machines: state
+                    .state_machines
+                    .iter()
+                    .map(|e| (e.key().clone(), e.value().clone()))
+                    .collect(),
+                executions: state
+                    .executions
+                    .iter()
+                    .map(|e| (e.key().clone(), e.value().clone()))
+                    .collect(),
+                activities: state
+                    .activities
+                    .iter()
+                    .map(|e| (e.key().clone(), e.value().clone()))
+                    .collect(),
+                pending_tokens: state
+                    .pending_tokens
+                    .iter()
+                    .map(|e| (e.key().clone(), e.value().clone()))
+                    .collect(),
+            });
+        }
+        serde_json::to_vec(&SfnSnapshot { buckets }).ok()
+    }
+
+    fn restore(&self, data: &[u8]) -> Result<(), String> {
+        let snapshot: SfnSnapshot = serde_json::from_slice(data).map_err(|e| e.to_string())?;
+        for bucket in snapshot.buckets {
+            let state = self.store.get(&bucket.account_id, &bucket.region);
+            state.state_machines.clear();
+            state.executions.clear();
+            state.activities.clear();
+            state.pending_tokens.clear();
+            for (k, v) in bucket.state_machines {
+                state.state_machines.insert(k, v);
+            }
+            for (k, v) in bucket.executions {
+                state.executions.insert(k, v);
+            }
+            for (k, v) in bucket.activities {
+                state.activities.insert(k, v);
+            }
+            for (k, v) in bucket.pending_tokens {
+                state.pending_tokens.insert(k, v);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// One (account, region) pair's Step Functions state on disk.
+///
+/// `pending_tokens` is included so a `.waitForTaskToken` execution
+/// suspended at shutdown can still be answered after a restart, rather
+/// than being stranded with no way to resume.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SfnBucketSnapshot {
+    account_id: String,
+    region: String,
+    state_machines: Vec<(String, crate::state::StateMachine)>,
+    executions: Vec<(String, crate::state::Execution)>,
+    activities: Vec<(String, crate::state::Activity)>,
+    pending_tokens: Vec<(String, crate::state::PendingTask)>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SfnSnapshot {
+    buckets: Vec<SfnBucketSnapshot>,
 }

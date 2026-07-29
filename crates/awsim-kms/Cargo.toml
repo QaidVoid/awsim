@@ -19,3 +19,6 @@ base64 = { workspace = true }
 sha2 = { workspace = true }
 aes-gcm = { workspace = true }
 rand = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

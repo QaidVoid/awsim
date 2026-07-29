@@ -146,4 +146,89 @@ impl ServiceHandler for EventBridgeService {
             state.sweep_expired_archives(now);
         }
     }
+
+    fn snapshot(&self) -> Option<Vec<u8>> {
+        let mut buckets = Vec::new();
+        for ((account_id, region), state) in self.store.iter_all() {
+            buckets.push(EbBucketSnapshot {
+                account_id,
+                region,
+                event_buses: state
+                    .event_buses
+                    .iter()
+                    .map(|e| (e.key().clone(), e.value().clone()))
+                    .collect(),
+                archives: state
+                    .archives
+                    .iter()
+                    .map(|e| (e.key().clone(), e.value().clone()))
+                    .collect(),
+                connections: state
+                    .connections
+                    .iter()
+                    .map(|e| (e.key().clone(), e.value().clone()))
+                    .collect(),
+                api_destinations: state
+                    .api_destinations
+                    .iter()
+                    .map(|e| (e.key().clone(), e.value().clone()))
+                    .collect(),
+                replays: state
+                    .replays
+                    .iter()
+                    .map(|e| (e.key().clone(), e.value().clone()))
+                    .collect(),
+            });
+        }
+        serde_json::to_vec(&EbSnapshot { buckets }).ok()
+    }
+
+    fn restore(&self, data: &[u8]) -> Result<(), String> {
+        let snapshot: EbSnapshot = serde_json::from_slice(data).map_err(|e| e.to_string())?;
+        for bucket in snapshot.buckets {
+            let state = self.store.get(&bucket.account_id, &bucket.region);
+            state.event_buses.clear();
+            state.archives.clear();
+            state.connections.clear();
+            state.api_destinations.clear();
+            state.replays.clear();
+            for (k, v) in bucket.event_buses {
+                state.event_buses.insert(k, v);
+            }
+            for (k, v) in bucket.archives {
+                state.archives.insert(k, v);
+            }
+            for (k, v) in bucket.connections {
+                state.connections.insert(k, v);
+            }
+            for (k, v) in bucket.api_destinations {
+                state.api_destinations.insert(k, v);
+            }
+            for (k, v) in bucket.replays {
+                state.replays.insert(k, v);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// One (account, region) pair's EventBridge state on disk.
+///
+/// `recent_events` is deliberately excluded: it is a debugging ring, not
+/// durable state, and persisting it would grow snapshots without giving
+/// anything back on restore.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct EbBucketSnapshot {
+    account_id: String,
+    region: String,
+    event_buses: Vec<(String, crate::state::EventBus)>,
+    archives: Vec<(String, crate::state::Archive)>,
+    connections: Vec<(String, crate::state::Connection)>,
+    api_destinations: Vec<(String, crate::state::ApiDestination)>,
+    replays: Vec<(String, crate::state::Replay)>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct EbSnapshot {
+    buckets: Vec<EbBucketSnapshot>,
 }

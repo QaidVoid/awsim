@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 
 /// An EventBridge target attached to a rule.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Target {
     pub id: String,
     pub arn: String,
@@ -40,7 +41,7 @@ pub struct Target {
 /// consulted during fan-out (the EventBridge target invocation path
 /// is itself stubby — see NEW_PLAN §10.4). The `allow(dead_code)`
 /// keeps `#![deny(warnings)]` happy until that work lands.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct InputTransformer {
     pub input_paths_map: HashMap<String, String>,
@@ -48,7 +49,7 @@ pub struct InputTransformer {
 }
 
 /// An EventBridge rule on a bus.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Rule {
     pub name: String,
     pub arn: String,
@@ -66,7 +67,7 @@ pub struct Rule {
 }
 
 /// A single EventBridge event bus.
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventBus {
     pub name: String,
     pub arn: String,
@@ -106,7 +107,7 @@ pub struct StoredEvent {
 }
 
 /// An EventBridge event archive.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Archive {
     pub name: String,
     pub arn: String,
@@ -122,7 +123,7 @@ pub struct Archive {
 }
 
 /// An API destination connection (auth config).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Connection {
     pub name: String,
     pub arn: String,
@@ -135,7 +136,7 @@ pub struct Connection {
 }
 
 /// An HTTP API destination.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiDestination {
     pub name: String,
     pub arn: String,
@@ -150,7 +151,7 @@ pub struct ApiDestination {
 }
 
 /// An event replay.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Replay {
     pub name: String,
     pub arn: String,
