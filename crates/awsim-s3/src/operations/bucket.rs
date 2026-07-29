@@ -78,6 +78,15 @@ pub fn create_bucket(
     }
 
     if state.buckets.contains_key(bucket_name) {
+        // us-east-1 is special: re-creating a bucket you already own is a
+        // no-op returning 200, and only other regions raise
+        // BucketAlreadyOwnedByYou. Idempotent provisioning relies on this,
+        // so an IaC apply that re-runs cleanly against AWS must also
+        // re-run cleanly here. us-east-1 is AWSim's default region, which
+        // makes this the common path rather than an edge case.
+        if ctx.region == "us-east-1" {
+            return Ok(json!({ "Location": format!("/{bucket_name}") }));
+        }
         return Err(AwsError::conflict(
             "BucketAlreadyOwnedByYou",
             format!("The bucket '{bucket_name}' already exists and is owned by you"),

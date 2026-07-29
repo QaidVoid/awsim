@@ -5,6 +5,15 @@ use tracing::warn;
 use crate::state::SqsState;
 use crate::util::queue_name_from_url;
 
+/// AWS rejects a receipt handle that does not correspond to a message
+/// currently in flight, whether it is malformed or merely stale.
+pub(crate) fn invalid_receipt_handle(handle: &str) -> AwsError {
+    AwsError::bad_request(
+        "ReceiptHandleIsInvalid",
+        format!("The input receipt handle \"{handle}\" is not a valid receipt handle."),
+    )
+}
+
 pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
     let queue_url = input["QueueUrl"]
         .as_str()
@@ -23,11 +32,17 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
                 format!("The specified queue does not exist: {queue_url}"),
             )
         })?;
+        // A handle that matches nothing in flight is an error on AWS, not a
+        // silent success. Reporting success here would let a consumer that
+        // deletes with a stale or malformed handle pass its local tests and
+        // then silently fail to delete against real SQS.
         queue
             .inflight
             .remove(receipt_handle)
             .map(|im| im.message.message_id)
+            .ok_or_else(|| invalid_receipt_handle(receipt_handle))?
     };
+    let removed_id = Some(removed_id);
 
     if let (Some(message_id), Some(bs)) = (removed_id, state.body_store())
         && let Err(e) = bs.delete_blob("sqs", &queue_name, &message_id)

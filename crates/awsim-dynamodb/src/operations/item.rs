@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::{
     expressions::{evaluate_condition, parse_condition},
-    keys::{extract_item_keys, extract_pk_sk, item_to_storage_value, storage_value_to_item},
+    keys::{extract_item_keys, item_to_storage_value, resolve_key, storage_value_to_item},
     sqlite_store::SqliteStore,
     state::{DynamoItem, DynamoState, StreamRecord, StreamRecordData},
     throttle::BucketKind,
@@ -554,8 +554,7 @@ pub fn get_item(
 
     let key = parse_item(&input["Key"]).ok_or_else(|| AwsError::validation("Key is required"))?;
 
-    let (pk, sk) = extract_pk_sk(&table, &key)
-        .ok_or_else(|| AwsError::validation("Could not construct item key"))?;
+    let (pk, sk) = resolve_key(&table, &key).map_err(AwsError::validation)?;
 
     let expr_attr_names = get_expr_attr_names(input);
     let projection_expr = opt_str(input, "ProjectionExpression");
@@ -610,8 +609,7 @@ pub fn delete_item(
         })?;
 
         reject_empty_key_values(&table, &key)?;
-        let sqlite_pk_sk = extract_pk_sk(&table, &key)
-            .ok_or_else(|| AwsError::validation("Could not extract SQLite keys"))?;
+        let sqlite_pk_sk = resolve_key(&table, &key).map_err(AwsError::validation)?;
 
         let mut keys_item = DynamoItem::new();
         for k in table.key_schema.iter().map(|k| k.attribute_name.as_str()) {
@@ -702,8 +700,7 @@ pub fn update_item(
         })?;
 
         reject_empty_key_values(&table, &key)?;
-        let sqlite_pk_sk = extract_pk_sk(&table, &key)
-            .ok_or_else(|| AwsError::validation("Could not extract SQLite keys"))?;
+        let sqlite_pk_sk = resolve_key(&table, &key).map_err(AwsError::validation)?;
 
         let mut keys_item = DynamoItem::new();
         for k in table.key_schema.iter().map(|k| k.attribute_name.as_str()) {

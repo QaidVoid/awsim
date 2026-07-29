@@ -16,7 +16,7 @@ use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
 use crate::{
-    keys::{extract_item_keys, extract_pk_sk, item_to_storage_value, storage_value_to_item},
+    keys::{extract_item_keys, item_to_storage_value, resolve_key, storage_value_to_item},
     sqlite_store::SqliteStore,
     state::{DynamoItem, DynamoState, Table},
     throttle::BucketKind,
@@ -438,8 +438,7 @@ fn run_update(
             )
         })?;
         let (key_item, non_key) = resolve_key_and_conditions(&table, conditions)?;
-        let (pk, sk) = extract_pk_sk(&table, &key_item)
-            .ok_or_else(|| AwsError::validation("Could not construct primary key"))?;
+        let (pk, sk) = resolve_key(&table, &key_item).map_err(AwsError::validation)?;
         (pk, sk, non_key)
     };
 
@@ -526,8 +525,7 @@ fn run_delete(
             )
         })?;
         let (key_item, non_key) = resolve_key_and_conditions(&table, conditions)?;
-        let (pk, sk) = extract_pk_sk(&table, &key_item)
-            .ok_or_else(|| AwsError::validation("Could not construct primary key"))?;
+        let (pk, sk) = resolve_key(&table, &key_item).map_err(AwsError::validation)?;
         (pk, sk, non_key)
     };
 

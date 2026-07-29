@@ -2,7 +2,9 @@ use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
 use crate::{
-    keys::{extract_item_keys, extract_pk_sk, item_to_storage_value, storage_value_to_item},
+    keys::{
+        extract_item_keys, extract_pk_sk, item_to_storage_value, resolve_key, storage_value_to_item,
+    },
     sqlite_store::SqliteStore,
     state::DynamoState,
     throttle::BucketKind,
@@ -82,9 +84,7 @@ pub fn batch_get_item(
             let Some(parsed) = parse_item(key_val) else {
                 continue;
             };
-            let Some((pk, sk)) = extract_pk_sk(&table, &parsed) else {
-                continue;
-            };
+            let (pk, sk) = resolve_key(&table, &parsed).map_err(AwsError::validation)?;
             pending.push(PendingKey {
                 table_name: table_name.clone(),
                 original_key: key_val.clone(),

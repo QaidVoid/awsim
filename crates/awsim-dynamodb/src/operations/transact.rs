@@ -5,7 +5,9 @@ use serde_json::{Value, json};
 
 use crate::{
     expressions::{apply_update_expression, evaluate_condition, parse_condition},
-    keys::{extract_item_keys, extract_pk_sk, item_to_storage_value, storage_value_to_item},
+    keys::{
+        extract_item_keys, extract_pk_sk, item_to_storage_value, resolve_key, storage_value_to_item,
+    },
     sqlite_store::{MAX_GSI_SLOTS, ReadTx, SqliteStore, WriteTx},
     state::{DynamoItem, DynamoState},
     throttle::BucketKind,
@@ -123,8 +125,7 @@ pub fn transact_get_items(
                     format!("Cannot do operations on a non-existent table: {table_name}"),
                 )
             })?;
-            extract_pk_sk(&table, &key)
-                .ok_or_else(|| AwsError::validation("Could not construct item key"))?
+            resolve_key(&table, &key).map_err(AwsError::validation)?
         };
 
         gets.push(ResolvedGet {

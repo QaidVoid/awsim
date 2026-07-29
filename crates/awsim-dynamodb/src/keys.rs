@@ -48,6 +48,72 @@ pub fn extract_pk_sk(table: &Table, key: &DynamoItem) -> Option<(String, String)
     Some((pk, sk))
 }
 
+/// Validate a caller-supplied `Key` map, then extract its storage keys.
+///
+/// This is the entry point every operation taking a `Key` should use.
+/// [`extract_pk_sk`] alone will happily coerce a mistyped key and then
+/// simply miss, which surfaces a schema error as "item not found".
+pub fn resolve_key(table: &Table, key: &DynamoItem) -> Result<(String, String), String> {
+    validate_key_against_schema(table, key)?;
+    extract_pk_sk(table, key)
+        .ok_or_else(|| "The provided key element does not match the schema".to_string())
+}
+
+/// Validate a caller-supplied `Key` map against the table's key schema.
+///
+/// DynamoDB rejects a key whose element types disagree with the declared
+/// `AttributeDefinitions`, whose required elements are missing, or which
+/// carries attributes that are not key elements. Returning an empty result
+/// instead would be worse than a wrong error: a type mismatch would read
+/// as "item not found", so a test asserting absence passes locally and the
+/// same code misbehaves against real AWS.
+pub fn validate_key_against_schema(table: &Table, key: &DynamoItem) -> Result<(), String> {
+    for element in &table.key_schema {
+        let name = &element.attribute_name;
+        let Some(supplied) = key.get(name) else {
+            return Err(format!(
+                "The provided key element does not match the schema: missing key `{name}`"
+            ));
+        };
+
+        let Some(supplied_type) = attribute_type_tag(supplied) else {
+            return Err(format!(
+                "The provided key element does not match the schema: key `{name}` has no value"
+            ));
+        };
+
+        if let Some(declared) = table
+            .attribute_definitions
+            .iter()
+            .find(|d| &d.attribute_name == name)
+            && declared.attribute_type != supplied_type
+        {
+            return Err(format!(
+                "The provided key element does not match the schema: key `{name}` \
+                 is declared as type {} but was supplied as type {supplied_type}",
+                declared.attribute_type
+            ));
+        }
+    }
+
+    // AWS rejects a Key map carrying anything beyond the key elements.
+    for name in key.keys() {
+        if !table.key_schema.iter().any(|e| &e.attribute_name == name) {
+            return Err(format!(
+                "The provided key element does not match the schema: \
+                 `{name}` is not a key attribute"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// The type tag of an AttributeValue: `S`, `N`, `B`, and so on.
+fn attribute_type_tag(value: &Value) -> Option<&str> {
+    value.as_object()?.keys().next().map(|s| s.as_str())
+}
+
 fn key_value(schema: &[KeySchemaElement], item: &DynamoItem, key_type: &str) -> Option<String> {
     let attr = schema.iter().find(|k| k.key_type == key_type)?;
     let raw = item.get(&attr.attribute_name)?;
