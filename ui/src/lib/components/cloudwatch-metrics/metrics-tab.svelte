@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ENDPOINT } from '$lib/aws';
 	/**
 	 * Metrics tab — lists every metric known to the local emulator and
 	 * inlines a sparkline of the trailing-hour Average for each row.
@@ -112,7 +113,7 @@
 				<EmptyState
 					icon={BarChart}
 					title="No metrics"
-					description="Push some with: aws --endpoint-url http://localhost:4566 cloudwatch put-metric-data --namespace MyApp --metric-name X --value 1"
+					description={`Push some with: aws --endpoint-url ${ENDPOINT} cloudwatch put-metric-data --namespace MyApp --metric-name X --value 1`}
 				/>
 			</div>
 		{:else}

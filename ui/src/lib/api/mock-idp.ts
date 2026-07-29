@@ -5,8 +5,7 @@
  * point at for offline federation testing.
  */
 
-const ENDPOINT = 'http://localhost:4566';
-
+import { ENDPOINT } from "$lib/aws";
 export interface MockIdpRegistration {
 	provider_id: string;
 	client_id: string;

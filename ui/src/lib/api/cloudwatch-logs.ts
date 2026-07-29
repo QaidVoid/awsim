@@ -7,7 +7,8 @@
  * has to reason about the AWS wire format.
  */
 
-const ENDPOINT = "http://localhost:4566";
+import { ENDPOINT } from "$lib/aws";
+
 const FAKE_DATE = new Date().toISOString().slice(0, 10).replace(/-/g, "");
 
 function authHeader(service: string): string {

@@ -7,7 +7,8 @@
  * operations used by the UI.
  */
 
-const ENDPOINT = "http://localhost:4566";
+import { ENDPOINT } from "$lib/aws";
+
 const FAKE_DATE = new Date().toISOString().slice(0, 10).replace(/-/g, "");
 const TARGET_PREFIX = "AmazonEC2ContainerServiceV20141113";
 

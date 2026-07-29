@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ENDPOINT } from '$lib/aws';
 	/**
 	 * Alarms tab — table of CloudWatch metric alarms with state badges,
 	 * threshold/comparison summaries, the latest evaluation reason, and a
@@ -131,7 +132,7 @@
 				<EmptyState
 					icon={BellRing}
 					title="No alarms"
-					description="Create one via: aws --endpoint-url http://localhost:4566 cloudwatch put-metric-alarm …"
+					description={`Create one via: aws --endpoint-url ${ENDPOINT} cloudwatch put-metric-alarm ...`}
 				/>
 			</div>
 		{:else}

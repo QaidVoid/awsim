@@ -1,12 +1,13 @@
 /**
  * Typed IAM API client.
  *
- * Talks to the AWSim emulator at http://localhost:4566 over the legacy
- * IAM "query" protocol. Returns parsed, typed records — no XML escapes
- * out into UI components.
+ * Talks to the AWSim emulator over the legacy IAM "query" protocol.
+ * Returns parsed, typed records, so no XML escapes out into UI
+ * components.
  */
 
-const ENDPOINT = "http://localhost:4566";
+import { ENDPOINT } from "$lib/aws";
+
 const FAKE_DATE = new Date().toISOString().slice(0, 10).replace(/-/g, "");
 
 function authHeader(): string {
