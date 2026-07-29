@@ -264,6 +264,36 @@ pub fn validate_function_name(name: &str) -> Result<(), awsim_core::AwsError> {
     ))
 }
 
+/// AWS bounds: memory 128 MB to 10240 MB, timeout 1 s to 900 s.
+///
+/// Accepting values outside these lets a configuration that AWS would
+/// reject deploy cleanly against AWSim and fail only in production.
+pub fn validate_memory_size(mb: u64) -> Result<(), awsim_core::AwsError> {
+    if (128..=10240).contains(&mb) {
+        return Ok(());
+    }
+    Err(awsim_core::AwsError::bad_request(
+        "InvalidParameterValueException",
+        format!(
+            "'{mb}' at 'memorySize' failed to satisfy constraint: \
+             Member must have value between 128 and 10240"
+        ),
+    ))
+}
+
+pub fn validate_timeout(secs: u64) -> Result<(), awsim_core::AwsError> {
+    if (1..=900).contains(&secs) {
+        return Ok(());
+    }
+    Err(awsim_core::AwsError::bad_request(
+        "InvalidParameterValueException",
+        format!(
+            "'{secs}' at 'timeout' failed to satisfy constraint: \
+             Member must have value between 1 and 900"
+        ),
+    ))
+}
+
 pub fn validate_qualifier(qualifier: &str) -> Result<(), awsim_core::AwsError> {
     if qualifier == "$LATEST" {
         return Ok(());

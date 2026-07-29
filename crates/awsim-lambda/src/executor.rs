@@ -67,7 +67,11 @@ fn execute_node(
     let bootstrap = format!(
         r#"
 const mod = require('./{module}');
-const event = JSON.parse(process.argv[1]);
+// argv[0] is the node binary and argv[1] is this bootstrap script, so
+// the event is argv[2]. Reading argv[1] parsed the script's own path as
+// JSON, which threw before the handler was ever called: every invoke
+// came back as FunctionError "Unhandled" carrying node's crash output.
+const event = JSON.parse(process.argv[2]);
 const errOut = (e) => console.error(JSON.stringify({{ errorMessage: e && e.message || String(e), errorType: e && e.name || 'Error' }}));
 const context = {{
     functionName: process.env.AWS_LAMBDA_FUNCTION_NAME || 'test',

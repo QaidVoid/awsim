@@ -100,9 +100,11 @@ pub fn create_alias(
         routing_config,
     };
 
-    let result = alias_to_value(&alias);
+    let mut result = alias_to_value(&alias);
     f.aliases.insert(alias_name.to_string(), alias);
 
+    // AWS answers CreateAlias with 201 Created.
+    result["__status_code"] = json!(201);
     Ok(result)
 }
 

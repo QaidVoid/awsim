@@ -195,15 +195,41 @@ pub fn invoke(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = require_str(input, "FunctionName")?;
+    let raw_name = require_str(input, "FunctionName")?;
+    // AWS accepts `name`, `name:alias` and `name:version` wherever a
+    // function is referenced. Without splitting the qualifier off, an
+    // invoke through an alias looked up a function literally named
+    // "echo:live" and 404'd.
+    let (name, path_qualifier) = match raw_name.split_once(':') {
+        Some((base, qualifier)) if !qualifier.is_empty() => (base, Some(qualifier)),
+        _ => (raw_name, None),
+    };
+    let qualifier = opt_str(input, "Qualifier").or(path_qualifier);
     let invocation_type = opt_str(input, "InvocationType").unwrap_or("RequestResponse");
-    let payload = input.get("Payload").cloned().unwrap_or(json!({}));
+    // Over the wire the whole request body is the event payload; there is
+    // no named `Payload` member. In-process callers (event source
+    // mappings, Secrets Manager rotation) pass `Payload` directly, so
+    // accept both.
+    let payload = raw_body_payload(input)
+        .or_else(|| input.get("Payload").cloned())
+        .unwrap_or(json!({}));
 
     let function_info = {
         let f = state
             .functions
             .get(name)
             .ok_or_else(|| resource_not_found("function", name))?;
+
+        // A qualifier must name a real alias or published version.
+        // Falling through to $LATEST would run different code than the
+        // caller asked for and say nothing about it.
+        if let Some(q) = qualifier
+            && q != "$LATEST"
+            && !f.aliases.contains_key(q)
+            && !f.versions.iter().any(|v| v.version == q)
+        {
+            return Err(resource_not_found("function", raw_name));
+        }
 
         let code_bytes = f
             .code
@@ -345,9 +371,13 @@ pub fn invoke(
                 }
             }
         }
+        // An async invoke has an empty body on AWS: the caller gets 202
+        // and nothing else, since there is no result to report yet.
         return Ok(json!({
             "StatusCode": 202u64,
             "__status_code": 202u64,
+            "__raw_body": "",
+            "__content_type": "application/json",
             "__headers": { "X-Awsim-Memory-MB": memory_size.to_string() },
         }));
     }
@@ -465,7 +495,47 @@ pub fn invoke(
     }
     response["__headers"] = Value::Object(headers);
 
+    // AWS returns the function's payload as the response body, with the
+    // status in the HTTP status line and errors in X-Amz-Function-Error.
+    // Emitting the envelope as the body instead meant an SDK read
+    // `{"StatusCode":200,"Payload":...}` where it expected the function's
+    // own return value. The envelope fields stay on the Value for
+    // in-process callers, which read them directly.
+    attach_raw_payload(&mut response, &response_payload);
+
     Ok(response)
+}
+
+/// Decode the untouched request body captured by the REST layer.
+fn raw_body_payload(input: &Value) -> Option<Value> {
+    use base64::Engine as _;
+    let encoded = input.get("__raw_body")?.as_str()?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .ok()?;
+    if bytes.is_empty() {
+        return None;
+    }
+    // A non-JSON body is still a valid payload; hand it through as a
+    // string rather than failing the invoke.
+    Some(
+        serde_json::from_slice(&bytes)
+            .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned())),
+    )
+}
+
+/// Put the function's payload on the response as the raw HTTP body.
+fn attach_raw_payload(response: &mut Value, payload: &Value) {
+    use base64::Engine as _;
+    let body = match payload {
+        // A string payload is already-serialised JSON from the runtime;
+        // sending it verbatim avoids double-encoding it.
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    response["__raw_body"] =
+        Value::String(base64::engine::general_purpose::STANDARD.encode(body.as_bytes()));
+    response["__content_type"] = Value::String("application/json".to_string());
 }
 
 #[cfg(test)]

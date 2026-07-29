@@ -1030,7 +1030,10 @@ pub fn delete_object(
         check_object_lock(&bucket, key, bypass_governance)?;
     }
 
-    let mut response = json!({});
+    // S3 answers DeleteObject with 204 No Content, whether or not the key
+    // existed. Returning 200 makes a client that branches on the status
+    // (rather than just on success) take the wrong path.
+    let mut response = json!({ "__status_code": 204 });
 
     if let Some(vid) = requested_version {
         // Permanent per-version delete. Succeeds (no-op) when the VersionId

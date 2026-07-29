@@ -129,7 +129,7 @@ pub fn parse_request(
     match protocol {
         Protocol::AwsJson1_0 | Protocol::AwsJson1_1 => json::parse_request(headers, body),
         Protocol::AwsQuery | Protocol::Ec2Query => query::parse_request(body),
-        Protocol::RestJson1 => rest::parse_json_request(method, uri, body, routes),
+        Protocol::RestJson1 => rest::parse_json_request(method, uri, headers, body, routes),
         Protocol::RestXml => rest::parse_xml_request(method, uri, headers, body, routes),
         Protocol::RpcV2Cbor => parse_cbor_request(uri, headers, body),
     }

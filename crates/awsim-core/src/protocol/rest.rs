@@ -14,6 +14,7 @@ use super::{ParsedRequest, RouteDefinition};
 pub fn parse_json_request(
     method: &Method,
     uri: &Uri,
+    headers: &HeaderMap,
     body: &Bytes,
     routes: &[RouteDefinition],
 ) -> Result<ParsedRequest, AwsError> {
@@ -38,6 +39,30 @@ pub fn parse_json_request(
         // Merge query parameters
         for (key, value) in parse_query_string(query_string) {
             map.entry(key).or_insert(Value::String(value));
+        }
+        // `x-amz-*` request headers bind as operation input, exactly as
+        // they do for restXml. Without this, header-bound parameters
+        // never reached the handler at all: Lambda's
+        // `X-Amz-Invocation-Type` and `X-Amz-Log-Type` were silently
+        // dropped, so `Event` and `DryRun` invokes behaved like
+        // `RequestResponse`.
+        for (name, value) in headers.iter() {
+            let name_str = name.as_str();
+            if name_str.starts_with("x-amz-")
+                && name_str != "x-amz-target"
+                && let Ok(v) = value.to_str()
+            {
+                let key = header_to_param_name(name_str);
+                map.entry(key).or_insert(Value::String(v.to_string()));
+            }
+        }
+        // Preserve the untouched body for operations whose payload is the
+        // whole body rather than a named member (Lambda `Invoke`).
+        if !body.is_empty() {
+            use base64::Engine;
+            let encoded = base64::engine::general_purpose::STANDARD.encode(body);
+            map.entry("__raw_body".to_string())
+                .or_insert(Value::String(encoded));
         }
     }
 
@@ -113,6 +138,16 @@ pub fn parse_xml_request(
                     | "if-unmodified-since"
                     | "content-md5"
                     | "content-encoding"
+                    // The object-metadata headers S3 stores verbatim and
+                    // replays on read. Omitting `content-type` meant every
+                    // uploaded object came back as
+                    // `application/octet-stream`, so a browser would not
+                    // render an image or a stylesheet served from S3.
+                    | "content-type"
+                    | "cache-control"
+                    | "content-disposition"
+                    | "content-language"
+                    | "expires"
             );
             if (is_amz || is_http_input)
                 && let Ok(v) = value.to_str()
@@ -455,6 +490,23 @@ pub fn serialize_xml_response(output: &Value, request_id: &str) -> (StatusCode, 
                 }
             }
         }
+
+        // User metadata rides on `x-amz-meta-*` headers, not in the body.
+        // Without this, HeadObject silently returned no metadata at all,
+        // since a HEAD has no body for it to fall back into.
+        for (key, val) in map {
+            if !key.starts_with(USER_METADATA_PREFIX) {
+                continue;
+            }
+            if let Some(s) = val.as_str()
+                && let (Ok(k), Ok(v)) = (
+                    axum::http::header::HeaderName::from_bytes(key.as_bytes()),
+                    axum::http::HeaderValue::from_str(s),
+                )
+            {
+                headers.insert(k, v);
+            }
+        }
     }
 
     // --- Normal XML response ---
@@ -477,6 +529,9 @@ pub fn serialize_xml_response(output: &Value, request_id: &str) -> (StatusCode, 
             .iter()
             .filter(|(k, _)| !k.starts_with("__"))
             .filter(|(k, _)| !(strip_header_bound && HEADER_BOUND_FIELDS.contains(&k.as_str())))
+            // Metadata went out as headers above; emitting it in the body
+            // too would produce multiple XML root elements.
+            .filter(|(k, _)| !(strip_header_bound && k.starts_with(USER_METADATA_PREFIX)))
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         Value::Object(filtered)
@@ -541,6 +596,10 @@ fn apply_extra_headers(headers: &mut HeaderMap, output: &Value) {
 /// responses without an explicit `__xml_root`, excluded from the body so a
 /// header-only response such as PutObject serializes an empty, well-formed
 /// body instead of several bare root elements.
+/// Prefix marking a user-metadata entry, which binds to a header of the
+/// same name rather than to the response body.
+const USER_METADATA_PREFIX: &str = "x-amz-meta-";
+
 const HEADER_BOUND_FIELDS: &[&str] = &[
     "ETag",
     "ContentType",
@@ -554,6 +613,17 @@ const HEADER_BOUND_FIELDS: &[&str] = &[
     "SSEKMSKeyId",
     "SSECustomerAlgorithm",
     "SSECustomerKeyMD5",
+    // Object metadata S3 replays as headers on GetObject / HeadObject.
+    // Leaving these out of the list put them in the XML body instead,
+    // which a HEAD discards, so `headObject` returned none of them and
+    // the body made the response look like XML rather than the object's
+    // own content type.
+    "ContentEncoding",
+    "CacheControl",
+    "ContentDisposition",
+    "ContentLanguage",
+    "Expires",
+    "AcceptRanges",
 ];
 
 /// Convert a PascalCase field name to a lowercase HTTP header name.

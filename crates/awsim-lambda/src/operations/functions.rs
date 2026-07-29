@@ -7,7 +7,7 @@ use crate::{
     state::{LambdaFunction, LambdaState},
     util::{
         decode_zip, now_iso8601, opt_str, require_str, sha256_base64, validate_function_name,
-        validate_handler, validate_runtime,
+        validate_handler, validate_memory_size, validate_runtime, validate_timeout,
     },
 };
 
@@ -270,11 +270,15 @@ pub fn create_function(
         validate_handler(h)?;
     }
     let description = opt_str(input, "Description").unwrap_or("").to_string();
-    let timeout = input.get("Timeout").and_then(|v| v.as_u64()).unwrap_or(3) as u32;
-    let memory_size = input
+    let timeout_raw = input.get("Timeout").and_then(|v| v.as_u64()).unwrap_or(3);
+    validate_timeout(timeout_raw)?;
+    let timeout = timeout_raw as u32;
+    let memory_raw = input
         .get("MemorySize")
         .and_then(|v| v.as_u64())
-        .unwrap_or(128) as u32;
+        .unwrap_or(128);
+    validate_memory_size(memory_raw)?;
+    let memory_size = memory_raw as u32;
 
     let environment: HashMap<String, String> = input
         .get("Environment")
@@ -348,9 +352,11 @@ pub fn create_function(
         recursive_loop: "Terminate".to_string(),
     };
 
-    let config = function_configuration(&func);
+    let mut config = function_configuration(&func);
     state.functions.insert(name.to_string(), func);
 
+    // AWS answers CreateFunction with 201 Created.
+    config["__status_code"] = json!(201);
     Ok(config)
 }
 
@@ -440,7 +446,8 @@ pub fn delete_function(state: &LambdaState, input: &Value) -> Result<Value, AwsE
     {
         tracing::warn!(function_name = name, error = %e, "delete persisted function code");
     }
-    Ok(json!({}))
+    // AWS answers DeleteFunction with 204 No Content.
+    Ok(json!({ "__status_code": 204 }))
 }
 
 pub fn list_functions(
@@ -523,9 +530,11 @@ pub fn update_function_configuration(
         f.description = desc.to_string();
     }
     if let Some(timeout) = input.get("Timeout").and_then(|v| v.as_u64()) {
+        validate_timeout(timeout)?;
         f.timeout = timeout as u32;
     }
     if let Some(mem) = input.get("MemorySize").and_then(|v| v.as_u64()) {
+        validate_memory_size(mem)?;
         f.memory_size = mem as u32;
     }
     if let Some(env) = input.get("Environment")
