@@ -4,12 +4,21 @@ AWSim is built to keep RSS bounded under burst workloads — DDB query loops, bu
 
 ## What's already in place
 
-The default profile aims for a few hundred MiB resident with idle baseline ≤ 10 MiB:
+Measured on a 16-core Linux host with a release build:
 
-- **jemalloc allocator** on Linux + macOS — returns memory to the OS more aggressively than glibc, so idle RSS doesn't ratchet upward after each burst.
+| Point | RSS | Anonymous |
+|---|---|---|
+| idle | ~23 MB | ~7 MB |
+| after 100k requests at concurrency 50 | ~31 MB | ~14 MB |
+
+Roughly 16 MB of the idle figure is file-backed pages of the binary itself (`.text` is 15 MB across 61 services). Those pages are shared, clean and evictable, so they cost far less than the RSS number suggests. Anonymous memory is the figure to watch.
+
+What keeps it bounded:
+
+- **No custom global allocator.** AWSim uses the platform default: glibc malloc on a normal Linux build, musl's mallocng in the Docker image. jemalloc was used previously and removed because it made CI builds fail intermittently. If you see anonymous memory ratchet upward across bursts, that is allocator retention rather than a leak, and `MALLOC_ARENA_MAX=2` is the cheapest lever on glibc.
 - **Per-service SQLite stores** for the high-volume services (DynamoDB, CloudWatch Logs, CloudWatch Metrics, Kinesis, SES). Items + log events live on disk, not in memory.
 - **AWS-defined response caps** on DynamoDB Query / Scan (1 MiB), BatchGetItem (16 MB), TransactGetItems (4 MB), BatchWriteItem (25 items / 400 KB / item), TransactWriteItems (100 actions), PutItem / UpdateItem (400 KB) — clients paginate via `LastEvaluatedKey` / `UnprocessedKeys` exactly like real AWS.
-- **Tokio runtime caps** — `--max-blocking-threads 32`, `--max-concurrent-requests 256` ([see Configuration](/guide/configuration)).
+- **Tokio runtime caps** — `--max-blocking-threads` (default 32) and `--max-concurrent-requests` (default 5000) ([see Configuration](/guide/configuration)). Worker threads are not capped and default to one per core, so thread count and therefore allocator arena count scale with the host.
 - **Lazy SQLite connection pools** — `min_idle=1, max_size=4` per store, tight `cache_size` + `mmap_size` PRAGMAs.
 - **SES retention sweep** — hourly, configurable via `--ses-retention-hours` (default 30 days, `0` to disable).
 - **Hourly chaos rule sweep**, request-detail ring capped at 200 entries, broadcast channels at 256 / 1024.
@@ -75,15 +84,16 @@ What to scan first when diffing:
 
 Open **Admin → Observability**. Polls `/_awsim/debug/objects` every 5 s, renders an RSS sparkline and tables of every section above. **Snapshot baseline** captures the current values; subsequent renders show signed deltas next to every cell so a leak shows up as a stream of orange `+N` annotations against the structure that's growing.
 
-Keep the page closed if you're investigating per-second RSS cycling — its own polling is one of the most common sources of small periodic allocations (12 MiB cycles aligning with jemalloc's 10 s decay window).
+Keep the page closed if you're investigating per-second RSS cycling — its own polling is one of the most common sources of small periodic allocations.
 
 ## When the diagnostic shows nothing growing
 
 If every counter is flat but RSS still creeps up between bursts, that's **not a leak** — it's allocator behaviour. glibc-style allocators hold freed pages in fragmented free lists; the larger the burst, the larger the residue. Three options in increasing aggressiveness:
 
 ```bash
-# Option 1: tighter jemalloc decay (Linux + macOS only)
-MALLOC_CONF="dirty_decay_ms:1000,muzzy_decay_ms:0,narenas:2" ./awsim
+# Option 1: cap glibc's per-thread arenas (Linux glibc builds only;
+# the Docker image is musl and ignores this)
+MALLOC_ARENA_MAX=2 ./awsim
 
 # Option 2: lower concurrency cap so per-op spikes stay smaller
 ./awsim --max-concurrent-requests 64
@@ -96,9 +106,9 @@ Tradeoffs: option 1 costs nothing functional. Options 2 + 3 reduce throughput in
 
 ## When a single op spikes RSS hard
 
-The DDB caps stop unbounded queries from materialising entire partitions, but a *single* op that allocates a lot at once (a 10k-item Query before the cap landed, a multi-megabyte BatchWriteItem) can still spike to 1+ GiB transiently. Memory drops back, but jemalloc holds the dirty pages for ~10 s before unmapping them.
+The DDB caps stop unbounded queries from materialising entire partitions, but a *single* op that allocates a lot at once (a 10k-item Query before the cap landed, a multi-megabyte BatchWriteItem) can still spike to 1+ GiB transiently. Memory drops back, but the allocator holds the freed pages for a while before returning them to the OS.
 
-Fix at the workload layer: stick to the AWS-defined limits (1 MiB Query/Scan responses, 100 keys per BatchGetItem, etc.). Or further reduce `--max-concurrent-requests` so 256 simultaneous bursts don't compound.
+Fix at the workload layer: stick to the AWS-defined limits (1 MiB Query/Scan responses, 100 keys per BatchGetItem, etc.). Or reduce `--max-concurrent-requests` so simultaneous bursts don't compound.
 
 ## Glossary
 
@@ -111,3 +121,4 @@ Fix at the workload layer: stick to the AWS-defined limits (1 MiB Query/Scan res
 | `VmPeak` | Peak `VmSize` since process start. |
 | Dirty pages | Pages allocator freed but kept mapped, ready to reuse. |
 | Muzzy pages | Pages `madvise(MADV_FREE)`'d — kernel may reclaim. |
+| `RssAnon` | Anonymous (heap/stack) resident pages. The figure to watch, since file-backed pages are evictable. |
