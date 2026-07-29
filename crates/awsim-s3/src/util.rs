@@ -11,6 +11,9 @@ pub fn compute_etag(data: &[u8]) -> String {
     format!("\"{:x}\"", result)
 }
 
+/// Raw object bytes plus the `name: value` trailers that followed them.
+pub type DecodedChunked = (Vec<u8>, Vec<(String, String)>);
+
 /// Decode an `aws-chunked` framed body into its raw bytes plus any trailers.
 ///
 /// AWS SDKs use this encoding when uploading with SigV4 streaming. Each chunk
@@ -27,9 +30,7 @@ pub fn compute_etag(data: &[u8]) -> String {
 /// zero-sized chunk rather than a request header. The trailer is a block of
 /// `name: value` lines ended by a blank line; names are lower-cased and
 /// values trimmed. Malformed trailer lines are skipped rather than fatal.
-pub fn decode_aws_chunked_with_trailers(
-    framed: &[u8],
-) -> Result<(Vec<u8>, Vec<(String, String)>), AwsError> {
+pub fn decode_aws_chunked_with_trailers(framed: &[u8]) -> Result<DecodedChunked, AwsError> {
     let mut out = Vec::with_capacity(framed.len());
     let mut i = 0usize;
     while i < framed.len() {

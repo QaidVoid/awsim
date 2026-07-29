@@ -367,6 +367,10 @@ pub struct BillingState {
 }
 
 impl BillingState {
+    // Each parameter is a distinct billing axis the meter records in one
+    // pass. Bundling them into a struct would add a type whose only job
+    // is to be immediately destructured at the single call site.
+    #[allow(clippy::too_many_arguments)]
     pub fn record(
         &self,
         service: &str,
