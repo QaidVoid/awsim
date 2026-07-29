@@ -54,9 +54,9 @@ curl -s http://localhost:4566 \
 | `GetQueueUrl` | Get the URL of a queue by name. Input: `QueueName`. Returns: `QueueUrl` |
 | `GetQueueAttributes` | Get queue configuration. Input: `QueueUrl`, `AttributeNames` (list; use `["All"]` for all). Returns map of attribute name to value |
 | `SetQueueAttributes` | Set queue attributes. Input: `QueueUrl`, `Attributes` map. Use to change visibility timeout, set redrive policy, etc. |
-| `SendMessage` | Send a message. Input: `QueueUrl`, `MessageBody` (string, max 256 KB), optional `DelaySeconds` (0–900), `MessageAttributes` (`{key: {DataType, StringValue}}`), `MessageGroupId` (FIFO), `MessageDeduplicationId` (FIFO). Returns: `MessageId`, `MD5OfMessageBody` |
+| `SendMessage` | Send a message. Input: `QueueUrl`, `MessageBody` (string, max 256 KB), optional `DelaySeconds` (0 to 900), `MessageAttributes` (`{key: {DataType, StringValue}}`), `MessageGroupId` (FIFO), `MessageDeduplicationId` (FIFO). Returns: `MessageId`, `MD5OfMessageBody` |
 | `SendMessageBatch` | Send up to 10 messages in one call. Input: `QueueUrl`, `Entries` (list of `{Id, MessageBody, DelaySeconds, MessageAttributes}`). Returns: `Successful`, `Failed` |
-| `ReceiveMessage` | Receive up to 10 messages. Input: `QueueUrl`, `MaxNumberOfMessages` (1–10), `VisibilityTimeout` (override for this receive), `WaitTimeSeconds` (0–20 for long polling), `MessageAttributeNames`. Returns: `Messages` list with `Body`, `MessageId`, `ReceiptHandle`, `Attributes` |
+| `ReceiveMessage` | Receive up to 10 messages. Input: `QueueUrl`, `MaxNumberOfMessages` (1 to 10), `VisibilityTimeout` (override for this receive), `WaitTimeSeconds` (0 to 20 for long polling), `MessageAttributeNames`. Returns: `Messages` list with `Body`, `MessageId`, `ReceiptHandle`, `Attributes` |
 | `DeleteMessage` | Delete a processed message. Input: `QueueUrl`, `ReceiptHandle` (from ReceiveMessage). Must be called after processing to prevent re-delivery |
 | `DeleteMessageBatch` | Batch delete messages. Input: `QueueUrl`, `Entries` (list of `{Id, ReceiptHandle}`). Returns: `Successful`, `Failed` |
 | `ChangeMessageVisibility` | Extend or reset the visibility timeout of an in-flight message. Input: `QueueUrl`, `ReceiptHandle`, `VisibilityTimeout` (0 = make immediately visible; max 43200) |
@@ -219,10 +219,19 @@ aws --endpoint-url http://localhost:4566 sqs set-queue-attributes \
 
 - SQS is persistent: queues and messages survive AWSim restarts.
 - When `--data-dir` is set, message bodies are written to `{data_dir}/sqs/{queue}/{message_id}` on `SendMessage`/`SendMessageBatch`. `DeleteMessage`, `PurgeQueue`, and `DeleteQueue` remove the corresponding files. See [Persistence: SQS message bodies](../guide/persistence.md#sqs-message-bodies) for details.
-- Long polling (`WaitTimeSeconds > 0`) is accepted but returns immediately without actually waiting.
 - Visibility timeout countdown is tracked but may not be perfectly precise at millisecond granularity.
-- `RedrivePolicy` (dead-letter queue) is stored but messages that fail processing are not automatically moved to the DLQ.
+- `RedrivePolicy` (dead-letter queue) is honored: a message received more than `maxReceiveCount` times is moved to the dead-letter queue.
 - `ApproximateNumberOfMessages` in `GetQueueAttributes` returns the accurate current count.
+
+### Long polling
+
+`ReceiveMessage` blocks until a message is available or the wait elapses, returning as soon as something arrives rather than always waiting the full period.
+
+The wait comes from `WaitTimeSeconds` on the request, or the queue's `ReceiveMessageWaitTimeSeconds` attribute when the request omits it. An explicit `WaitTimeSeconds` wins, including an explicit `0` to short-poll a queue configured for long polling. Values outside 0 to 20 are rejected with `InvalidParameterValue`, matching AWS.
+
+Internally this re-checks the queue every 50 ms rather than waking on a notification. A notification would have to be signalled from every path that can make a message visible (send, visibility-timeout expiry, delay expiry, DLQ redrive, message move tasks), and polling gets the same observable behaviour with one mechanism instead of six. The added latency is immaterial against a wait measured in seconds.
+
+Long polls do not block other requests, including other operations on the same queue.
 
 ### Attribute and message-attribute filtering
 

@@ -152,7 +152,7 @@ impl ServiceHandler for SqsService {
             "SetQueueAttributes" => attributes::set_queue_attributes(&state, &input, ctx),
             "SendMessage" => send_message::handle(&state, &input, ctx),
             "SendMessageBatch" => send_message::handle_batch(&state, &input, ctx),
-            "ReceiveMessage" => receive_message::handle(&state, &input, ctx),
+            "ReceiveMessage" => receive_message::handle_long_poll(&state, &input, ctx).await,
             "DeleteMessage" => delete_message::handle(&state, &input, ctx),
             "DeleteMessageBatch" => delete_message::handle_batch(&state, &input, ctx),
             "ChangeMessageVisibility" => change_visibility::handle(&state, &input, ctx),

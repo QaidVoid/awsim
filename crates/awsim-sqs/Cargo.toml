@@ -18,6 +18,7 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 md-5 = { workspace = true }
 sha2 = { workspace = true }
+tokio = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

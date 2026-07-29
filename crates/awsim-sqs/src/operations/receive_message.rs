@@ -287,7 +287,13 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
 
     // Cache the response for the FIFO receive-idempotency window so a
     // network retry replays the same batch.
-    if let Some(aid) = attempt_id
+    //
+    // Only non-empty batches are cached. Long polling calls this in a
+    // loop, so memoising an empty batch would pin the caller to it for
+    // the rest of the 5-minute window and defeat the wait entirely. An
+    // empty batch has nothing to replay anyway.
+    if !messages_json.is_empty()
+        && let Some(aid) = attempt_id
         && let Some(mut q) = state.queues.get_mut(&queue_name)
         && q.is_fifo
     {
@@ -297,6 +303,99 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
     }
 
     Ok(response)
+}
+
+/// Longest wait AWS permits on `ReceiveMessage`.
+const MAX_WAIT_SECONDS: u64 = 20;
+
+/// How often to re-check the queue while long polling.
+///
+/// A notification channel would wake instantly, but it would have to be
+/// signalled from every path that can make a message visible: send,
+/// visibility-timeout expiry, delay expiry, DLQ redrive, and the message
+/// move tasks. Polling gets the same observable behaviour with one
+/// mechanism instead of six, and 50 ms of latency is immaterial against
+/// a wait measured in seconds.
+const POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Resolve the effective wait for this receive.
+///
+/// `WaitTimeSeconds` on the request wins; otherwise the queue's
+/// `ReceiveMessageWaitTimeSeconds` attribute applies, which is how a
+/// queue is configured for long polling by default.
+fn resolve_wait_seconds(
+    state: &SqsState,
+    input: &Value,
+    queue_name: &str,
+) -> Result<u64, AwsError> {
+    if let Some(raw) = input.get("WaitTimeSeconds") {
+        let secs = raw.as_i64().ok_or_else(|| invalid_wait(raw))?;
+        if !(0..=MAX_WAIT_SECONDS as i64).contains(&secs) {
+            return Err(invalid_wait(raw));
+        }
+        return Ok(secs as u64);
+    }
+
+    let queue_default = state
+        .queues
+        .get(queue_name)
+        .and_then(|q| {
+            q.attributes
+                .get("ReceiveMessageWaitTimeSeconds")
+                .and_then(|v| v.parse::<u64>().ok())
+        })
+        .unwrap_or(0);
+    Ok(queue_default.min(MAX_WAIT_SECONDS))
+}
+
+fn invalid_wait(raw: &Value) -> AwsError {
+    AwsError::bad_request(
+        "InvalidParameterValue",
+        format!(
+            "Value {raw} for parameter WaitTimeSeconds is invalid. \
+             Reason: Must be >= 0 and <= {MAX_WAIT_SECONDS}."
+        ),
+    )
+}
+
+/// `ReceiveMessage` with long polling.
+///
+/// Blocks until a message is available or the wait elapses, returning as
+/// soon as something arrives rather than always waiting the full period.
+///
+/// Without this the wait parameters were accepted and ignored, so a
+/// consumer written against AWS long polling turned into a hot spin loop
+/// against AWSim, and a test waiting on a producer either flaked or
+/// passed for the wrong reason.
+pub async fn handle_long_poll(
+    state: &SqsState,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let queue_url = input["QueueUrl"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("MissingParameter", "QueueUrl is required"))?;
+    let queue_name = queue_name_from_url(queue_url)?;
+    let wait = resolve_wait_seconds(state, input, &queue_name)?;
+
+    // Short-poll: one look, exactly as before.
+    if wait == 0 {
+        return handle(state, input, ctx);
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(wait);
+    loop {
+        let response = handle(state, input, ctx)?;
+        let empty = response["Messages"]
+            .as_array()
+            .is_none_or(|messages| messages.is_empty());
+        if !empty || Instant::now() >= deadline {
+            return Ok(response);
+        }
+        // Never overshoot the deadline waiting for the next look.
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        tokio::time::sleep(POLL_INTERVAL.min(remaining)).await;
+    }
 }
 
 fn message_attribute_entry(ma: &crate::state::MessageAttribute) -> serde_json::Map<String, Value> {
