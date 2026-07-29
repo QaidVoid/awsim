@@ -147,7 +147,7 @@ pub fn list_health_checks(
 
     Ok(json!({
         "__xml_root": "ListHealthChecksResponse",
-        "HealthChecks": checks,
+        "HealthChecks": { "HealthCheck": checks },
         "IsTruncated": false,
         "MaxItems": "100",
     }))

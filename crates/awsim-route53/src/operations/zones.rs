@@ -131,12 +131,12 @@ pub fn create_hosted_zone(
             "SubmittedAt": chrono_now(),
         },
         "DelegationSet": {
-            "NameServers": [
+            "NameServers": { "NameServer": [
                 "ns-1.awsim.invalid",
                 "ns-2.awsim.invalid",
                 "ns-3.awsim.invalid",
                 "ns-4.awsim.invalid",
-            ]
+            ] }
         }
     });
     if let Some(v) = vpc_input {
@@ -180,12 +180,12 @@ pub fn get_hosted_zone(
             "ResourceRecordSetCount": zone.record_sets.len(),
         },
         "DelegationSet": {
-            "NameServers": [
+            "NameServers": { "NameServer": [
                 "ns-1.awsim.invalid",
                 "ns-2.awsim.invalid",
                 "ns-3.awsim.invalid",
                 "ns-4.awsim.invalid",
-            ]
+            ] }
         }
     });
     if zone.private_zone && !zone.vpcs.is_empty() {
@@ -217,7 +217,7 @@ pub fn list_hosted_zones(
 
     Ok(json!({
         "__xml_root": "ListHostedZonesResponse",
-        "HostedZones": zones,
+        "HostedZones": { "HostedZone": zones },
         "IsTruncated": false,
         "MaxItems": "100",
     }))
@@ -292,7 +292,7 @@ pub fn list_hosted_zones_by_name(
     zones.sort_by(|a, b| a["Name"].as_str().cmp(&b["Name"].as_str()));
 
     Ok(json!({
-        "HostedZones": zones,
+        "HostedZones": { "HostedZone": zones },
         "IsTruncated": false,
         "MaxItems": "100",
     }))

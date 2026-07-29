@@ -379,7 +379,7 @@ pub fn list_resource_record_sets(
 
     let mut body = json!({
         "__xml_root": "ListResourceRecordSetsResponse",
-        "ResourceRecordSets": record_sets,
+        "ResourceRecordSets": { "ResourceRecordSet": record_sets },
         "IsTruncated": is_truncated,
         "MaxItems": max_items.to_string(),
     });
@@ -445,7 +445,7 @@ mod list_record_sets_tests {
             &ctx(),
         )
         .unwrap();
-        let names: Vec<&str> = second["ResourceRecordSets"]
+        let names: Vec<&str> = second["ResourceRecordSets"]["ResourceRecordSet"]
             .as_array()
             .unwrap()
             .iter()

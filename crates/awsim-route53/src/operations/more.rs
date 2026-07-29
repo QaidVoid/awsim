@@ -190,7 +190,7 @@ pub fn list_tags_for_resources(
         sets.push(json!({
             "ResourceType": resource_type,
             "ResourceId": rid,
-            "Tags": tags,
+            "Tags": { "Tag": tags },
         }));
     }
 
@@ -302,13 +302,13 @@ pub fn list_reusable_delegation_sets(
             json!({
                 "Id": s.id,
                 "CallerReference": s.caller_reference,
-                "NameServers": s.name_servers,
+                "NameServers": { "NameServer": s.name_servers },
             })
         })
         .collect();
     Ok(json!({
         "__xml_root": "ListReusableDelegationSetsResponse",
-        "DelegationSets": sets,
+        "DelegationSets": { "DelegationSet": sets },
         "IsTruncated": false,
         "MaxItems": "100",
     }))
@@ -340,7 +340,7 @@ pub fn create_reusable_delegation_set(
         "DelegationSet": {
             "Id": ds.id,
             "CallerReference": ds.caller_reference,
-            "NameServers": ds.name_servers,
+            "NameServers": { "NameServer": ds.name_servers },
         }
     }))
 }
@@ -431,7 +431,7 @@ pub fn list_traffic_policies(
         .collect();
     Ok(json!({
         "__xml_root": "ListTrafficPoliciesResponse",
-        "TrafficPolicySummaries": summaries,
+        "TrafficPolicySummaries": { "TrafficPolicySummary": summaries },
         "IsTruncated": false,
         "MaxItems": "100",
     }))

@@ -788,7 +788,7 @@ pub async fn handle_servicediscovery_dns(
         )
         .await;
     let existing = listed.ok().and_then(|r| {
-        r["HostedZones"]
+        r["HostedZones"]["HostedZone"]
             .as_array()
             .and_then(|a| a.first())
             .and_then(|z| z["Id"].as_str().map(String::from))
@@ -1847,7 +1847,10 @@ mod servicediscovery_dns_tests {
             )
             .await
             .unwrap();
-        let zone_id = zones["HostedZones"][0]["Id"].as_str().unwrap().to_string();
+        let zone_id = zones["HostedZones"]["HostedZone"][0]["Id"]
+            .as_str()
+            .unwrap()
+            .to_string();
         let records = route53
             .handle(
                 "ListResourceRecordSets",
@@ -1856,7 +1859,7 @@ mod servicediscovery_dns_tests {
             )
             .await
             .unwrap();
-        let a = records["ResourceRecordSets"]
+        let a = records["ResourceRecordSets"]["ResourceRecordSet"]
             .as_array()
             .unwrap()
             .iter()

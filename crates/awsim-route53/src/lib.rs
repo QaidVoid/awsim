@@ -520,7 +520,7 @@ mod tests {
         let restored = Route53Service::new();
         restored.restore(&bytes).expect("decode");
         let listed = block_on(restored.handle("ListHostedZones", json!({}), &ctx)).unwrap();
-        let zones = listed["HostedZones"].as_array().unwrap();
+        let zones = listed["HostedZones"]["HostedZone"].as_array().unwrap();
         assert!(zones.iter().any(|z| z["Name"] == "snap.example.com."));
     }
 }

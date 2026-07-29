@@ -2614,6 +2614,7 @@ dependencies = [
  "dashmap",
  "serde",
  "serde_json",
+ "tokio",
  "tracing",
  "uuid",
 ]

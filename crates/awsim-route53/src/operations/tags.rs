@@ -136,7 +136,7 @@ pub fn list_tags_for_resource(
         "ResourceTagSet": {
             "ResourceType": resource_type,
             "ResourceId": resource_id,
-            "Tags": tags,
+            "Tags": { "Tag": tags },
         }
     }))
 }
