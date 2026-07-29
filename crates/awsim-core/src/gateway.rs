@@ -65,6 +65,14 @@ pub struct AppState {
     /// futures here instead of spawning ad-hoc tokio tasks so we get
     /// one bounded place to drain on shutdown.
     pub workers: crate::tick::WorkerPool,
+    /// Operator-supplied authority (`host` or `host:port`) to put in
+    /// returned resource URLs, overriding the request's `Host` header.
+    /// Needed when the address a caller should use differs from the one
+    /// the request arrived on, for example behind a proxy.
+    pub endpoint_override: Option<String>,
+    /// Authority AWSim is listening on, used when a request carries no
+    /// usable `Host` header.
+    pub listen_authority: Option<String>,
 }
 
 impl AppState {
@@ -100,6 +108,8 @@ impl AppState {
             request_details: RequestDetailStore::default(),
             chaos: Arc::new(awsim_chaos::ChaosEngine::new()),
             workers: crate::tick::WorkerPool::new(),
+            endpoint_override: None,
+            listen_authority: None,
         }
     }
 
@@ -677,6 +687,20 @@ async fn process_request(
         .and_then(|v| v.to_str().ok())
         .map(|v| v.eq_ignore_ascii_case("https"))
         .unwrap_or(false);
+    // Authority for resource URLs we hand back. Precedence: operator
+    // override, then the `Host` this caller actually used (which is by
+    // construction reachable from them), then the listen address.
+    let endpoint_authority = state
+        .endpoint_override
+        .clone()
+        .or_else(|| {
+            headers
+                .get(axum::http::header::HOST)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        })
+        .or_else(|| state.listen_authority.clone());
     let ctx = crate::router::RequestContext {
         account_id,
         region,
@@ -694,6 +718,7 @@ async fn process_request(
         // construct a context with `internal_bypass = true`.
         internal_bypass: false,
         request_units: Default::default(),
+        endpoint_authority,
     };
 
     // 6b. IAM authorization (opt-in via AWSIM_IAM_ENFORCE)

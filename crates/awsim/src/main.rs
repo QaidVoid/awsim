@@ -76,6 +76,18 @@ struct Cli {
     #[arg(long, default_value = "aws", env = "AWSIM_PARTITION")]
     partition: String,
 
+    /// Authority (`host` or `host:port`) to put in returned resource URLs
+    /// such as SQS `QueueUrl`, API Gateway endpoints, AppSync GraphQL
+    /// URLs, and Lambda function URLs.
+    ///
+    /// Unset (the default), AWSim derives this from each request's `Host`
+    /// header, which is correct for Docker Compose and Testcontainers
+    /// because it is by construction an address the caller can reach.
+    /// Set it when the reachable address differs from what the request
+    /// carries, for example behind a proxy.
+    #[arg(long, env = "AWSIM_ENDPOINT_AUTHORITY")]
+    endpoint_authority: Option<String>,
+
     /// Data directory for persistence (omit for in-memory only)
     #[arg(long, env = "AWSIM_DATA_DIR")]
     data_dir: Option<String>,
@@ -445,6 +457,16 @@ async fn async_main() -> Result<()> {
         cli.account_id.clone(),
         cli.partition.clone(),
     );
+    // Resource URLs we hand back must point somewhere the caller can
+    // actually reach. Prefer an explicit override, else the request's own
+    // `Host` header (resolved per-request in the gateway), else the port
+    // we are listening on.
+    state.endpoint_override = cli
+        .endpoint_authority
+        .clone()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    state.listen_authority = Some(format!("localhost:{}", cli.port));
 
     // Runtime config store — disk-backed when --data-dir is set, in
     // memory only otherwise. CLI flags seed initial values; persisted
@@ -2203,6 +2225,7 @@ fn spawn_event_router(state: &AppState) {
                                     is_secure: false,
                                     internal_bypass: false,
                                     request_units: Default::default(),
+                                    endpoint_authority: None,
                                 };
 
                                 // RawMessageDelivery=true subscriptions skip the SNS

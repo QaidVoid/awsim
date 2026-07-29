@@ -98,7 +98,7 @@ pub fn create_graphql_api(
     let mut uris = HashMap::new();
     uris.insert(
         "GRAPHQL".to_string(),
-        format!("http://localhost:4566/appsync/{}/graphql", api_id),
+        format!("{}/appsync/{}/graphql", ctx.base_url(), api_id),
     );
 
     let api = GraphqlApi {

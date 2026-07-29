@@ -38,8 +38,10 @@ pub fn handle(state: &SqsState, input: &Value, ctx: &RequestContext) -> Result<V
     }
 
     let url = format!(
-        "http://sqs.{}.localhost:4566/{}/{}",
-        ctx.region, ctx.account_id, queue_name
+        "{}/{}/{}",
+        ctx.service_base_url("sqs"),
+        ctx.account_id,
+        queue_name
     );
     let arn = format!(
         "arn:{}:sqs:{}:{}:{}",

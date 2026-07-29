@@ -297,6 +297,7 @@ async fn invoke_authorizer_lambda(
         is_secure: false,
         internal_bypass: false,
         request_units: Default::default(),
+        endpoint_authority: None,
     };
     let invoke_input = json!({
         "FunctionName": function_name,
@@ -702,6 +703,7 @@ async fn invoke_lambda_raw(
         is_secure: false,
         internal_bypass: false,
         request_units: Default::default(),
+        endpoint_authority: None,
     };
     let invoke_input = json!({
         "FunctionName": function_name,
@@ -844,6 +846,7 @@ async fn invoke_lambda(
         is_secure: false,
         internal_bypass: false,
         request_units: Default::default(),
+        endpoint_authority: None,
     };
     let invoke_input = json!({
         "FunctionName": function_name,

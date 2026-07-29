@@ -70,7 +70,12 @@ fn encode_len_prefixed_str(buf: &mut Vec<u8>, s: &str) {
 
 /// Extract the queue name from a queue URL.
 ///
-/// URL format: `http://sqs.{region}.localhost:4566/{account_id}/{queue_name}`
+/// URL format: `{scheme}://sqs.{region}.{authority}/{account_id}/{queue_name}`,
+/// for example `http://sqs.us-east-1.localhost:4566/000000000000/orders`.
+///
+/// Deliberately host-agnostic: it takes the trailing path segment, so a URL
+/// issued under one authority still resolves after the reachable address
+/// changes, and URLs issued before endpoint resolution existed still parse.
 pub fn queue_name_from_url(url: &str) -> Result<String, AwsError> {
     // Split on '/' and take the last segment
     url.rsplit('/')

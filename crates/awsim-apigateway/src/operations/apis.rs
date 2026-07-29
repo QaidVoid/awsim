@@ -11,7 +11,7 @@ use crate::util::now_iso8601;
 pub fn create_api(
     state: &Arc<ApiGatewayState>,
     input: &Value,
-    _ctx: &RequestContext,
+    ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let name = input["Name"]
         .as_str()
@@ -36,7 +36,7 @@ pub fn create_api(
         .take(10)
         .collect::<String>();
 
-    let api_endpoint = format!("http://localhost:4566/restapis/{api_id}");
+    let api_endpoint = format!("{}/restapis/{api_id}", ctx.base_url());
     let created_date = now_iso8601();
 
     let description = input["Description"].as_str().unwrap_or("").to_string();

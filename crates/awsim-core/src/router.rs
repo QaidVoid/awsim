@@ -61,6 +61,17 @@ pub struct RequestContext {
     /// response headers. Cloning shares the underlying counters, so
     /// clones moved into blocking closures feed the same tallies.
     pub request_units: RequestUnits,
+
+    /// Authority (`host` or `host:port`) that this caller can reach AWSim
+    /// on, used to build resource URLs the caller will subsequently use:
+    /// SQS `QueueUrl`, API Gateway endpoints, AppSync GraphQL URLs,
+    /// Lambda function URLs.
+    ///
+    /// Resolved by the gateway with the precedence: explicit operator
+    /// override, then the request's `Host` header, then the listen
+    /// address. `None` in unit tests and server-internal contexts, where
+    /// [`base_url`](Self::base_url) falls back to the default endpoint.
+    pub endpoint_authority: Option<String>,
 }
 
 /// Shared read/write billable-unit tallies for one request, stored in
@@ -123,6 +134,7 @@ impl Default for RequestContext {
             is_secure: false,
             internal_bypass: false,
             request_units: Default::default(),
+            endpoint_authority: None,
         }
     }
 }
@@ -143,6 +155,7 @@ impl RequestContext {
             is_secure: false,
             internal_bypass: false,
             request_units: Default::default(),
+            endpoint_authority: None,
         }
     }
 
@@ -167,6 +180,7 @@ impl RequestContext {
             is_secure: false,
             internal_bypass: false,
             request_units: Default::default(),
+            endpoint_authority: None,
         }
     }
 
@@ -195,4 +209,62 @@ impl RequestContext {
             self.partition, service, self.region, self.account_id
         )
     }
+
+    /// Scheme this caller reached AWSim on.
+    pub fn scheme(&self) -> &'static str {
+        if self.is_secure { "https" } else { "http" }
+    }
+
+    /// Authority (`host` or `host:port`) to put in returned resource URLs.
+    ///
+    /// Falls back to the historical default when unresolved, which keeps
+    /// unit tests and server-internal contexts working unchanged.
+    pub fn authority(&self) -> &str {
+        self.endpoint_authority
+            .as_deref()
+            .unwrap_or(DEFAULT_ENDPOINT_AUTHORITY)
+    }
+
+    /// Base URL a caller can reach AWSim on, e.g. `http://localhost:4566`.
+    ///
+    /// Use this rather than hardcoding an endpoint: a resource URL built
+    /// from a literal is wrong the moment AWSim listens on another port,
+    /// runs under Testcontainers (which maps to a random host port), or is
+    /// addressed by container name from a sibling container.
+    pub fn base_url(&self) -> String {
+        format!("{}://{}", self.scheme(), self.authority())
+    }
+
+    /// Base URL in the AWS service-subdomain form, e.g.
+    /// `http://sqs.us-east-1.localhost:4566`, mirroring
+    /// `sqs.us-east-1.amazonaws.com`. Some clients parse the region back
+    /// out of a queue URL, so the shape is preserved where it can be.
+    ///
+    /// Falls back to the plain [`base_url`](Self::base_url) when the
+    /// resolved host cannot carry a subdomain prefix, which is the case
+    /// for an IP address (`sqs.us-east-1.127.0.0.1` does not resolve).
+    pub fn service_base_url(&self, service: &str) -> String {
+        let authority = self.authority();
+        let host = authority.split(':').next().unwrap_or(authority);
+        if host_accepts_subdomain(host) {
+            format!("{}://{service}.{}.{authority}", self.scheme(), self.region)
+        } else {
+            self.base_url()
+        }
+    }
+}
+
+/// Endpoint used when nothing better is known: unit tests, background
+/// tasks, and any context the gateway did not populate.
+pub const DEFAULT_ENDPOINT_AUTHORITY: &str = "localhost:4566";
+
+/// Whether `host` can carry a `service.region.` prefix and still resolve.
+/// IPv4 and IPv6 literals cannot.
+fn host_accepts_subdomain(host: &str) -> bool {
+    if host.is_empty() || host.starts_with('[') || host.contains(':') {
+        return false;
+    }
+    !host
+        .split('.')
+        .all(|label| !label.is_empty() && label.chars().all(|c| c.is_ascii_digit()))
 }

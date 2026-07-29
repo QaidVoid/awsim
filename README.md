@@ -84,6 +84,7 @@ All services share the same `http://localhost:4566` endpoint; routing comes from
 | `--region` | `AWSIM_REGION` | `us-east-1` | Default region |
 | `--account-id` | `AWSIM_ACCOUNT_ID` | `000000000000` | Default account |
 | `--partition` | `AWSIM_PARTITION` | `aws` | AWS partition reflected in every emitted ARN. Use `aws-cn`, `aws-us-gov`, `aws-iso`, or `aws-iso-b` for non-commercial regions |
+| `--endpoint-authority` | `AWSIM_ENDPOINT_AUTHORITY` | (derived) | Authority (`host` or `host:port`) placed in returned resource URLs such as SQS `QueueUrl`, API Gateway endpoints, AppSync GraphQL URLs, and Lambda function URLs. Unset, AWSim derives it from each request's `Host` header, which is already correct for Docker Compose and Testcontainers. Set it only when the address a caller should use differs from the one the request arrived on, for example behind a proxy |
 | `--data-dir` | `AWSIM_DATA_DIR` | (none) | Persistence directory; omit for in-memory only |
 | `--log-level` | `AWSIM_LOG_LEVEL` | `info` | Log verbosity |
 | `--no-gc` | `AWSIM_NO_GC` | `false` | Disable startup orphan-blob GC for body stores |
