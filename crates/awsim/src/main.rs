@@ -1619,6 +1619,13 @@ async fn async_main() -> Result<()> {
         .merge(seed_router)
         .merge(tls_admin_router)
         .merge(ui::router())
+        // Unmatched admin paths must not fall through to the AWS
+        // service router, which answers a mistyped `/_awsim/` path with
+        // `400 UnknownService: Service 'unknown' is not registered`.
+        // That reads as a service registration problem rather than a
+        // wrong path. Registered as a wildcard so every concrete
+        // `/_awsim/...` route above still wins.
+        .route("/_awsim/{*rest}", axum::routing::any(admin_not_found))
         // Redirect plain browser hits on `/` to the admin UI so users
         // don't have to remember the `/_awsim/ui/` path. Skips when the
         // request looks like an AWS SDK call (SigV4 Authorization +
@@ -2528,6 +2535,23 @@ fn spawn_event_router(state: &AppState) {
 /// On every subsequent boot the snapshot will contain the root
 /// user, so this routine flips the gate to "Complete" instead of
 /// printing a new token.
+/// Answer an unmatched path under the admin prefix with a plain 404.
+///
+/// Without this the AWS service router picks the request up and reports
+/// an unregistered service, which sends anyone with a typo looking in
+/// entirely the wrong place.
+async fn admin_not_found(uri: axum::http::Uri) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    (
+        axum::http::StatusCode::NOT_FOUND,
+        axum::Json(serde_json::json!({
+            "error": "NotFound",
+            "message": format!("No AWSim admin endpoint at {}", uri.path()),
+        })),
+    )
+        .into_response()
+}
+
 /// Describe the enforcement model at startup when `AWSIM_IAM_ENFORCE` is
 /// on, so the unmapped-key rule is discoverable without reading the guide.
 ///

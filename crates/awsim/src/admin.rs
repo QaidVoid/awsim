@@ -390,9 +390,12 @@ pub async fn chaos_add(
             .unwrap_or(0);
     }
     rule.injection_count = 0;
-    let id = rule.id.clone();
+    // Return the stored rule, not just its id: a caller that wants to
+    // clear this specific rule later would otherwise have to list every
+    // rule to find the one it just made.
+    let body = serde_json::to_value(&rule).unwrap_or_else(|_| json!({ "id": rule.id }));
     engine.add_rule(rule);
-    (StatusCode::CREATED, Json(json!({"id": id}))).into_response()
+    (StatusCode::CREATED, Json(body)).into_response()
 }
 
 pub async fn chaos_remove(

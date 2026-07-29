@@ -44,6 +44,10 @@ A chaos rule is a **match predicate** plus an **effect** plus a
 }
 ```
 
+`id`, `created_at` and `injection_count` are server-generated. Omit them
+on create; the response returns the stored rule with its `id` so you can
+toggle or delete that specific rule later.
+
 - `service.kind` is `"any"` (matches every service) or `"exact"` (one
   signing name, e.g. `s3`).
 - `operation.kind` is the same — `"any"` or an exact AWS API call name.
@@ -151,7 +155,7 @@ All admin endpoints live under `/_awsim/chaos/*`:
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/_awsim/chaos/rules` | List active rules + total injections. |
-| POST | `/_awsim/chaos/rules` | Add a rule (JSON body). |
+| POST | `/_awsim/chaos/rules` | Add a rule (JSON body). Returns the stored rule, including its server-generated `id`. |
 | PATCH | `/_awsim/chaos/rules/{id}` | Toggle `enabled` flag. |
 | DELETE | `/_awsim/chaos/rules/{id}` | Remove a rule. |
 | POST | `/_awsim/chaos/clear` | Drop every rule + reset counters. |

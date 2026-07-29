@@ -152,6 +152,10 @@ impl ChaosSchedule {
 /// `probability` rolls true.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChaosRule {
+    /// Server-generated. Defaulted on deserialize so a caller can POST a
+    /// rule without inventing an identity the server owns; the create
+    /// handler fills it in and returns it.
+    #[serde(default)]
     pub id: String,
     pub service: ServiceMatch,
     pub operation: OperationMatch,
