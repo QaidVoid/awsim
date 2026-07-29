@@ -1230,6 +1230,7 @@ async fn async_main() -> Result<()> {
         cli.region.clone(),
     );
     arm_operator_auth_if_required(&operator_auth_state);
+    report_iam_enforcement_model();
     // Public auth routes: reachable without a session because they
     // are the entry point into one (login, setup) or are intended to
     // be safe to probe (whoami, logout).
@@ -2527,6 +2528,29 @@ fn spawn_event_router(state: &AppState) {
 /// On every subsequent boot the snapshot will contain the root
 /// user, so this routine flips the gate to "Complete" instead of
 /// printing a new token.
+/// Describe the enforcement model at startup when `AWSIM_IAM_ENFORCE` is
+/// on, so the unmapped-key rule is discoverable without reading the guide.
+///
+/// Enabling enforcement used to leave the instance unusable with the
+/// documented quick-start credentials, and the resulting error pointed at
+/// SigV4 rather than IAM. Saying the rule out loud once at boot is what
+/// stops that being surprising.
+fn report_iam_enforcement_model() {
+    let enforcing = std::env::var("AWSIM_IAM_ENFORCE")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false);
+    if !enforcing {
+        return;
+    }
+    info!(
+        "IAM enforcement is on. Access keys bound to an IAM user are \
+         evaluated against their policies; a key not bound to any user \
+         acts as an administrator so the first users and policies can be \
+         created. Set AWSIM_REQUIRE_SIGNED_REQUESTS=true to reject \
+         unknown keys outright."
+    );
+}
+
 fn arm_operator_auth_if_required(state: &operator_auth::OperatorAuthState) {
     let enabled = std::env::var("AWSIM_REQUIRE_OPERATOR_AUTH")
         .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))

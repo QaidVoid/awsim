@@ -288,16 +288,29 @@ fn admin_access_key_bypasses_enforcement() {
     );
 }
 
+/// Configuring an admin key must not weaken enforcement for keys that do
+/// map to a principal. This is the property that matters: a restricted
+/// principal stays restricted regardless of what else is configured.
 #[test]
-fn admin_access_key_does_not_bypass_other_keys() {
+fn admin_access_key_does_not_bypass_a_restricted_principal() {
     let mut engine = AuthzEngine::new(true);
     engine.admin_access_key = Some("awsim-admin".to_string());
-    engine.principal_lookup = Arc::new(StubLookup { principal: None });
+    engine.principal_lookup = Arc::new(StubLookup {
+        principal: Some(make_principal(
+            "arn:aws:iam::000000000000:user/restricted",
+            "000000000000",
+            vec![],
+            false,
+        )),
+    });
     let ctx = ctx_with_key(Some("not-admin"));
     let err = engine
         .check(&ctx, "s3:GetObject", "arn:aws:s3:::bucket/key")
         .unwrap_err();
-    assert_eq!(err.code, "InvalidClientTokenId");
+    assert_eq!(
+        err.code, "AccessDenied",
+        "a principal with no policies must be denied"
+    );
     assert!(
         !err.message.contains("not-admin"),
         "error message must not echo the access key: {}",

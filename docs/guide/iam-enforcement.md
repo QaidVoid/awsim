@@ -47,6 +47,33 @@ services:
 
 When enforcement is off (default), every request is allowed regardless of policy - useful for rapid prototyping. Turn it on to unit-test IAM policies and negative paths in your IaC.
 
+## Who Enforcement Applies To
+
+Enforcement keys off whether the request's access key is bound to an IAM user:
+
+| Caller | Treatment |
+|---|---|
+| Access key bound to an IAM user | Fully enforced against that user's identity policies, permissions boundary, SCPs, session policy, and any resource policy |
+| Access key not bound to any user | Treated as an administrator |
+| No credential at all | Denied |
+| `AWSIM_ADMIN_ACCESS_KEY` | Bypasses enforcement entirely (break-glass) |
+
+The second row is what makes enforcement usable. IAM is itself an enforced service, so if unknown keys were rejected there would be no way to create the first user: the calls needed to bootstrap would be denied, with no in-band recovery. Instead the documented quick-start key (`test`) works out of the box, and everything you actually create is enforced.
+
+If you want unknown keys rejected rather than treated as administrative, that is authentication rather than authorization. Set `AWSIM_REQUIRE_SIGNED_REQUESTS=true`, which returns `InvalidClientTokenId` for a key that resolves to no IAM user. The two settings compose.
+
+A denial from enforcement returns `AccessDenied` naming the action and resource. If you see `InvalidClientTokenId` instead, that is the signed-request gate, not policy evaluation.
+
+## Bootstrapping
+
+Starting from a default instance, the sequence is:
+
+1. Start with `AWSIM_IAM_ENFORCE=true`. Your existing credentials keep working, because they are not yet bound to a user.
+2. Create users, policies and access keys using those credentials.
+3. Switch your client to a created user's access key. It is now enforced.
+
+To recover from locking yourself out, restart with `AWSIM_ADMIN_ACCESS_KEY` set to a key you control, or without `AWSIM_IAM_ENFORCE`.
+
 ## Quick Start
 
 Create a user with an access key, attach an S3-restricted policy, and observe an explicit deny:

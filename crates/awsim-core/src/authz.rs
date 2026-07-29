@@ -300,18 +300,21 @@ impl AuthzEngine {
 
         let principal = match self.principal_lookup.resolve_access_key(access_key) {
             Some(p) => p,
-            // An access key that resolves to no principal is an unknown
-            // credential, not an under-privileged one. AWS answers with
-            // an invalid-token error rather than AccessDenied, and never
-            // echoes the key back in the message — mirror that, and match
-            // the gateway's signed-request gate so the response is
-            // identical whichever check rejects the unknown key first.
-            None => {
-                return Err(AwsError::bad_request(
-                    "InvalidClientTokenId",
-                    "The security token included in the request is invalid.",
-                ));
-            }
+            // An access key mapping to no IAM principal resolves to an
+            // administrative caller rather than being rejected.
+            //
+            // Rejecting here bricks the instance: IAM is itself enforced,
+            // so with no principals yet created, the very calls needed to
+            // create them are denied and there is no way out in-band. The
+            // documented quick-start key (`test`) hit exactly that.
+            //
+            // Enforcement still applies in full to every key that does
+            // map to a principal, which is what the feature is for:
+            // testing that policies allow and deny what you expect.
+            // Callers wanting unknown keys rejected outright want
+            // authentication, not authorization, and should set
+            // AWSIM_REQUIRE_SIGNED_REQUESTS.
+            None => return Ok(()),
         };
 
         if principal.is_root {
@@ -464,24 +467,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unknown_access_key_returns_invalid_token_without_leaking_the_key() {
-        // Enforcement on, no admin key configured, default no-op lookup
-        // that resolves every key to no principal -> "awsim-admin-test"
-        // is an unknown credential.
+    fn unmapped_access_key_is_administrative_so_enforcement_can_bootstrap() {
+        // Enforcement on with no IAM principals yet. Rejecting here would
+        // brick the instance: IAM is itself enforced, so the calls needed
+        // to create the first principal would be denied with no way out.
         let engine = AuthzEngine::new(true);
-        let mut ctx = RequestContext::new("cognito-idp", "us-east-1");
-        ctx.access_key = Some("awsim-admin-test".to_string());
+        let mut ctx = RequestContext::new("iam", "us-east-1");
+        ctx.access_key = Some("test".to_string());
+
+        assert!(
+            engine.check(&ctx, "iam:CreateUser", "*").is_ok(),
+            "an unmapped key must be able to administer IAM, otherwise \
+             enforcement cannot be bootstrapped"
+        );
+    }
+
+    #[test]
+    fn anonymous_request_is_still_denied() {
+        // Resolving unmapped keys administratively must not extend to
+        // requests carrying no credential at all.
+        let engine = AuthzEngine::new(true);
+        let ctx = RequestContext::new("s3", "us-east-1");
 
         let err = engine
-            .check(&ctx, "cognito-idp:ListUsers", "*")
-            .expect_err("unknown key must be rejected");
-
-        assert_eq!(err.code, "InvalidClientTokenId");
-        assert_eq!(err.status, axum::http::StatusCode::BAD_REQUEST);
-        assert!(
-            !err.message.contains("awsim-admin-test"),
-            "error message must not echo the access key: {}",
-            err.message
-        );
+            .check(&ctx, "s3:CreateBucket", "*")
+            .expect_err("anonymous must be denied");
+        assert_eq!(err.code, "AccessDenied");
     }
 }
