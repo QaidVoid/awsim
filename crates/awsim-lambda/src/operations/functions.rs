@@ -6,8 +6,8 @@ use crate::{
     error::{invalid_parameter, resource_conflict, resource_not_found},
     state::{LambdaFunction, LambdaState},
     util::{
-        decode_zip, now_iso8601, opt_str, require_str, sha256_base64, validate_handler,
-        validate_runtime,
+        decode_zip, now_iso8601, opt_str, require_str, sha256_base64, validate_function_name,
+        validate_handler, validate_runtime,
     },
 };
 
@@ -254,6 +254,7 @@ pub fn create_function(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let name = require_str(input, "FunctionName")?;
+    validate_function_name(name)?;
 
     if state.functions.contains_key(name) {
         return Err(resource_conflict(format!("Function already exist: {name}")));

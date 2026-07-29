@@ -338,7 +338,17 @@ fn remove_empty_dirs(base: &Path, dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn join_safe(base: &Path, rel: &str) -> io::Result<PathBuf> {
+/// Join `rel` onto `base`, guaranteeing the result stays inside `base`.
+///
+/// This is the one supported way to turn externally supplied text into a
+/// filesystem path. A leading `/` is stripped, so an absolute-looking input
+/// is treated as relative to `base` rather than escaping it (S3 keys
+/// routinely carry one). Any component that is not [`Component::Normal`],
+/// meaning `..`, a root, or a Windows prefix, is rejected outright.
+///
+/// The guarantee callers rely on: the returned path always starts with
+/// `base`, whatever `rel` contains.
+pub fn join_safe(base: &Path, rel: &str) -> io::Result<PathBuf> {
     let trimmed = rel.trim_start_matches('/');
     if trimmed.is_empty() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "empty key"));

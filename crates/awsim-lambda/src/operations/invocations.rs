@@ -71,7 +71,21 @@ fn too_many_requests(function_name: &str, current: u32, cap: u32) -> AwsError {
     )
 }
 
+/// Real Lambda caps an unpacked deployment package at 250 MB. Extraction
+/// refuses anything larger so a decompression bomb cannot fill the disk.
+const MAX_UNPACKED_BYTES: u64 = 262_144_000;
+
+/// Upper bound on archive members. Well above any real deployment package,
+/// low enough that a zip of millions of empty entries fails fast.
+const MAX_ENTRIES: usize = 100_000;
+
 /// Extract zip bytes to the given directory, returning an error string on failure.
+///
+/// Every member is resolved through [`awsim_core::join_safe`], so a crafted
+/// entry name (`../../etc/cron.d/x`, `/etc/passwd`) cannot write outside
+/// `dest`. Symlink members are refused outright: a symlink pointing out of
+/// `dest` followed by a write through it escapes containment even when each
+/// individual name looks safe.
 fn extract_zip(zip_bytes: &[u8], dest: &std::path::Path) -> Result<(), String> {
     use std::io::Read;
 
@@ -80,16 +94,51 @@ fn extract_zip(zip_bytes: &[u8], dest: &std::path::Path) -> Result<(), String> {
     let cursor = std::io::Cursor::new(zip_bytes);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| format!("zip open failed: {e}"))?;
 
+    if archive.len() > MAX_ENTRIES {
+        let _ = std::fs::remove_dir_all(dest);
+        return Err(format!(
+            "archive has {} entries, exceeding the {MAX_ENTRIES} limit",
+            archive.len()
+        ));
+    }
+
+    let mut unpacked: u64 = 0;
     for i in 0..archive.len() {
         let mut entry = archive
             .by_index(i)
             .map_err(|e| format!("zip entry {i}: {e}"))?;
-        let entry_path = dest.join(entry.name());
+        let raw_name = entry.name().to_string();
+
+        // Unix mode high nibble 0xA marks a symlink member.
+        if entry.unix_mode().is_some_and(|m| m & 0xF000 == 0xA000) {
+            let _ = std::fs::remove_dir_all(dest);
+            return Err(format!("archive entry `{raw_name}` is a symlink, refused"));
+        }
+
+        // Defence in depth: the zip crate's own containment check, then
+        // our shared helper which is the authority.
+        if entry.enclosed_name().is_none() {
+            let _ = std::fs::remove_dir_all(dest);
+            return Err(format!(
+                "archive entry `{raw_name}` escapes the archive root"
+            ));
+        }
+        let entry_path = awsim_core::join_safe(dest, &raw_name).map_err(|e| {
+            let _ = std::fs::remove_dir_all(dest);
+            format!("archive entry `{raw_name}` rejected: {e}")
+        })?;
 
         if entry.is_dir() {
             std::fs::create_dir_all(&entry_path)
                 .map_err(|e| format!("mkdir {}: {e}", entry_path.display()))?;
         } else {
+            unpacked = unpacked.saturating_add(entry.size());
+            if unpacked > MAX_UNPACKED_BYTES {
+                let _ = std::fs::remove_dir_all(dest);
+                return Err(format!(
+                    "unpacked size exceeds the {MAX_UNPACKED_BYTES} byte limit"
+                ));
+            }
             if let Some(parent) = entry_path.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| format!("mkdir parent: {e}"))?;
             }
@@ -112,9 +161,13 @@ fn ensure_code_dir(
     code_data: &[u8],
     code_sha256: &str,
 ) -> Result<std::path::PathBuf, String> {
-    let cache_dir = std::env::temp_dir()
-        .join("awsim-lambda")
-        .join(function_name)
+    // `function_name` is caller-supplied. Route it through the shared
+    // containment helper so a name like `../../x` can neither redirect the
+    // extraction nor, via the stale-cache branch below, drive
+    // `remove_dir_all` at an arbitrary directory.
+    let cache_root = std::env::temp_dir().join("awsim-lambda");
+    let cache_dir = awsim_core::join_safe(&cache_root, function_name)
+        .map_err(|e| format!("invalid function name for cache path: {e}"))?
         .join("code");
 
     // Check if already extracted with the same hash

@@ -18,6 +18,20 @@ Any runtime starting with `nodejs` invokes `node`. Any runtime starting with `py
 3. **Bootstrap** — the wrapper script loads the handler module, passes the event JSON and a context object, and captures stdout as the return value.
 4. **Result** — stdout is parsed as the function response. Non-zero exit codes or stderr output is returned as a function error.
 
+## Deployment Package Constraints
+
+A deployment package is caller-supplied and is extracted to the local filesystem, so extraction is bounded and contained:
+
+| Constraint | Behaviour |
+|---|---|
+| Path containment | Every archive member must resolve inside the extraction directory. A member naming `../` or an absolute path is rejected and the whole extraction fails. |
+| Symlinks | Symlink members are refused. A symlink pointing outside the extraction directory would let a later member write through it. |
+| Unpacked size | Capped at 250 MB, matching the real Lambda unzipped limit. |
+| Entry count | Capped at 100,000 members. |
+| Function name | Must match `[a-zA-Z0-9-_]{1,64}`, since the name forms part of the on-disk cache path. |
+
+When extraction is rejected, the error names the offending archive member so the cause is obvious.
+
 ## Handler Format
 
 The handler is specified as `module.function`:

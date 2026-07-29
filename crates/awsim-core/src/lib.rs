@@ -30,7 +30,7 @@ pub use authz::{
 // this file; re-exported here for crate consumers.
 pub use arn::Arn;
 pub use body::Body;
-pub use body_store::{BlobInventory, BodyStore};
+pub use body_store::{BlobInventory, BodyStore, join_safe};
 pub use error::AwsError;
 pub use events::{EventBus, InternalEvent};
 pub use gateway::{AppState, BodyStoreHandle};

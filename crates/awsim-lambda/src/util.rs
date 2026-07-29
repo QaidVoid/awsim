@@ -231,6 +231,39 @@ pub fn sha256_base64(data: &[u8]) -> String {
 /// Anything else is rejected with `InvalidParameterValueException` so
 /// SDK callers see the same diagnostic locally that they would in
 /// production.
+/// Validate a Lambda function name against the character set AWS permits.
+///
+/// Accepts a bare name, a full ARN, or a partial ARN, matching what AWS
+/// accepts for `FunctionName`. In the ARN forms the trailing function-name
+/// segment is what gets validated, since that is the part that reaches a
+/// filesystem path in the code cache.
+///
+/// This is an allowlist (`[a-zA-Z0-9-_]{1,64}`) rather than a denylist of
+/// path metacharacters, so it stays safe without having to anticipate every
+/// encoding trick.
+pub fn validate_function_name(name: &str) -> Result<(), awsim_core::AwsError> {
+    // `arn:aws:lambda:region:account:function:name` or `account:function:name`.
+    let bare = match name.rsplit_once(":function:") {
+        Some((_, tail)) => tail.split(':').next().unwrap_or(tail),
+        None => name,
+    };
+    if (1..=64).contains(&bare.len())
+        && bare
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Ok(());
+    }
+    Err(awsim_core::AwsError::bad_request(
+        "ValidationException",
+        format!(
+            "1 validation error detected: Value '{name}' at 'functionName' failed to \
+             satisfy constraint: Member must satisfy regular expression pattern: \
+             [a-zA-Z0-9-_]+"
+        ),
+    ))
+}
+
 pub fn validate_qualifier(qualifier: &str) -> Result<(), awsim_core::AwsError> {
     if qualifier == "$LATEST" {
         return Ok(());
