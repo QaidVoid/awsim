@@ -1,8 +1,9 @@
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// ELB v2 state — per account+region.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ElbState {
     pub load_balancers: DashMap<String, LoadBalancer>,
     pub target_groups: DashMap<String, TargetGroup>,
@@ -17,20 +18,20 @@ pub struct ElbState {
 }
 
 /// A generic key-value attribute pair used for LB and TG attributes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttributeKeyValue {
     pub key: String,
     pub value: String,
 }
 
 /// A listener certificate.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Certificate {
     pub certificate_arn: String,
     pub is_default: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoadBalancer {
     pub arn: String,
     pub name: String,
@@ -45,7 +46,7 @@ pub struct LoadBalancer {
     pub vpc_id: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TargetGroup {
     pub arn: String,
     pub name: String,
@@ -57,13 +58,13 @@ pub struct TargetGroup {
     pub tags: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Target {
     pub id: String,
     pub port: Option<u16>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Listener {
     pub arn: String,
     pub load_balancer_arn: String,
@@ -72,7 +73,7 @@ pub struct Listener {
     pub default_actions: Vec<ListenerAction>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListenerAction {
     pub action_type: String,
     pub target_group_arn: Option<String>,
@@ -83,7 +84,7 @@ pub struct ListenerAction {
     pub config: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Rule {
     pub arn: String,
     pub listener_arn: String,

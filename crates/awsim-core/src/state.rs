@@ -103,6 +103,61 @@ impl<T: Default + Send + Sync + 'static> Default for AccountRegionStore<T> {
     }
 }
 
+/// One (account, region) pair's state, as read back from a snapshot.
+#[derive(serde::Deserialize)]
+pub struct StoreBucket<T> {
+    pub account_id: String,
+    pub region: String,
+    pub state: T,
+}
+
+/// Write-side mirror of [`StoreBucket`] that borrows the live state, so
+/// snapshotting does not clone every service's entire state map.
+#[derive(Serialize)]
+struct StoreBucketRef<'a, T> {
+    account_id: &'a str,
+    region: &'a str,
+    state: &'a T,
+}
+
+/// Serialise an entire [`AccountRegionStore`] whose state type derives
+/// `Serialize` directly.
+///
+/// Most services keep their state in `DashMap` fields that serialise as
+/// they are, so implementing [`Snapshottable`] with a hand-written mirror
+/// type buys nothing beyond a second place to forget a field. Prefer this
+/// where a direct derive is possible; reach for `Snapshottable` only when
+/// the on-disk shape must differ from the in-memory one.
+pub fn snapshot_store<T>(store: &AccountRegionStore<T>) -> Option<Vec<u8>>
+where
+    T: Serialize + Default + Send + Sync + 'static,
+{
+    let entries = store.iter_all();
+    let buckets: Vec<StoreBucketRef<'_, T>> = entries
+        .iter()
+        .map(|((account_id, region), state)| StoreBucketRef {
+            account_id,
+            region,
+            state: state.as_ref(),
+        })
+        .collect();
+    serde_json::to_vec(&buckets).ok()
+}
+
+/// Restore an [`AccountRegionStore`] previously written by
+/// [`snapshot_store`], replacing any existing contents.
+pub fn restore_store<T>(store: &AccountRegionStore<T>, data: &[u8]) -> Result<(), String>
+where
+    T: DeserializeOwned + Default + Send + Sync + 'static,
+{
+    let buckets: Vec<StoreBucket<T>> = serde_json::from_slice(data).map_err(|e| e.to_string())?;
+    store.clear();
+    for bucket in buckets {
+        store.set(&bucket.account_id, &bucket.region, bucket.state);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

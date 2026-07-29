@@ -110,7 +110,7 @@ pub struct TableVersion {
 }
 
 /// Per-account/region Glue state.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct GlueState {
     /// Database name → GlueDatabase
     pub databases: DashMap<String, GlueDatabase>,

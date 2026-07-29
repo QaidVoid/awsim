@@ -1,15 +1,16 @@
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Top-level API Gateway state — shared across all accounts/regions
 /// (API Gateway v2 uses a single global namespace per region in real AWS,
 /// but we store it in the AccountRegionStore pattern for consistency).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ApiGatewayState {
     pub apis: DashMap<String, HttpApi>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpApi {
     pub api_id: String,
     pub name: String,
@@ -26,7 +27,7 @@ pub struct HttpApi {
     pub tags: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiRoute {
     pub route_id: String,
     /// e.g., "GET /items", "POST /items/{id}", "$default"
@@ -36,7 +37,7 @@ pub struct ApiRoute {
     pub route_response_selection_expression: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Integration {
     pub integration_id: String,
     pub integration_type: String, // "AWS_PROXY", "HTTP_PROXY", etc.
@@ -47,7 +48,7 @@ pub struct Integration {
     pub timeout_in_millis: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Stage {
     pub stage_name: String,
     pub auto_deploy: bool,
@@ -58,7 +59,7 @@ pub struct Stage {
     pub default_route_settings: RouteSettings,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RouteSettings {
     pub throttling_burst_limit: Option<u32>,
     pub throttling_rate_limit: Option<f64>,
@@ -67,7 +68,7 @@ pub struct RouteSettings {
     pub detailed_metrics_enabled: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Deployment {
     pub deployment_id: String,
     pub deployment_status: String,
@@ -75,7 +76,7 @@ pub struct Deployment {
     pub description: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CorsConfiguration {
     pub allow_origins: Vec<String>,
     pub allow_methods: Vec<String>,

@@ -1,15 +1,16 @@
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// CloudFormation state — per account+region.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct CloudFormationState {
     pub stacks: DashMap<String, Stack>,
     /// stack name → HashMap<tag key, tag value> (for TagResource/UntagResource)
     pub stack_tags: DashMap<String, HashMap<String, String>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Stack {
     pub stack_id: String,
     pub stack_name: String,
@@ -48,7 +49,7 @@ pub struct Stack {
     pub timeout_deadline_secs: Option<u64>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StackResource {
     pub logical_resource_id: String,
     pub physical_resource_id: Option<String>,
@@ -70,7 +71,7 @@ pub struct StackResource {
     pub received_signal_count: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StackEvent {
     pub event_id: String,
     pub stack_id: String,
@@ -83,7 +84,7 @@ pub struct StackEvent {
     pub resource_status_reason: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChangeSet {
     pub change_set_id: String,
     pub change_set_name: String,
@@ -97,7 +98,7 @@ pub struct ChangeSet {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Change {
     pub action: String,
     pub logical_resource_id: String,
@@ -115,7 +116,7 @@ pub struct Change {
     pub scope: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StackOutput {
     pub output_key: String,
     pub output_value: String,

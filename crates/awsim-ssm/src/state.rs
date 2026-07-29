@@ -1,9 +1,10 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use dashmap::DashMap;
 
 /// A single version entry for a parameter.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParameterVersion {
     pub value: String,
     pub version: u64,
@@ -15,7 +16,7 @@ pub struct ParameterVersion {
 }
 
 /// A stored SSM parameter.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Parameter {
     pub name: String,
     pub arn: String,
@@ -44,7 +45,7 @@ pub struct Parameter {
 }
 
 /// A stored SSM Run Command record.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Command {
     pub command_id: String,
     pub document_name: String,
@@ -64,7 +65,7 @@ pub struct Command {
 }
 
 /// An SSM Document.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SsmDocument {
     pub name: String,
     #[allow(dead_code)]
@@ -85,7 +86,7 @@ pub struct SsmDocument {
 }
 
 /// An SSM State Manager Association.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SsmAssociation {
     pub association_id: String,
     #[allow(dead_code)]
@@ -97,7 +98,7 @@ pub struct SsmAssociation {
 }
 
 /// An SSM Maintenance Window stub.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SsmMaintenanceWindow {
     pub window_id: String,
     pub name: String,
@@ -110,7 +111,7 @@ pub struct SsmMaintenanceWindow {
 }
 
 /// An SSM OpsCenter OpsItem.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SsmOpsItem {
     pub ops_item_id: String,
     pub title: String,
@@ -121,7 +122,7 @@ pub struct SsmOpsItem {
     pub last_modified_time: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SsmPatchBaseline {
     pub baseline_id: String,
     pub name: String,
@@ -133,7 +134,7 @@ pub struct SsmPatchBaseline {
     pub modified_date: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SsmAutomationExecution {
     pub execution_id: String,
     pub document_name: String,
@@ -145,7 +146,7 @@ pub struct SsmAutomationExecution {
     pub end_time: Option<u64>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SsmSession {
     pub session_id: String,
     pub target: String,
@@ -170,7 +171,7 @@ pub struct SsmSession {
     pub max_session_duration: Option<u64>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SsmMaintenanceWindowTarget {
     pub window_target_id: String,
     pub window_id: String,
@@ -179,7 +180,7 @@ pub struct SsmMaintenanceWindowTarget {
     pub name: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SsmMaintenanceWindowTask {
     pub window_task_id: String,
     pub window_id: String,
@@ -192,7 +193,7 @@ pub struct SsmMaintenanceWindowTask {
     pub name: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SsmResourceDataSync {
     pub sync_name: String,
     pub sync_type: String,
@@ -203,7 +204,7 @@ pub struct SsmResourceDataSync {
     pub sync_created_time: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SsmOpsMetadata {
     pub ops_metadata_arn: String,
     pub resource_id: String,
@@ -213,7 +214,7 @@ pub struct SsmOpsMetadata {
     pub last_modified_user: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SsmActivation {
     pub activation_id: String,
     #[allow(dead_code)]
@@ -228,7 +229,7 @@ pub struct SsmActivation {
     pub created_date: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SsmComplianceItem {
     pub compliance_type: String,
     pub resource_type: String,
@@ -241,7 +242,7 @@ pub struct SsmComplianceItem {
     pub details: serde_json::Value,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SsmManagedInstance {
     pub instance_id: String,
     pub ping_status: String,
@@ -258,7 +259,7 @@ pub struct SsmManagedInstance {
     pub ip_address: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SsmResourcePolicy {
     pub policy_id: String,
     pub policy_hash: String,
@@ -268,7 +269,7 @@ pub struct SsmResourcePolicy {
 }
 
 /// Per-account/region SSM state.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct SsmState {
     /// Parameter name → Parameter
     pub parameters: DashMap<String, Parameter>,

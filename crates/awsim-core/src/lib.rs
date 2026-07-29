@@ -45,7 +45,7 @@ pub use request_detail::{
 };
 pub use request_event::{RequestEvent, RequestEventBus};
 pub use router::{DEFAULT_PARTITION, RequestContext};
-pub use state::{AccountRegionStore, Snapshottable};
+pub use state::{AccountRegionStore, Snapshottable, restore_store, snapshot_store};
 pub use tick::{TestDriver, WorkerPool};
 
 use bytes::Bytes;

@@ -19,28 +19,22 @@ awsim has two distinct persistence layers:
 1. **JSON snapshots** for handler state (table schemas, IAM users, queue metadata, etc.) under `{data_dir}/snapshots/`.
 2. **Per-service SQLite databases** for high-volume row data (DDB items, log events, metrics, kinesis records, SES outbox) — sit alongside the snapshots, not replaced by them.
 
-The following services write and restore JSON snapshots on graceful shutdown / startup:
+Most services write and restore JSON snapshots on graceful shutdown / startup. As of the current build, 52 of 61 registered services do.
 
-| Service | Signing Name |
-|---------|-------------|
-| SQS | `sqs` |
-| DynamoDB | `dynamodb` (schema only — items live in SQLite, see below) |
-| IAM | `iam` |
-| S3 | `s3` |
-| RDS | `rds` |
-| Cognito User Pools | `cognito-idp` |
-| Cognito Identity Pools | `cognito-identity` |
-| ACM | `acm` |
-| WAF | `wafv2` |
-| Scheduler | `scheduler` |
-| SNS | `sns` |
-| Lambda | `lambda` |
-| ECR | `ecr` |
-| Secrets Manager | `secretsmanager` |
-| KMS | `kms` (including key material, so ciphertext still decrypts) |
-| Step Functions | `states` (including suspended task tokens) |
-| EventBridge | `events` (buses, rules, targets, archives, connections) |
-| CloudWatch Logs | `logs` (group/stream metadata only — events in SQLite) |
+Those with behaviour worth calling out:
+
+| Service | Signing Name | Note |
+|---------|-------------|------|
+| DynamoDB | `dynamodb` | Schema only. Items live in SQLite, see below |
+| KMS | `kms` | Includes key material, so ciphertext produced before a restart still decrypts |
+| Step Functions | `states` | Includes suspended `waitForTaskToken` executions, which would otherwise be unanswerable |
+| EventBridge | `events` | Buses, rules, targets, archives and connections. The recent-events ring is excluded as debugging state |
+| API Gateway | `apigateway` | The authorizer decision cache is excluded, so a stale allow/deny cannot survive a restart |
+| CloudWatch Logs | `logs` | Group and stream metadata only. Events live in SQLite |
+
+The rest (SQS, S3, IAM, Lambda, ECR, SNS, Secrets Manager, ECS, EC2, EKS, CloudFormation, ELB, CloudFront, CloudTrail, Glue, Organizations, SSM, Batch, DataSync, SSO Admin, ACM, WAF, Scheduler, RDS, Cognito, and others) round-trip their handler state without caveats.
+
+Still not covered: `bedrock`, `bedrock-runtime`, `comprehend`, `kendra`, `execute-api` (API Gateway v2), and `sts`. Kinesis, CloudWatch Metrics and SES keep their row data in SQLite, so the data survives even though their handler metadata is not snapshotted.
 
 The following services persist their primary row data into a SQLite database under `{data_dir}/`:
 
@@ -54,7 +48,7 @@ The following services persist their primary row data into a SQLite database und
 
 Each DB uses WAL mode + a 16 MiB mmap with a tight 2 MiB page cache and an r2d2 connection pool (`min_idle=1, max_size=4`) so a fresh awsim process holds only ~256 KiB of resident SQLite per service until traffic arrives.
 
-Services not in either list (for example SSM, CloudFormation, ECS, API Gateway) are in-memory only and lost on restart. This is a coverage gap rather than a design choice, and it is reported rather than hidden: a named snapshot records those services under `not_captured`, and loading one returns `complete: false`.
+Services in neither list are in-memory only and lost on restart. This is a coverage gap rather than a design choice, and it is reported rather than hidden: a named snapshot records those services under `not_captured`, and loading one returns `complete: false`.
 
 ## Named Snapshots
 

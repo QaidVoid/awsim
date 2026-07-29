@@ -1,7 +1,8 @@
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Instance {
     pub instance_arn: String,
     pub identity_store_id: String,
@@ -9,7 +10,7 @@ pub struct Instance {
     pub status: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionSet {
     pub arn: String,
     pub name: String,
@@ -21,7 +22,7 @@ pub struct PermissionSet {
     pub inline_policy: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountAssignment {
     pub id: String,
     pub instance_arn: String,
@@ -36,7 +37,7 @@ pub struct AccountAssignment {
     pub request_type: String,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct SsoAdminState {
     pub instances: DashMap<String, Instance>,
     pub permission_sets: DashMap<String, PermissionSet>,

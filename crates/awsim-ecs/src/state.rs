@@ -1,10 +1,11 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use dashmap::DashMap;
 use serde_json::Value;
 
 /// A task running in a cluster (does not actually run containers).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     pub task_arn: String,
     pub cluster_arn: String,
@@ -26,7 +27,7 @@ pub struct Task {
 }
 
 /// A service running in a cluster.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Service {
     pub service_name: String,
     pub service_arn: String,
@@ -64,7 +65,7 @@ pub struct Service {
 }
 
 /// An ECS cluster.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Cluster {
     pub name: String,
     pub arn: String,
@@ -78,7 +79,7 @@ pub struct Cluster {
 }
 
 /// A task definition revision.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskDefinition {
     pub family: String,
     pub revision: u32,
@@ -118,7 +119,7 @@ pub struct TaskDefinition {
 }
 
 /// A capacity provider.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CapacityProvider {
     pub name: String,
     pub arn: String,
@@ -126,7 +127,7 @@ pub struct CapacityProvider {
 }
 
 /// Per-account/region ECS state.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct EcsState {
     /// cluster name → Cluster
     pub clusters: DashMap<String, Cluster>,

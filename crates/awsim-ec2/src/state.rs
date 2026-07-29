@@ -1,8 +1,9 @@
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// EC2 state — per account+region.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Ec2State {
     pub vpcs: DashMap<String, Vpc>,
     pub subnets: DashMap<String, Subnet>,
@@ -22,7 +23,7 @@ pub struct Ec2State {
     pub subnet_next_host: DashMap<String, u32>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Vpc {
     pub vpc_id: String,
     pub cidr_block: String,
@@ -31,7 +32,7 @@ pub struct Vpc {
     pub tags: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Subnet {
     pub subnet_id: String,
     pub vpc_id: String,
@@ -41,7 +42,7 @@ pub struct Subnet {
     pub tags: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityGroup {
     pub group_id: String,
     pub group_name: String,
@@ -52,7 +53,7 @@ pub struct SecurityGroup {
     pub tags: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IpPermission {
     pub from_port: Option<i64>,
     pub to_port: Option<i64>,
@@ -64,18 +65,18 @@ pub struct IpPermission {
     pub user_id_group_pairs: Vec<UserIdGroupPair>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserIdGroupPair {
     pub group_id: String,
     pub user_id: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IpRange {
     pub cidr_ip: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InternetGateway {
     pub internet_gateway_id: String,
     /// VPC ID if attached, None if detached
@@ -83,7 +84,7 @@ pub struct InternetGateway {
     pub tags: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RouteTable {
     pub route_table_id: String,
     pub vpc_id: String,
@@ -93,21 +94,21 @@ pub struct RouteTable {
     pub tags: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Route {
     pub destination_cidr_block: String,
     pub gateway_id: Option<String>,
     pub state: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyPair {
     pub key_name: String,
     pub key_fingerprint: String,
     pub create_time: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Instance {
     pub instance_id: String,
     pub instance_type: String,
@@ -149,7 +150,7 @@ impl Instance {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Address {
     pub allocation_id: String,
     pub public_ip: String,

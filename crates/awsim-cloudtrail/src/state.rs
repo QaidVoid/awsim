@@ -10,7 +10,7 @@ use std::sync::Mutex;
 /// past the 90-day window.
 pub const EVENT_LOG_CAPACITY: usize = 10_000;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct CloudTrailState {
     pub trails: DashMap<String, Trail>,
     pub trail_status: DashMap<String, TrailStatus>,

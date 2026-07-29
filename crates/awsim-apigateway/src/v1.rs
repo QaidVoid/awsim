@@ -16,6 +16,7 @@
 //! Higher-fidelity REST APIs work (request/response models, integration
 //! responses, API keys, usage plans, etc.) is out of scope for now.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -29,7 +30,7 @@ use serde_json::{Value, json};
 use tracing::debug;
 use uuid::Uuid;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RestApi {
     pub id: String,
     pub name: String,
@@ -64,7 +65,7 @@ pub struct RestApi {
     pub request_validators: HashMap<String, RequestValidator>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Model {
     pub name: String,
     pub content_type: String,
@@ -72,7 +73,7 @@ pub struct Model {
     pub description: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestValidator {
     pub id: String,
     pub name: String,
@@ -80,7 +81,7 @@ pub struct RequestValidator {
     pub validate_request_parameters: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Resource {
     pub id: String,
     pub parent_id: String,
@@ -90,7 +91,7 @@ pub struct Resource {
     pub methods: HashMap<String, Method>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Method {
     pub http_method: String,
     pub authorization_type: String,
@@ -110,7 +111,7 @@ pub struct Method {
     pub request_validator_id: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Integration {
     pub r#type: String,
     pub http_method: String,
@@ -126,7 +127,7 @@ pub struct Integration {
     pub integration_responses: HashMap<String, IntegrationResponse>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntegrationResponse {
     pub status_code: String,
     /// Regex on the integration's raw output that picks this response.
@@ -142,7 +143,7 @@ pub struct IntegrationResponse {
     pub content_handling: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Stage {
     pub stage_name: String,
     pub deployment_id: String,
@@ -158,7 +159,7 @@ pub struct Stage {
     pub canary_settings: Option<CanarySettings>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CanarySettings {
     pub deployment_id: String,
     pub percent_traffic: f64,
@@ -166,14 +167,14 @@ pub struct CanarySettings {
     pub use_stage_cache: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Deployment {
     pub id: String,
     pub description: String,
     pub created_date: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Authorizer {
     pub id: String,
     pub name: String,
@@ -196,7 +197,7 @@ pub struct Authorizer {
 /// API key as stored. The `value` is the bearer string the SDK sends in
 /// `x-api-key`; the `id` is a short opaque handle the management API
 /// uses. Keys exist at the account+region level — not under any one API.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKey {
     pub id: String,
     pub value: String,
@@ -214,7 +215,7 @@ pub struct ApiKey {
 
 /// Usage plan grouping keys that share quota / throttle limits and a
 /// list of API stages they're allowed to call.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsagePlan {
     pub id: String,
     pub name: String,
@@ -224,19 +225,19 @@ pub struct UsagePlan {
     pub quota: Option<UsageQuota>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsagePlanApiStage {
     pub api_id: String,
     pub stage: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UsageThrottle {
     pub rate_limit: f64,
     pub burst_limit: u32,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UsageQuota {
     pub limit: u32,
     pub period: String,
@@ -245,7 +246,7 @@ pub struct UsageQuota {
 
 /// Edge linking an `ApiKey` (by id) to a `UsagePlan` (by id). One ApiKey
 /// can belong to multiple plans; one plan holds many keys.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsagePlanKey {
     pub id: String,
     pub key_id: String,
@@ -253,10 +254,13 @@ pub struct UsagePlanKey {
     pub usage_plan_id: String,
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct ApiGatewayV1State {
     pub apis: DashMap<String, RestApi>,
     /// Cache of authorizer decisions, keyed by `(authorizer_id, identity)`.
+    /// Not persisted: a restored stale allow/deny would be worse than a
+    /// cold cache, and it is rebuilt from live requests anyway.
+    #[serde(skip)]
     pub authorizer_cache: crate::authorizer::AuthorizerCache,
     /// API keys keyed by their opaque `id`.
     pub api_keys: DashMap<String, ApiKey>,
@@ -636,6 +640,14 @@ impl ServiceHandler for ApiGatewayV1Service {
             "DeleteUsagePlanKey" => delete_usage_plan_key(&state, &input),
             _ => Err(AwsError::unknown_operation(operation)),
         }
+    }
+
+    fn snapshot(&self) -> Option<Vec<u8>> {
+        awsim_core::snapshot_store(&self.store)
+    }
+
+    fn restore(&self, data: &[u8]) -> Result<(), String> {
+        awsim_core::restore_store(&self.store, data)
     }
 }
 

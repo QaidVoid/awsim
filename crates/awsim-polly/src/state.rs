@@ -1,13 +1,14 @@
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Lexicon {
     pub name: String,
     pub content: String,
     pub last_modified: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpeechSynthesisTask {
     pub task_id: String,
     pub status: String,
@@ -18,7 +19,7 @@ pub struct SpeechSynthesisTask {
     pub created_at: u64,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct PollyState {
     pub lexicons: DashMap<String, Lexicon>,
     pub tasks: DashMap<String, SpeechSynthesisTask>,

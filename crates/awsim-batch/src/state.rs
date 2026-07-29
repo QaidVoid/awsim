@@ -1,7 +1,8 @@
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComputeEnvironment {
     pub name: String,
     pub arn: String,
@@ -12,7 +13,7 @@ pub struct ComputeEnvironment {
     pub service_role: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobQueue {
     pub name: String,
     pub arn: String,
@@ -22,7 +23,7 @@ pub struct JobQueue {
     pub compute_environment_order: Value,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobDefinition {
     pub name: String,
     pub arn: String,
@@ -32,7 +33,7 @@ pub struct JobDefinition {
     pub status: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Job {
     pub id: String,
     pub name: String,
@@ -42,7 +43,7 @@ pub struct Job {
     pub created_at: u64,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct BatchState {
     pub compute_environments: DashMap<String, ComputeEnvironment>,
     pub job_queues: DashMap<String, JobQueue>,

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct OrganizationsState {
     pub organization: std::sync::RwLock<Option<Organization>>,
     pub accounts: DashMap<String, Account>,

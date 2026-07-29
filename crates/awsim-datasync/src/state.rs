@@ -1,7 +1,8 @@
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Location {
     pub arn: String,
     pub uri: String,
@@ -10,7 +11,7 @@ pub struct Location {
     pub created_at: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     pub arn: String,
     pub name: String,
@@ -21,7 +22,7 @@ pub struct Task {
     pub created_at: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskExecution {
     pub arn: String,
     pub task_arn: String,
@@ -29,7 +30,7 @@ pub struct TaskExecution {
     pub started_at: u64,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct DataSyncState {
     pub locations: DashMap<String, Location>,
     pub tasks: DashMap<String, Task>,

@@ -85,4 +85,12 @@ impl ServiceHandler for OrganizationsService {
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
+
+    fn snapshot(&self) -> Option<Vec<u8>> {
+        awsim_core::snapshot_store(&self.store)
+    }
+
+    fn restore(&self, data: &[u8]) -> Result<(), String> {
+        awsim_core::restore_store(&self.store, data)
+    }
 }

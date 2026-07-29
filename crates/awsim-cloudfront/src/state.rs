@@ -1,9 +1,10 @@
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
 /// CloudFront state — global per account (region-independent).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct CloudFrontState {
     pub distributions: DashMap<String, Distribution>,
     pub origin_access_controls: DashMap<String, OriginAccessControl>,
@@ -27,7 +28,7 @@ pub struct CloudFrontState {
     pub functions: DashMap<String, CloudFrontFunction>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OriginRequestPolicy {
     pub id: String,
     pub name: String,
@@ -36,7 +37,7 @@ pub struct OriginRequestPolicy {
     pub etag: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyGroup {
     pub id: String,
     pub name: String,
@@ -46,7 +47,7 @@ pub struct KeyGroup {
     pub etag: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublicKey {
     pub id: String,
     pub name: String,
@@ -57,7 +58,7 @@ pub struct PublicKey {
     pub etag: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FieldLevelEncryptionConfig {
     pub id: String,
     pub comment: String,
@@ -66,7 +67,7 @@ pub struct FieldLevelEncryptionConfig {
     pub etag: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RealtimeLogConfig {
     pub arn: String,
     pub name: String,
@@ -75,7 +76,7 @@ pub struct RealtimeLogConfig {
     pub end_points: Value,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CloudFrontFunction {
     pub name: String,
     pub stage: String,
@@ -85,7 +86,7 @@ pub struct CloudFrontFunction {
     pub etag: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Distribution {
     pub id: String,
     pub arn: String,
@@ -97,7 +98,7 @@ pub struct Distribution {
     pub etag: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DistributionConfig {
     pub origins: Vec<Origin>,
     pub default_cache_behavior: Value,
@@ -108,7 +109,7 @@ pub struct DistributionConfig {
     pub is_ipv6_enabled: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Origin {
     pub id: String,
     pub domain_name: String,
@@ -116,7 +117,7 @@ pub struct Origin {
     pub custom_origin_config: Option<Value>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OriginAccessControl {
     pub id: String,
     pub name: String,
@@ -128,7 +129,7 @@ pub struct OriginAccessControl {
 }
 
 /// Legacy CloudFront Origin Access Identity (OAI).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OriginAccessIdentity {
     pub id: String,
     pub s3_canonical_user_id: String,
@@ -137,7 +138,7 @@ pub struct OriginAccessIdentity {
 }
 
 /// A CloudFront invalidation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Invalidation {
     pub id: String,
     pub distribution_id: String,
@@ -148,7 +149,7 @@ pub struct Invalidation {
 }
 
 /// A CloudFront cache policy.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachePolicy {
     pub id: String,
     pub name: String,

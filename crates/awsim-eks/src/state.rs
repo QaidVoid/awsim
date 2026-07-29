@@ -73,7 +73,7 @@ impl NodegroupState {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct EksState {
     pub clusters: DashMap<String, Cluster>,
     pub nodegroups: DashMap<(String, String), Nodegroup>,
