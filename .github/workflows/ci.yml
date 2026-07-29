@@ -34,6 +34,15 @@ jobs:
       - name: Test
         run: cargo test
 
+      # Starts the real binary and sends every registered service a
+      # request. The in-tree tests drive an in-process router and never
+      # touch connection setup, which is how a build that panicked on
+      # its very first request once passed all of them.
+      - name: Smoke (every service answers)
+        run: |
+          cargo build --release --bin awsim
+          python3 xtask/smoke.py ./target/release/awsim
+
   ui:
     name: SvelteKit UI
     runs-on: ubuntu-latest
