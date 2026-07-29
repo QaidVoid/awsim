@@ -124,6 +124,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # Concurrency
 dashmap = { version = "6", features = ["serde"] }
+ciborium = "0.2"
 
 r2d2 = "0.8"
 r2d2_sqlite = "0.25"

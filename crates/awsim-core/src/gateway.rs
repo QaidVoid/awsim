@@ -1049,6 +1049,20 @@ fn extract_service_info(
         }
     }
 
+    // 2b. Smithy rpcv2Cbor path: /service/{Service}/operation/{Operation}.
+    //     The service segment uses the same naming as an X-Amz-Target
+    //     prefix, so the existing mapping resolves it.
+    if let Some(smithy_service) = crate::protocol::service_from_rpcv2_path(uri.path())
+        && let Some(service) = resolve_service_from_target(&smithy_service)
+    {
+        return (
+            service,
+            state.default_region.clone(),
+            state.default_account_id.clone(),
+            None,
+        );
+    }
+
     // 3. X-Amz-Target header. AwsJson services (DynamoDB, Cognito, ...).
     if let Some(target) = headers.get("x-amz-target").and_then(|v| v.to_str().ok())
         && let Some(service) = resolve_service_from_target(target)

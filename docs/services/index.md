@@ -4,6 +4,19 @@ AWSim registers 60+ AWS services. All services share the same endpoint at `http:
 
 The service is selected automatically from the `X-Amz-Target` header (for JSON/Query protocols) or the URL path (for REST protocols).
 
+## CBOR
+
+AWSim accepts CBOR request bodies as well as JSON, in both dialects AWS uses:
+
+| Dialect | How it arrives | Who sends it |
+|---|---|---|
+| Legacy AWS CBOR | `Content-Type: application/x-amz-cbor-1.1` plus `X-Amz-Target` | AWS SDK for Java v1, which defaults to CBOR for DynamoDB and Kinesis |
+| Smithy rpcv2Cbor | `smithy-protocol: rpc-v2-cbor`, routed at `/service/{Service}/operation/{Operation}` | Newer SDKs negotiating the Smithy protocol |
+
+Detection is per request and driven entirely by headers, so nothing changes for existing JSON clients. Responses are encoded in the same format as the request, with errors carrying the same `__type` code and `x-amzn-RequestId` header the JSON path returns.
+
+Binary values round-trip correctly: a DynamoDB `B` or `BS` attribute arrives as a CBOR byte string and goes back out as one, rather than leaking the base64 form that the JSON protocols use internally.
+
 ## Service Table
 
 | Service | Signing Name | Protocol | Persistent | Operations | Description |
