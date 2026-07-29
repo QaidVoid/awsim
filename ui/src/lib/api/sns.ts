@@ -137,17 +137,52 @@ export async function getTopicAttributes(
   };
 }
 
+export interface CreateTopicOptions {
+  fifo?: boolean;
+  /** Human-readable name, and the "From" line on SMS deliveries. */
+  displayName?: string;
+  /** FIFO only: derive the deduplication id from the message body. */
+  contentBasedDeduplication?: boolean;
+  /** KMS key id, ARN, or alias for server-side encryption. */
+  kmsMasterKeyId?: string;
+  /** JSON access policy document. */
+  policy?: string;
+  /** JSON delivery retry policy for HTTP/S subscriptions. */
+  deliveryPolicy?: string;
+  tags?: Record<string, string>;
+}
+
 export async function createTopic(
   name: string,
-  fifo = false,
+  options: boolean | CreateTopicOptions = {},
 ): Promise<{ topicArn: string }> {
+  // The old signature took a bare `fifo` boolean; callers still pass one.
+  const opts: CreateTopicOptions =
+    typeof options === "boolean" ? { fifo: options } : options;
+  const fifo = opts.fifo ?? false;
   const params: Record<string, string> = {
     Name: fifo ? (name.endsWith(".fifo") ? name : `${name}.fifo`) : name,
   };
-  if (fifo) {
-    params["Attributes.entry.1.key"] = "FifoTopic";
-    params["Attributes.entry.1.value"] = "true";
-  }
+
+  const attributes: Record<string, string> = {};
+  if (fifo) attributes["FifoTopic"] = "true";
+  if (fifo && opts.contentBasedDeduplication)
+    attributes["ContentBasedDeduplication"] = "true";
+  if (opts.displayName) attributes["DisplayName"] = opts.displayName;
+  if (opts.kmsMasterKeyId) attributes["KmsMasterKeyId"] = opts.kmsMasterKeyId;
+  if (opts.policy) attributes["Policy"] = opts.policy;
+  if (opts.deliveryPolicy) attributes["DeliveryPolicy"] = opts.deliveryPolicy;
+  // AwsQuery encodes a map as numbered entry key/value pairs, 1-based.
+  Object.entries(attributes).forEach(([k, v], i) => {
+    params[`Attributes.entry.${i + 1}.key`] = k;
+    params[`Attributes.entry.${i + 1}.value`] = v;
+  });
+
+  Object.entries(opts.tags ?? {}).forEach(([k, v], i) => {
+    params[`Tags.member.${i + 1}.Key`] = k;
+    params[`Tags.member.${i + 1}.Value`] = v;
+  });
+
   const xml = await request("CreateTopic", params);
   return { topicArn: xmlValue(xml, "TopicArn") };
 }

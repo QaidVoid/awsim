@@ -77,7 +77,70 @@ export async function listBuckets(): Promise<Bucket[]> {
   return buckets;
 }
 
-export async function createBucket(name: string): Promise<void> {
+export interface CreateBucketOptions {
+  /** Keep every version of an object rather than overwriting in place. */
+  versioning?: boolean;
+  /** "AES256" for SSE-S3, "aws:kms" for SSE-KMS, omitted for none. */
+  encryption?: "AES256" | "aws:kms";
+  /** KMS key id or ARN. Only meaningful with `encryption: "aws:kms"`. */
+  kmsKeyId?: string;
+  /**
+   * Object Lock can only be turned on while creating the bucket, and it
+   * forces versioning on.
+   */
+  objectLock?: boolean;
+  /** Refuse public access grants at the bucket level. */
+  blockPublicAccess?: boolean;
+  tags?: Record<string, string>;
+}
+
+function xmlEscape(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+export async function putPublicAccessBlock(
+  bucket: string,
+  blocked: boolean,
+): Promise<void> {
+  const flag = blocked ? "true" : "false";
+  const xml =
+    "<PublicAccessBlockConfiguration>" +
+    `<BlockPublicAcls>${flag}</BlockPublicAcls>` +
+    `<IgnorePublicAcls>${flag}</IgnorePublicAcls>` +
+    `<BlockPublicPolicy>${flag}</BlockPublicPolicy>` +
+    `<RestrictPublicBuckets>${flag}</RestrictPublicBuckets>` +
+    "</PublicAccessBlockConfiguration>";
+  const headers = s3Headers();
+  headers["Content-Type"] = "application/xml";
+  const res = await loggedFetch(
+    "s3",
+    "PutPublicAccessBlock",
+    "PUT",
+    `${ENDPOINT}/${encodeURIComponent(bucket)}?publicAccessBlock`,
+    { method: "PUT", headers, body: xml },
+  );
+  if (!res.ok)
+    throw new Error(
+      `PutPublicAccessBlock failed: HTTP ${res.status}: ${await res.text()}`,
+    );
+}
+
+/**
+ * Create a bucket, then apply any settings that S3 exposes as separate
+ * calls. Object Lock is the exception: it is a header on the create
+ * itself because S3 offers no way to enable it later.
+ */
+export async function createBucket(
+  name: string,
+  options: CreateBucketOptions = {},
+): Promise<void> {
+  const headers = s3Headers();
+  if (options.objectLock)
+    headers["x-amz-bucket-object-lock-enabled"] = "true";
   const res = await loggedFetch(
     "s3",
     "CreateBucket",
@@ -85,13 +148,26 @@ export async function createBucket(name: string): Promise<void> {
     `${ENDPOINT}/${encodeURIComponent(name)}`,
     {
       method: "PUT",
-      headers: s3Headers(),
+      headers,
     },
   );
   if (!res.ok)
     throw new Error(
       `CreateBucket failed: HTTP ${res.status}: ${await res.text()}`,
     );
+
+  // Object Lock already enabled versioning, and S3 rejects a redundant
+  // suspend, so only send versioning when it was asked for on its own.
+  if (options.versioning && !options.objectLock)
+    await putBucketVersioning(name, "Enabled");
+  if (options.encryption)
+    await putBucketEncryption(name, options.encryption, options.kmsKeyId);
+  if (options.blockPublicAccess) await putPublicAccessBlock(name, true);
+  const tags = Object.entries(options.tags ?? {}).map(([key, value]) => ({
+    key,
+    value,
+  }));
+  if (tags.length > 0) await putBucketTagging(name, tags);
 }
 
 export async function deleteBucket(name: string): Promise<void> {
@@ -510,6 +586,7 @@ export async function putBucketVersioning(
 export interface EncryptionConfig {
   enabled: boolean;
   algorithm: string;
+  kmsKeyId?: string;
 }
 
 export async function getBucketEncryption(
@@ -525,15 +602,26 @@ export async function getBucketEncryption(
   if (res.status === 404 || res.status === 204) return { enabled: false, algorithm: "" };
   if (!res.ok) return { enabled: false, algorithm: "" };
   const text = await res.text();
-  const algo = /<Algorithm>([^<]+)<\/Algorithm>/.exec(text)?.[1] ?? "";
-  return { enabled: true, algorithm: algo };
+  // S3 names the element SSEAlgorithm. `Algorithm` is only read so that
+  // buckets configured by an older build of this UI still display.
+  const algo =
+    /<SSEAlgorithm>([^<]+)<\/SSEAlgorithm>/.exec(text)?.[1] ??
+    /<Algorithm>([^<]+)<\/Algorithm>/.exec(text)?.[1] ??
+    "";
+  const kmsKeyId = /<KMSMasterKeyID>([^<]*)<\/KMSMasterKeyID>/.exec(text)?.[1];
+  return { enabled: true, algorithm: algo, kmsKeyId };
 }
 
 export async function putBucketEncryption(
   bucket: string,
   algorithm = "AES256",
+  kmsKeyId?: string,
 ): Promise<void> {
-  const xml = `<ServerSideEncryptionConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Rule><ApplyServerSideEncryptionByDefault><Algorithm>${algorithm}</Algorithm></ApplyServerSideEncryptionByDefault></Rule></ServerSideEncryptionConfiguration>`;
+  const keyElement =
+    algorithm === "aws:kms" && kmsKeyId
+      ? `<KMSMasterKeyID>${xmlEscape(kmsKeyId)}</KMSMasterKeyID>`
+      : "";
+  const xml = `<ServerSideEncryptionConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Rule><ApplyServerSideEncryptionByDefault><SSEAlgorithm>${algorithm}</SSEAlgorithm>${keyElement}</ApplyServerSideEncryptionByDefault></Rule></ServerSideEncryptionConfiguration>`;
   const headers = s3Headers();
   headers["Content-Type"] = "application/xml";
   const res = await loggedFetch(
@@ -594,7 +682,7 @@ export async function putBucketTagging(
 ): Promise<void> {
   let xml = '<Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><TagSet>';
   for (const t of tags) {
-    xml += `<Tag><Key>${t.key}</Key><Value>${t.value}</Value></Tag>`;
+    xml += `<Tag><Key>${xmlEscape(t.key)}</Key><Value>${xmlEscape(t.value)}</Value></Tag>`;
   }
   xml += "</TagSet></Tagging>";
   const headers = s3Headers();

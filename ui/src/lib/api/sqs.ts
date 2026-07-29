@@ -72,6 +72,17 @@ export interface CreateQueueInput {
   messageRetentionPeriod?: number;
   delaySeconds?: number;
   receiveMessageWaitTimeSeconds?: number;
+  /** Bytes, 1 KiB to 256 KiB. */
+  maximumMessageSize?: number;
+  /** ARN of the queue that receives messages past maxReceiveCount. */
+  deadLetterTargetArn?: string;
+  /** Receives before a message is moved to the dead-letter queue. */
+  maxReceiveCount?: number;
+  /** High-throughput FIFO: "messageGroup" or "queue". */
+  deduplicationScope?: string;
+  /** High-throughput FIFO: "perMessageGroupId" or "perQueue". */
+  fifoThroughputLimit?: string;
+  tags?: Record<string, string>;
 }
 
 // ---------- Internal request helper ----------
@@ -195,8 +206,23 @@ export async function createQueue(
     attributes["ReceiveMessageWaitTimeSeconds"] = String(
       input.receiveMessageWaitTimeSeconds,
     );
+  if (input.maximumMessageSize !== undefined)
+    attributes["MaximumMessageSize"] = String(input.maximumMessageSize);
+  // A redrive policy is one JSON-encoded attribute, not two fields.
+  if (input.deadLetterTargetArn) {
+    attributes["RedrivePolicy"] = JSON.stringify({
+      deadLetterTargetArn: input.deadLetterTargetArn,
+      maxReceiveCount: input.maxReceiveCount ?? 10,
+    });
+  }
+  if (input.fifo && input.deduplicationScope)
+    attributes["DeduplicationScope"] = input.deduplicationScope;
+  if (input.fifo && input.fifoThroughputLimit)
+    attributes["FifoThroughputLimit"] = input.fifoThroughputLimit;
   const params: Record<string, unknown> = { QueueName: name };
   if (Object.keys(attributes).length > 0) params["Attributes"] = attributes;
+  if (input.tags && Object.keys(input.tags).length > 0)
+    params["tags"] = input.tags;
   const data = await request<{ QueueUrl?: string }>("CreateQueue", params);
   return { queueUrl: data.QueueUrl ?? "" };
 }
