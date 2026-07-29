@@ -43,6 +43,16 @@ jobs:
           cargo build --release --bin awsim
           python3 xtask/smoke.py ./target/release/awsim
 
+      # A response field emitted under the SDK's model name instead of
+      # its wire name parses as absent, which no in-tree test can see:
+      # the handler and the assertion agree with each other and both
+      # disagree with every real client.
+      - name: Wire names match the SDK models
+        run: |
+          pip install --quiet botocore
+          python3 xtask/wire_shape_check.py \
+            --models "$(python3 -c 'import botocore, os; print(os.path.join(os.path.dirname(botocore.__file__), "data"))')"
+
   ui:
     name: SvelteKit UI
     runs-on: ubuntu-latest
@@ -58,4 +68,4 @@ jobs:
         run: cd ui && bun run build
 
       - name: Type check
-        run: cd ui && bun run check || true
+        run: cd ui && bun run check
