@@ -136,7 +136,7 @@ fn etag_list_matches(header: &str, etag: &str) -> bool {
 /// Evaluate RFC 7232 conditional headers (`If-Match`, `If-None-Match`,
 /// `If-Modified-Since`, `If-Unmodified-Since`) for a GET or HEAD request.
 ///
-/// Per RFC 7232 §6 and the S3 documentation, `If-Match` takes precedence
+/// Per RFC 7232 section 6 and the S3 documentation, `If-Match` takes precedence
 /// over `If-Unmodified-Since` (the latter is ignored when the former is
 /// present), and `If-None-Match` takes precedence over `If-Modified-Since`.
 fn check_get_conditions(obj: &S3Object, input: &Value) -> Result<ConditionOutcome, AwsError> {
@@ -215,7 +215,7 @@ pub fn record_version(versions: &mut ObjectVersions, obj: S3Object, status: &Ver
 }
 
 /// Build the BodyStore "key" used to persist a single object version. Each
-/// version gets its own blob — keying by `{key}@v={version_id_or_null}` keeps
+/// version gets its own blob. Keying by `{key}@v={version_id_or_null}` keeps
 /// historical bodies recoverable across snapshot/restore.
 pub(crate) fn versioned_blob_key(key: &str, version_id: Option<&str>) -> String {
     let marker = version_id.unwrap_or("null");
@@ -239,9 +239,9 @@ fn version_id_input(input: &Value) -> Option<&str> {
 ///
 /// AWS validates that the base64-decoded value has the right length for
 /// the named algorithm:
-///   CRC32 / CRC32C → 4 bytes (base64 `XXXXXXXX`, with `=` padding)
-///   SHA1            → 20 bytes
-///   SHA256          → 32 bytes
+///   CRC32 / CRC32C -> 4 bytes (base64 `XXXXXXXX`, with `=` padding)
+///   SHA1            -> 20 bytes
+///   SHA256          -> 32 bytes
 /// Parse the AWS `Tagging` querystring (`k1=v1&k2=v2`) into a tag map.
 /// Empty values are accepted; malformed segments (missing `=`) are
 /// skipped. Used by CopyObject's TaggingDirective=REPLACE path.
@@ -521,7 +521,7 @@ fn split_copy_source_version(raw: &str) -> (&str, Option<&str>) {
 }
 
 /// Look up an object respecting an optional caller-supplied VersionId. Returns
-/// the matched entry (which may itself be a delete marker — callers decide how
+/// the matched entry (which may itself be a delete marker. Callers decide how
 /// to react). When no VersionId is supplied, returns the latest non-DM entry.
 fn resolve_version<'a>(
     versions: &'a ObjectVersions,
@@ -561,7 +561,7 @@ fn resolve_or_delete_marker<'a>(
     }
 }
 
-/// PUT /{Bucket}/{Key+} — store an object.
+/// PUT /{Bucket}/{Key+}. Store an object.
 /// If `x-amz-copy-source` header is present, this is a CopyObject.
 pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
     // CopyObject is distinguished by the CopySource header.
@@ -732,7 +732,7 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
         };
 
         // Suspended / Disabled buckets overwrite the existing null-slot
-        // blob — purge it before we record the new version so the stale
+        // blob. Purge it before we record the new version so the stale
         // file doesn't linger.
         if !matches!(status, VersioningStatus::Enabled)
             && let Some(store) = state.body_store()
@@ -816,7 +816,7 @@ fn inject_stored_sse_fields(result: &mut Value, obj: &S3Object) {
     }
 }
 
-/// GET /{Bucket}/{Key+} — retrieve object data, optionally a specific version.
+/// GET /{Bucket}/{Key+}. Retrieve object data, optionally a specific version.
 pub fn get_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
     super::check_expected_bucket_owner(input, ctx)?;
     let bucket_name = require_str(input, "Bucket")?;
@@ -911,7 +911,7 @@ pub fn get_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
     Ok(result)
 }
 
-/// HEAD /{Bucket}/{Key+} — return object metadata only.
+/// HEAD /{Bucket}/{Key+}. Return object metadata only.
 pub fn head_object(
     state: &S3State,
     input: &Value,
@@ -992,14 +992,14 @@ fn delete_marker_object(key: &str, version_id: Option<String>) -> S3Object {
     }
 }
 
-/// DELETE /{Bucket}/{Key+} — delete an object.
+/// DELETE /{Bucket}/{Key+}. Delete an object.
 ///
 /// Behaviour depends on bucket versioning and whether `VersionId` is supplied:
-///   * With `VersionId` — permanently remove that single version.
-///   * Without, on Enabled bucket — append a delete marker (DeleteMarker=true).
-///   * Without, on Suspended bucket — overwrite the `null`-version slot with
+///   * With `VersionId`. Permanently remove that single version.
+///   * Without, on Enabled bucket. Append a delete marker (DeleteMarker=true).
+///   * Without, on Suspended bucket. Overwrite the `null`-version slot with
 ///     a delete marker.
-///   * Without, on Disabled bucket — drop the (single) version entirely.
+///   * Without, on Disabled bucket. Drop the (single) version entirely.
 pub fn delete_object(
     state: &S3State,
     input: &Value,
@@ -1033,7 +1033,7 @@ pub fn delete_object(
     let mut response = json!({});
 
     if let Some(vid) = requested_version {
-        // Permanent per-version delete — succeeds (no-op) when the VersionId
+        // Permanent per-version delete. Succeeds (no-op) when the VersionId
         // is unknown, matching real DynamoDB / S3 behaviour.
         let removed = if let Some(mut versions) = bucket.objects.get_mut(key) {
             let removed = versions.remove(vid);
@@ -1107,7 +1107,7 @@ pub fn delete_object(
     Ok(response)
 }
 
-/// PUT /{Bucket}/{Key+} with x-amz-copy-source — copy an object.
+/// PUT /{Bucket}/{Key+} with x-amz-copy-source. Copy an object.
 fn copy_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
     super::check_expected_bucket_owner(input, ctx)?;
     // CopyObject also accepts ExpectedSourceBucketOwner; treat the
@@ -1222,8 +1222,8 @@ fn copy_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Result<V
     // MetadataDirective controls whether the destination's user metadata
     // and Content-* fields come from the source (COPY, default) or from
     // the request itself (REPLACE). Per AWS:
-    //   COPY     — ignore request metadata; carry source metadata over
-    //   REPLACE  — drop source metadata; use only what the request supplies
+    //   COPY. Ignore request metadata; carry source metadata over
+    //   REPLACE. Drop source metadata; use only what the request supplies
     let metadata_directive = opt_str(input, "MetadataDirective").unwrap_or("COPY");
     let (
         content_type,
@@ -1360,7 +1360,7 @@ fn copy_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Result<V
     Ok(result)
 }
 
-// ─── Range handling ──────────────────────────────────────────────────────────
+// --- Range handling ----------------------------------------------------------
 
 /// Parse a `Range: bytes=start-end` header and return the data slice + Content-Range string.
 fn apply_range<'a>(
@@ -1382,7 +1382,7 @@ fn apply_range<'a>(
 
     // A range request against a zero-byte object is treated as a non-range
     // GET (HTTP 200, full empty body) rather than 416. This matches AWS
-    // behavior — the entire object IS what was requested.
+    // behavior. The entire object IS what was requested.
     if data.is_empty() {
         return Ok((data, None));
     }
@@ -1434,7 +1434,7 @@ fn apply_range<'a>(
     Ok((slice, Some(content_range)))
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// --- Helpers -----------------------------------------------------------------
 
 pub fn no_such_key(key: &str) -> AwsError {
     AwsError::not_found(
@@ -1497,7 +1497,7 @@ mod tests {
 
     #[test]
     fn put_object_assigns_version_id_only_when_versioning_enabled() {
-        // Versioning Disabled — no VersionId in response.
+        // Versioning Disabled. No VersionId in response.
         let mut bucket = Bucket::new("plain", "us-east-1", "now");
         bucket.versioning = VersioningStatus::Disabled;
         let state = state_with(bucket);
@@ -1509,7 +1509,7 @@ mod tests {
         .unwrap();
         assert!(resp.get("VersionId").is_none(), "expected no VersionId");
 
-        // Versioning Enabled — distinct VersionId per put.
+        // Versioning Enabled. Distinct VersionId per put.
         let mut bucket = Bucket::new("vbucket", "us-east-1", "now");
         bucket.versioning = VersioningStatus::Enabled;
         let state = state_with(bucket);
@@ -1729,8 +1729,8 @@ mod tests {
 
     #[test]
     fn if_match_takes_precedence_over_if_unmodified_since() {
-        // Per RFC 7232 §6: when If-Match succeeds, If-Unmodified-Since must
-        // be ignored — even if the object was modified after the supplied
+        // Per RFC 7232 section 6: when If-Match succeeds, If-Unmodified-Since must
+        // be ignored. Even if the object was modified after the supplied
         // timestamp.
         let bucket = Bucket::new("b", "us-east-1", "now");
         let state = state_with(bucket);
@@ -1742,7 +1742,7 @@ mod tests {
                 "Bucket": "b",
                 "Key": "k",
                 "IfMatch": etag,
-                // Far in the past — would normally fail If-Unmodified-Since.
+                // Far in the past. Would normally fail If-Unmodified-Since.
                 "IfUnmodifiedSince": "Thu, 01 Jan 1970 00:00:00 GMT",
             }),
             &ctx(),
@@ -1794,7 +1794,7 @@ mod tests {
     fn put_object_rejects_checksum_with_wrong_decoded_length() {
         let bucket = Bucket::new("b", "us-east-1", "now");
         let state = state_with(bucket);
-        // 16 bytes base64-encoded — not 32, so SHA256 length check fails.
+        // 16 bytes base64-encoded. Not 32, so SHA256 length check fails.
         let too_short = "AAAAAAAAAAAAAAAAAAAAAAAA";
         let err = put_object(
             &state,
@@ -1854,7 +1854,7 @@ mod tests {
             .unwrap();
         assert_eq!(body, b"hello");
         // Stored content length matches the decoded payload, not the framed
-        // bytes — the chunk framing was stripped before storage.
+        // bytes. The chunk framing was stripped before storage.
         assert_eq!(got["ContentLength"].as_u64(), Some(5));
     }
 
@@ -2073,7 +2073,7 @@ mod tests {
             &ctx(),
         )
         .unwrap();
-        // No 206 → returned as a normal 200 (no __status_code).
+        // No 206 -> returned as a normal 200 (no __status_code).
         assert!(resp.get("__status_code").is_none());
         // Empty body.
         let body = base64::engine::general_purpose::STANDARD

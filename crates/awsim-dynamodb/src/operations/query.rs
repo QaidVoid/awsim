@@ -23,7 +23,7 @@ use crate::operations::item::{estimate_item_bytes, item_to_json};
 /// AWS DynamoDB caps `Query` / `Scan` responses at 1 MiB regardless of
 /// `Limit`. Real clients are written to handle pagination via
 /// `LastEvaluatedKey`, so enforcing the same cap keeps both wire
-/// compatibility and our process memory bounded — without it a single
+/// compatibility and our process memory bounded. Without it a single
 /// "fetch the whole partition" call materializes the entire table in
 /// memory as `serde_json::Value` trees.
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
@@ -177,7 +177,7 @@ pub fn query(
     let table_name = require_str(input, "TableName")?;
     validate_expr_attr_values(input)?;
 
-    // Schema still comes from the in-memory cache during stage 3 — table
+    // Schema still comes from the in-memory cache during stage 3. Table
     // metadata moves to SQLite in stage 4.
     let table = state.tables.get(table_name).ok_or_else(|| {
         AwsError::service_not_found(
@@ -224,7 +224,7 @@ pub fn query(
 
     // Resolve which key schema applies. With IndexName, GSI/LSI metadata
     // names different attributes than the base table; we look up the
-    // index and pull its hash/range key names. Unknown index → 400 (AWS
+    // index and pull its hash/range key names. Unknown index -> 400 (AWS
     // raises ValidationException).
     //
     // We also capture the index's Projection setting so we can filter
@@ -283,7 +283,7 @@ pub fn query(
                     Some(hk.clone()),
                     rk.clone(),
                 );
-                (hk, rk, None, Some(proj)) // LSI uses base table's pk column → no slot
+                (hk, rk, None, Some(proj)) // LSI uses base table's pk column -> no slot
             } else {
                 return Err(AwsError::validation(format!(
                     "The table does not have the specified index: {idx}"
@@ -335,7 +335,7 @@ pub fn query(
 
     // Pull the partition key value out of the KeyConditionExpression so we
     // can push the partition lookup down to SQLite. DynamoDB requires the
-    // hash key in every Query, but our parser is conservative — if it
+    // hash key in every Query, but our parser is conservative. If it
     // can't find one we fall back to a full Scan-style sweep.
     let pk_value = extract_pk_from_condition(
         key_condition_expr,
@@ -391,14 +391,14 @@ pub fn query(
     let mut last_item: Option<DynamoItem> = None;
     let mut hit_limit = false;
 
-    // Drop the table guard before SQLite IO — the dashmap Ref pins a
+    // Drop the table guard before SQLite IO. The dashmap Ref pins a
     // shard, and we don't want to hold it across a blocking read.
     drop(table);
 
     let mut handle = |item: DynamoItem| -> Result<bool, AwsError> {
         // Key condition over typed attributes (covers sort key range,
         // BEGINS_WITH, BETWEEN, etc.). Items that fail the key condition
-        // are skipped silently — DynamoDB's index would never have
+        // are skipped silently. DynamoDB's index would never have
         // surfaced them, so they don't count toward ScannedCount either.
         if !evaluate_condition(&key_condition, &item, &expr_attr_names, &expr_attr_values)? {
             return Ok(true);
@@ -421,7 +421,7 @@ pub fn query(
             // AWS applies the GSI/LSI Projection BEFORE the request's own
             // ProjectionExpression: a KEYS_ONLY index can never surface a
             // non-key attribute even if the caller asks for it. The index
-            // view is also what the 1 MiB cap is charged against — examined
+            // view is also what the 1 MiB cap is charged against. Examined
             // bytes, not just matched bytes.
             let after_index = match &index_projection {
                 Some(p) => p.filter(&item),
@@ -436,7 +436,7 @@ pub fn query(
         }
 
         // The cursor advances for every evaluated item so LastEvaluatedKey
-        // lands on the last item examined, not the last one matched — which
+        // lands on the last item examined, not the last one matched. Which
         // is what AWS returns when a FilterExpression is present.
         last_item = Some(item);
 
@@ -502,7 +502,7 @@ pub fn query(
             )?;
         }
     } else {
-        // No usable hash-key constraint extracted — fall back to a full
+        // No usable hash-key constraint extracted. Fall back to a full
         // table scan (matches the legacy in-memory behaviour). Resume on the
         // base primary key, which is what scan_table orders by.
         let scan_start = exclusive_start_key.as_ref().and_then(|esk| {
@@ -648,7 +648,7 @@ pub fn scan(
         )?;
     }
 
-    // Translate ExclusiveStartKey → (pk, sk) tuple SQLite uses for
+    // Translate ExclusiveStartKey -> (pk, sk) tuple SQLite uses for
     // resume. Tables with no sort key encode sk as the empty string.
     let scan_start = exclusive_start_key.as_ref().and_then(|esk| {
         let pk = esk.get(&hash_key_name).and_then(extract_scalar_str)?;
@@ -675,7 +675,7 @@ pub fn scan(
         |pk, sk, attrs| {
             // Skip rows that don't belong to this segment so the worker
             // only sees its slice. We don't count skipped rows toward
-            // ScannedCount — they belong to another worker's count.
+            // ScannedCount. They belong to another worker's count.
             if let Some((segment, total)) = segmenting
                 && segment_index(pk, sk, total) != segment
             {
@@ -797,7 +797,7 @@ fn parse_segments(input: &Value) -> Result<Option<(u32, u32)>, AwsError> {
     }
 }
 
-/// Hash `(pk, sk)` into `[0, total)`. Uses Rust's default hasher — the
+/// Hash `(pk, sk)` into `[0, total)`. Uses Rust's default hasher. The
 /// only requirement is that the same row maps to the same segment for
 /// every worker, which DefaultHasher satisfies within a single process.
 fn segment_index(pk: &str, sk: &str, total: u32) -> u32 {
@@ -902,7 +902,7 @@ fn validate_key_condition(
         } => validation_err("KeyConditionExpressions must not contain 'OR'"),
         ConditionExpr::Not(_) => validation_err("KeyConditionExpressions must not contain 'NOT'"),
         // BeginsWith / Between / In / Contains / attribute_exists / etc. on
-        // their own — the partition-key Eq clause is missing.
+        // their own. The partition-key Eq clause is missing.
         _ => validation_err(&format!(
             "Query condition missed key schema element: {hash_key_name}"
         )),
@@ -917,7 +917,7 @@ fn validate_single_pk_clause(
     hash_key_name: &str,
 ) -> Result<(), AwsError> {
     let Some(name) = operand_resolved_name(left, expr_attr_names) else {
-        // `:v = :w` style — no key path at all.
+        // `:v = :w` style. No key path at all.
         return validation_err(&format!(
             "Query condition missed key schema element: {hash_key_name}"
         ));

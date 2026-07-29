@@ -206,8 +206,8 @@ fn parse_lsi(input: &Value) -> Vec<LocalSecondaryIndex> {
 ///
 /// `item_count` is the live row count from the SQLite store. We pass it
 /// explicitly instead of querying inside `table_description` so the caller
-/// can choose whether to pay the count query (it's cheap — covered by the
-/// PRIMARY KEY index — but `ListTables` etc. don't need it).
+/// can choose whether to pay the count query (it's cheap. Covered by the
+/// PRIMARY KEY index. But `ListTables` etc. don't need it).
 pub fn table_description(table: &Table, item_count: u64) -> Value {
     let key_schema: Vec<Value> = table
         .key_schema
@@ -300,7 +300,7 @@ pub fn table_description(table: &Table, item_count: u64) -> Value {
     }
 
     // AWS only emits SSEDescription when customer-managed SSE is on.
-    // Default AWS-owned-key encryption is implicit and silent — match
+    // Default AWS-owned-key encryption is implicit and silent. Match
     // that so SDK round-tripping is faithful.
     if table.sse.enabled {
         let mut sse_desc = json!({
@@ -317,7 +317,7 @@ pub fn table_description(table: &Table, item_count: u64) -> Value {
 }
 
 /// Parse a `ProvisionedThroughput` block. Returns `(read, write)`
-/// in capacity units. Missing block / fields default to 0 — that
+/// in capacity units. Missing block / fields default to 0. That
 /// matches the AWS shape where PAY_PER_REQUEST tables report 0/0.
 fn parse_provisioned_throughput(spec: Option<&Value>) -> (u64, u64) {
     let Some(spec) = spec else { return (0, 0) };
@@ -520,7 +520,7 @@ pub fn create_table(
         write_capacity_units,
     };
 
-    // Brand new table — item count is always 0, no need to query SQLite.
+    // Brand new table. Item count is always 0, no need to query SQLite.
     let desc = table_description(&table, 0);
 
     // Mirror the schema to SQLite so future reads (and a process restart
@@ -535,7 +535,7 @@ pub fn create_table(
     Ok(json!({ "TableDescription": desc }))
 }
 
-/// `TruncateTable` — awsim-only op. Wipes every item in a table while
+/// `TruncateTable`. Awsim-only op. Wipes every item in a table while
 /// keeping the schema, GSIs, and stream config intact. Useful for the
 /// UI's "reset between tests" workflow; no equivalent in real DynamoDB
 /// (you'd have to DeleteTable + CreateTable, which loses streams).
@@ -921,9 +921,9 @@ fn reproject_gsi_columns(
     Ok(())
 }
 
-// ─── DescribeEndpoints ────────────────────────────────────────────────────────
+// --- DescribeEndpoints --------------------------------------------------------
 
-/// DescribeEndpoints — SDK endpoint discovery stub.
+/// DescribeEndpoints. SDK endpoint discovery stub.
 /// Returns a single local endpoint so the SDK's endpoint-discovery logic is
 /// satisfied without making external calls.
 pub fn describe_endpoints(
@@ -941,9 +941,9 @@ pub fn describe_endpoints(
     }))
 }
 
-// ─── Time-to-Live ─────────────────────────────────────────────────────────────
+// --- Time-to-Live -------------------------------------------------------------
 
-/// DescribeTimeToLive — Return current TTL configuration for a table.
+/// DescribeTimeToLive. Return current TTL configuration for a table.
 pub fn describe_time_to_live(
     state: &DynamoState,
     input: &Value,
@@ -972,7 +972,7 @@ pub fn describe_time_to_live(
     Ok(json!({ "TimeToLiveDescription": ttl_desc }))
 }
 
-/// UpdateTimeToLive — Enable or disable TTL on a table.
+/// UpdateTimeToLive. Enable or disable TTL on a table.
 pub fn update_time_to_live(
     state: &DynamoState,
     input: &Value,
@@ -1014,9 +1014,9 @@ pub fn update_time_to_live(
     }))
 }
 
-// ─── Tagging ─────────────────────────────────────────────────────────────────
+// --- Tagging -----------------------------------------------------------------
 
-/// TagResource — Add or overwrite tags on a table.
+/// TagResource. Add or overwrite tags on a table.
 pub fn tag_resource(
     state: &DynamoState,
     input: &Value,
@@ -1060,7 +1060,7 @@ pub fn tag_resource(
     Ok(json!({}))
 }
 
-/// UntagResource — Remove tags from a table.
+/// UntagResource. Remove tags from a table.
 pub fn untag_resource(
     state: &DynamoState,
     input: &Value,
@@ -1101,7 +1101,7 @@ pub fn untag_resource(
     Ok(json!({}))
 }
 
-/// ListTagsOfResource — List all tags on a table.
+/// ListTagsOfResource. List all tags on a table.
 pub fn list_tags_of_resource(
     state: &DynamoState,
     input: &Value,
@@ -1130,9 +1130,9 @@ pub fn list_tags_of_resource(
     Ok(json!({ "Tags": tags }))
 }
 
-// ─── DescribeLimits ───────────────────────────────────────────────────────────
+// --- DescribeLimits -----------------------------------------------------------
 
-/// DescribeLimits — Return default account-level DynamoDB limits.
+/// DescribeLimits. Return default account-level DynamoDB limits.
 /// Terraform calls this on every plan to check provisioned-throughput limits.
 pub fn describe_limits(
     _state: &DynamoState,
@@ -1147,14 +1147,14 @@ pub fn describe_limits(
     }))
 }
 
-// ─── Global Tables ────────────────────────────────────────────────────────────
+// --- Global Tables ------------------------------------------------------------
 //
 // AWSim doesn't perform cross-region replication. The global-table object is
-// metadata only — the source-of-truth for "does my Terraform / CDK think this
-// global table exists" — but reads and writes to the underlying tables stay
+// metadata only. The source-of-truth for "does my Terraform / CDK think this
+// global table exists". But reads and writes to the underlying tables stay
 // per-region. That matches what `awslocal` style emulators do.
 
-/// CreateGlobalTable — register a logical Global Table over per-region
+/// CreateGlobalTable. Register a logical Global Table over per-region
 /// replicas. Each named replica region must already host a table with the
 /// same name (real DynamoDB requires this), but for emulator ergonomics we
 /// only fail when the source region's table is missing.
@@ -1225,7 +1225,7 @@ pub fn create_global_table(
     }))
 }
 
-/// UpdateGlobalTable — apply Create / Delete replica updates in a single
+/// UpdateGlobalTable. Apply Create / Delete replica updates in a single
 /// request, mirroring the AWS shape where the caller posts a list of
 /// `ReplicaUpdates` containing `{Create: {RegionName}}` and / or
 /// `{Delete: {RegionName}}` entries.
@@ -1282,7 +1282,7 @@ pub fn update_global_table(
     }))
 }
 
-/// DescribeGlobalTable — return the stored metadata or
+/// DescribeGlobalTable. Return the stored metadata or
 /// GlobalTableNotFoundException.
 pub fn describe_global_table(
     state: &DynamoState,
@@ -1301,7 +1301,7 @@ pub fn describe_global_table(
     }))
 }
 
-/// ListGlobalTables — paginated by GlobalTableName, optionally filtered by
+/// ListGlobalTables. Paginated by GlobalTableName, optionally filtered by
 /// region (emulator returns only globals that include the given RegionName).
 pub fn list_global_tables(
     state: &DynamoState,
@@ -1376,7 +1376,7 @@ fn global_table_to_json(g: &crate::state::GlobalTable) -> Value {
     })
 }
 
-// ─── Contributor Insights ─────────────────────────────────────────────────────
+// --- Contributor Insights -----------------------------------------------------
 
 /// Key for the contributor-insights map: `{table}` or `{table}/{index}`.
 fn insights_key(table_name: &str, index_name: Option<&str>) -> String {

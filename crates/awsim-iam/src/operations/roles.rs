@@ -405,7 +405,7 @@ pub fn delete_role_permissions_boundary(
     Ok(json!({}))
 }
 
-// ── Inline policy read/delete ────────────────────────────────────────────────
+// -- Inline policy read/delete ------------------------------------------------
 
 pub fn get_role_policy(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let role_name = require_str(input, "RoleName")?;

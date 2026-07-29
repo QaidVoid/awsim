@@ -64,7 +64,7 @@ fn collect_id_param(input: &Value, key: &str) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
-// IP allocation — assigns from the subnet's CIDR base + a per-subnet cursor.
+// IP allocation. Assigns from the subnet's CIDR base + a per-subnet cursor.
 // ---------------------------------------------------------------------------
 
 /// Pick the next available private IP for an instance launching in `subnet`.
@@ -121,7 +121,7 @@ fn host_to_ip(base: u32, host: u32) -> String {
 
 /// Launch one or more EC2 instances inside a single reservation.
 ///
-/// Diverges from real EC2 in that the lifecycle is synchronous — instances
+/// Diverges from real EC2 in that the lifecycle is synchronous. Instances
 /// land in `running` immediately. The state machine is otherwise honored
 /// (Stop / Start / Reboot / Terminate transition cleanly), reservation
 /// grouping matches AWS, and IPs are allocated from the launch subnet's
@@ -211,7 +211,7 @@ pub fn run_instances(state: &Ec2State, input: &Value) -> Result<Value, AwsError>
 }
 
 // ---------------------------------------------------------------------------
-// DescribeInstances — groups instances by reservation, supports the common
+// DescribeInstances. Groups instances by reservation, supports the common
 // instance-state-name filter that aws-cli / boto3 reach for first.
 // ---------------------------------------------------------------------------
 
@@ -251,7 +251,7 @@ pub fn describe_instances(state: &Ec2State, input: &Value) -> Result<Value, AwsE
 }
 
 /// Parse `Filter.N.{Name,Value.N}` into a flat list of values for the
-/// `instance-state-name` filter only — that's the one tooling actually
+/// `instance-state-name` filter only. That's the one tooling actually
 /// uses to wait for `running` / `terminated`.
 fn parse_state_filter(input: &Value) -> Vec<String> {
     let Some(filters) = input.get("Filter") else {
@@ -341,7 +341,7 @@ fn code_for(name: &str) -> u32 {
     }
 }
 
-/// StartInstances — only valid for `stopped` instances.
+/// StartInstances. Only valid for `stopped` instances.
 pub fn start_instances(state: &Ec2State, input: &Value) -> Result<Value, AwsError> {
     let ids = collect_id_param(input, "InstanceId");
     let mut started: Vec<Value> = Vec::new();
@@ -353,7 +353,7 @@ pub fn start_instances(state: &Ec2State, input: &Value) -> Result<Value, AwsErro
     Ok(json!({ "instancesSet": { "item": started } }))
 }
 
-/// StopInstances — `running` → `stopped` (real EC2 has a brief `stopping`
+/// StopInstances. `running` -> `stopped` (real EC2 has a brief `stopping`
 /// step; we collapse it for the same reason RunInstances skips `pending`).
 pub fn stop_instances(state: &Ec2State, input: &Value) -> Result<Value, AwsError> {
     let ids = collect_id_param(input, "InstanceId");
@@ -366,7 +366,7 @@ pub fn stop_instances(state: &Ec2State, input: &Value) -> Result<Value, AwsError
     Ok(json!({ "instancesSet": { "item": stopped } }))
 }
 
-/// RebootInstances — fire-and-forget; instance stays in `running`.
+/// RebootInstances. Fire-and-forget; instance stays in `running`.
 pub fn reboot_instances(state: &Ec2State, input: &Value) -> Result<Value, AwsError> {
     let ids = collect_id_param(input, "InstanceId");
     for id in &ids {
@@ -378,7 +378,7 @@ pub fn reboot_instances(state: &Ec2State, input: &Value) -> Result<Value, AwsErr
 }
 
 // ---------------------------------------------------------------------------
-// TerminateInstances — moves to `terminated`. Real EC2 keeps the record
+// TerminateInstances. Moves to `terminated`. Real EC2 keeps the record
 // queryable for ~1 hour; we do the same for the lifetime of the process so
 // describe_instances after a terminate still surfaces them.
 // ---------------------------------------------------------------------------
@@ -401,7 +401,7 @@ pub fn terminate_instances(state: &Ec2State, input: &Value) -> Result<Value, Aws
 }
 
 // ---------------------------------------------------------------------------
-// DescribeInstanceAttribute — surfaces a single instance attribute. AWS
+// DescribeInstanceAttribute. Surfaces a single instance attribute. AWS
 // returns each attribute under a top-level key matching its name; the
 // caller selects exactly one via the `Attribute` parameter.
 // ---------------------------------------------------------------------------
@@ -448,7 +448,7 @@ pub fn describe_instance_attribute(state: &Ec2State, input: &Value) -> Result<Va
 }
 
 // ---------------------------------------------------------------------------
-// DescribeInstanceStatus — surfaces the lifecycle state for non-terminated
+// DescribeInstanceStatus. Surfaces the lifecycle state for non-terminated
 // instances, matching what `aws ec2 wait instance-running` consumes.
 // ---------------------------------------------------------------------------
 
@@ -484,7 +484,7 @@ pub fn describe_instance_status(state: &Ec2State, input: &Value) -> Result<Value
 }
 
 // ---------------------------------------------------------------------------
-// DescribeImages — small built-in catalog so listing isn't empty.
+// DescribeImages. Small built-in catalog so listing isn't empty.
 // ---------------------------------------------------------------------------
 
 pub fn describe_images(_state: &Ec2State, _input: &Value) -> Result<Value, AwsError> {

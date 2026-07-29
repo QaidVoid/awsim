@@ -91,7 +91,7 @@ pub async fn test_ecr(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         verbose
     ));
 
-    // PutImage (needs a manifest — use a minimal OCI manifest; may fail with schema error)
+    // PutImage (needs a manifest. Use a minimal OCI manifest; may fail with schema error)
     let manifest = r#"{"schemaVersion":2,"mediaType":"application/vnd.docker.distribution.manifest.v2+json","config":{"mediaType":"application/vnd.docker.container.image.v1+json","size":7023,"digest":"sha256:b5b2b2c507a0944348e0303114d8d93aaaa081732b86451d9bce1f432a537bc7"},"layers":[]}"#;
     results.push(chk!(
         "PutImage",

@@ -3,13 +3,13 @@
 //! Stage 1 of the DynamoDB-to-SQLite refactor: this module ships the
 //! foundation (connection management, migrations, raw item CRUD) but
 //! isn't wired into the operation handlers yet. Subsequent stages
-//! migrate operations one family at a time (item → query/scan →
-//! table metadata → streams/transact/partiql).
+//! migrate operations one family at a time (item -> query/scan ->
+//! table metadata -> streams/transact/partiql).
 //!
 //! Concurrency model: rusqlite is sync. Every public method here is
 //! itself sync; callers cross the async boundary by wrapping calls
 //! in `tokio::task::spawn_blocking` at the operation handler layer.
-//! Each call takes a fresh `Connection` from the internal pool —
+//! Each call takes a fresh `Connection` from the internal pool.
 //! WAL mode means readers never block each other.
 
 use std::path::PathBuf;
@@ -88,16 +88,16 @@ fn gsi_excluded_assignments() -> String {
 const POOL_MAX: u32 = 4;
 
 /// Idle-connection floor. One warm connection per service keeps
-/// the cache warm for hot reads without pinning POOL_MAX × cache
+/// the cache warm for hot reads without pinning POOL_MAX x cache
 /// memory at idle.
 const POOL_MIN_IDLE: u32 = 1;
 
 /// Per-connection cache size in KiB (negative = absolute KiB
-/// rather than pages). 2 MiB per connection — small caches are
+/// rather than pages). 2 MiB per connection. Small caches are
 /// fine because the OS page cache backs unmapped pages.
 const CACHE_SIZE_KIB: i64 = -2 * 1024;
 
-/// Per-connection mmap window cap. Lazy mapping — only resident
+/// Per-connection mmap window cap. Lazy mapping. Only resident
 /// as the DB grows AND pages get touched, but the OS still bills
 /// the mapping toward RSS so we keep it tight.
 const MMAP_SIZE_BYTES: i64 = 16 * 1024 * 1024;
@@ -127,7 +127,7 @@ pub struct WalCheckpoint {
 
 /// One sqlite-backed store per AWSim instance. All accounts/regions/
 /// tables share the same database, partitioned by columns. Cheap to
-/// clone — backed by an Arc'd r2d2 connection pool.
+/// clone. Backed by an Arc'd r2d2 connection pool.
 #[derive(Clone)]
 pub struct SqliteStore {
     inner: Arc<Inner>,
@@ -136,7 +136,7 @@ pub struct SqliteStore {
 struct Inner {
     /// Path to the sqlite file. Kept for diagnostics + VACUUM.
     db_path: PathBuf,
-    /// Pooled SQLite connections — readers never block each other in
+    /// Pooled SQLite connections. Readers never block each other in
     /// WAL mode, and we keep the pool small so per-connection memory
     /// (cache + mmap) stays bounded.
     pool: Pool,
@@ -173,7 +173,7 @@ impl SqliteStore {
     /// Test-only: open a brand-new store backed by a temporary file in
     /// `std::env::temp_dir()`. We can't use `:memory:` because each
     /// rusqlite `Connection::open_in_memory()` returns an INDEPENDENT
-    /// database — migrations run on one connection wouldn't be visible
+    /// database. Migrations run on one connection wouldn't be visible
     /// to subsequent reads/writes on a different connection. The temp
     /// file is unique per call (uuid-suffixed) so tests don't collide.
     #[cfg(test)]
@@ -204,8 +204,8 @@ impl SqliteStore {
     /// The per-connection `wal_autocheckpoint` only performs a PASSIVE
     /// checkpoint, which is a no-op whenever another pooled connection
     /// holds the WAL. Under a sustained write firehose (bulk imports)
-    /// PASSIVE perpetually loses that race, so the `-wal` file — and
-    /// the WAL index mapped alongside it — grows without bound. A
+    /// PASSIVE perpetually loses that race, so the `-wal` file. And
+    /// the WAL index mapped alongside it. Grows without bound. A
     /// periodic explicit TRUNCATE is the hard backstop.
     ///
     /// A `busy` result means the WAL was held this round and not
@@ -237,7 +237,7 @@ impl SqliteStore {
     }
 
     // -----------------------------------------------------------------
-    // Item CRUD — these are the primitives the operation handlers will
+    // Item CRUD. These are the primitives the operation handlers will
     // call once we wire them up in stage 2. Each method takes a fresh
     // connection and runs in the calling thread.
     // -----------------------------------------------------------------
@@ -268,7 +268,7 @@ impl SqliteStore {
     }
 
     /// Upsert an item. The `gsi_keys` slice carries up to `MAX_GSI_SLOTS`
-    /// `(pk, sk)` pairs in slot order — pass `(None, None)` for unused
+    /// `(pk, sk)` pairs in slot order. Pass `(None, None)` for unused
     /// slots and for items that don't materialise into the GSI (sparse
     /// index semantics).
     #[allow(clippy::too_many_arguments)]
@@ -284,8 +284,8 @@ impl SqliteStore {
     ) -> Result<(), AwsError> {
         let conn = self.conn()?;
         let attrs_json = serde_json::to_string(attrs).map_err(json_err)?;
-        // Build the SQL once per call. Could be cached behind OnceLock —
-        // the column count never changes — but `format!` is cheap relative
+        // Build the SQL once per call. Could be cached behind OnceLock.
+        // The column count never changes. But `format!` is cheap relative
         // to the round-trip and the cost shows up only on writes.
         let sql = format!(
             "INSERT INTO items (
@@ -346,7 +346,7 @@ impl SqliteStore {
     /// Used by the TTL sweeper.
     ///
     /// `grace_secs` mirrors AWS's "items are eventually removed"
-    /// guarantee — real DynamoDB takes up to ~48 hours to evict an
+    /// guarantee. Real DynamoDB takes up to ~48 hours to evict an
     /// expired item, and tests / production workloads sometimes need
     /// to read it back in that window. A configurable grace lets the
     /// simulator behave the same: a value of 0 deletes the moment the
@@ -355,7 +355,7 @@ impl SqliteStore {
     ///
     /// We deserialise each item's attrs JSON to inspect the TTL field
     /// because it lives inside `attrs_json` (no per-attribute index).
-    /// Cheap enough for the sweeper's once-per-minute cadence — it'd
+    /// Cheap enough for the sweeper's once-per-minute cadence. It'd
     /// be the wrong tool for a tight loop.
     pub fn delete_expired_items(
         &self,
@@ -392,7 +392,7 @@ impl SqliteStore {
         Ok(removed)
     }
 
-    /// Row count for a table (cheap — covered by the PRIMARY KEY index).
+    /// Row count for a table (cheap. Covered by the PRIMARY KEY index).
     pub fn count_items(&self, account: &str, region: &str, table: &str) -> Result<u64, AwsError> {
         let conn = self.conn()?;
         let n: i64 = conn
@@ -409,7 +409,7 @@ impl SqliteStore {
     /// Stream items in a single partition (Query). The visitor sees each
     /// row in (sk asc) or (sk desc) order and may stop iteration by
     /// returning `Ok(false)`. Filter and projection evaluation happens in
-    /// the caller — pushing them down to SQL is impractical because
+    /// the caller. Pushing them down to SQL is impractical because
     /// DynamoDB filter expressions touch typed AttributeValues, not raw
     /// strings.
     ///
@@ -521,7 +521,7 @@ impl SqliteStore {
         let conn = self.conn()?;
         let order = if forward { "ASC" } else { "DESC" };
 
-        // Two query shapes — with vs. without an exclusive-start sort key.
+        // Two query shapes. With vs. without an exclusive-start sort key.
         // Splitting the SQL keeps the parameter list straightforward and
         // avoids fiddling with NULL bindings on the comparator branch.
         let sql = match start_after_sk {
@@ -565,7 +565,7 @@ impl SqliteStore {
     /// scan; otherwise it runs to completion.
     ///
     /// `start_after` lets a caller resume from the `ExclusiveStartKey` of
-    /// a prior page — rows are returned where `(pk, sk) > (start_pk,
+    /// a prior page. Rows are returned where `(pk, sk) > (start_pk,
     /// start_sk)` lexicographically.
     pub fn scan_table<F>(
         &self,
@@ -614,7 +614,7 @@ impl SqliteStore {
     }
 
     /// Clear every item in a table while keeping the schema row intact.
-    /// Backs the awsim-only `TruncateTable` op — DynamoDB itself doesn't
+    /// Backs the awsim-only `TruncateTable` op. DynamoDB itself doesn't
     /// support this (you'd have to DeleteTable + CreateTable), but as a
     /// dev tool it's a much faster reset for the UI's "wipe + retest"
     /// loop. Returns the number of rows removed.
@@ -635,7 +635,7 @@ impl SqliteStore {
         Ok(n as u64)
     }
 
-    /// Drop every row for a table — used by `DeleteTable`.
+    /// Drop every row for a table. Used by `DeleteTable`.
     pub fn drop_table(&self, account: &str, region: &str, table: &str) -> Result<u64, AwsError> {
         let conn = self.conn()?;
         let n = conn
@@ -729,7 +729,7 @@ impl SqliteStore {
 
     /// Run `f` inside a single sqlite write transaction. We open with
     /// `BEGIN IMMEDIATE` so the connection acquires a RESERVED lock up
-    /// front — that way a concurrent writer can't slip in between the
+    /// front. That way a concurrent writer can't slip in between the
     /// closure's reads and writes (TransactWriteItems' phase-1/phase-2
     /// split would otherwise be racy).
     pub fn with_write_transaction<F, T>(&self, f: F) -> Result<T, AwsError>
@@ -912,7 +912,7 @@ impl<'tx> ReadTx<'tx> {
 
 /// Connection initialiser run by the r2d2 pool whenever it spins up
 /// a new connection. Applies the same PRAGMAs the legacy per-query
-/// `open_conn` did, but with a leaner memory profile — connections
+/// `open_conn` did, but with a leaner memory profile. Connections
 /// are long-lived now, so cache + mmap budgets multiply by pool size
 /// rather than concurrent-query count.
 fn apply_pragmas(conn: &mut rusqlite::Connection) -> Result<(), rusqlite::Error> {
@@ -1249,7 +1249,7 @@ mod tests {
             )
             .unwrap();
 
-        // Sweep at "now = 5000" — only "expired" qualifies.
+        // Sweep at "now = 5000". Only "expired" qualifies.
         let removed = store
             .delete_expired_items("a", "r", "t", "expires_at", 5000, 0)
             .unwrap();
@@ -1303,8 +1303,8 @@ mod tests {
         let store = SqliteStore::in_memory().unwrap();
         // Item expired 500 s before "now"; grace of 1000 s should keep
         // it alive (cutoff = now - grace = 5000 - 1000 = 4000, and
-        // ttl=4500 > 4000 → not yet evicted). With no grace, ttl=4500
-        // < now=5000 → swept.
+        // ttl=4500 > 4000 -> not yet evicted). With no grace, ttl=4500
+        // < now=5000 -> swept.
         store
             .put_item(
                 "a",
@@ -1330,7 +1330,7 @@ mod tests {
         );
 
         // Bump "now" past ttl + grace (5500 > 4500 + 1000 = 5500): equal,
-        // so the boundary case still evicts (ttl + grace == now → ttl <=
+        // so the boundary case still evicts (ttl + grace == now -> ttl <=
         // now - grace).
         let removed = store
             .delete_expired_items("a", "r", "t", "expires_at", 5500, 1000)

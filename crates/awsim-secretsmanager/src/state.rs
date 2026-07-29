@@ -11,7 +11,7 @@ pub struct SecretVersion {
     pub secret_binary: Option<String>,
     /// e.g. ["AWSCURRENT"], ["AWSPREVIOUS"]
     pub stages: Vec<String>,
-    /// Unix epoch seconds (f64) — matches awsJson1.1 timestamp wire format.
+    /// Unix epoch seconds (f64). Matches awsJson1.1 timestamp wire format.
     pub created_date: f64,
 }
 
@@ -21,11 +21,11 @@ pub struct Secret {
     pub arn: String,
     pub name: String,
     pub description: String,
-    /// version_id → SecretVersion
+    /// version_id -> SecretVersion
     pub versions: HashMap<String, SecretVersion>,
     pub current_version_id: String,
     pub tags: HashMap<String, String>,
-    /// Unix epoch seconds (f64) — matches awsJson1.1 timestamp wire format.
+    /// Unix epoch seconds (f64). Matches awsJson1.1 timestamp wire format.
     pub created_date: f64,
     /// Unix epoch seconds (f64).
     pub last_changed_date: f64,
@@ -41,7 +41,7 @@ pub struct Secret {
     /// from the last RotateSecret. `None` when rotation is driven by
     /// `AutomaticallyAfterDays` or disabled.
     pub rotation_schedule: Option<String>,
-    /// Unix epoch seconds — when the next automatic rotation is due. The
+    /// Unix epoch seconds. When the next automatic rotation is due. The
     /// background `tick` fires rotation once wall-clock passes this and
     /// then advances it. `None` when automatic rotation is disabled.
     pub next_rotation_date: Option<f64>,
@@ -49,10 +49,10 @@ pub struct Secret {
     /// means the AWS-managed `aws/secretsmanager` key (unsurfaced in
     /// Describe responses, matching AWS).
     pub kms_key_id: Option<String>,
-    /// Unix epoch seconds — last time RotateSecret successfully ran.
+    /// Unix epoch seconds. Last time RotateSecret successfully ran.
     /// `None` until the first rotation completes.
     pub last_rotated_date: Option<f64>,
-    /// Unix epoch seconds — last time the secret value was retrieved
+    /// Unix epoch seconds. Last time the secret value was retrieved
     /// (any GetSecretValue call). Surfaces in Describe / ListSecrets.
     pub last_accessed_date: Option<f64>,
     /// Replica regions requested via CreateSecret.AddReplicaRegions /
@@ -80,8 +80,8 @@ pub struct ReplicaRegion {
 /// Per-account/region Secrets Manager state.
 #[derive(Debug, Default)]
 pub struct SecretsState {
-    /// name → Secret (primary index)
+    /// name -> Secret (primary index)
     pub secrets: DashMap<String, Secret>,
-    /// secret name → JSON resource policy string
+    /// secret name -> JSON resource policy string
     pub resource_policies: DashMap<String, String>,
 }

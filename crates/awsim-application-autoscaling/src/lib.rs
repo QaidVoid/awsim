@@ -2,7 +2,7 @@
 //!
 //! Stores scalable targets, policies, and scheduled actions per namespace
 //! (`ecs`, `lambda`, `dynamodb`, etc.). The emulator never executes scaling
-//! decisions — `DescribeScalingActivities` always returns an empty list.
+//! decisions. `DescribeScalingActivities` always returns an empty list.
 
 mod operations;
 pub mod state;

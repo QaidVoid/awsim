@@ -20,7 +20,7 @@ use super::{
 
 /// AWS BatchGetItem caps a single call at 100 keys total across all
 /// tables, and at 16 MB of response payload. Items beyond the byte
-/// cap aren't returned — their keys are echoed back in
+/// cap aren't returned. Their keys are echoed back in
 /// `UnprocessedKeys` so the client can retry. Without these caps
 /// awsim materialises arbitrarily large responses in memory.
 const BATCH_GET_MAX_KEYS: usize = 100;
@@ -139,8 +139,8 @@ pub fn batch_get_item(
         let item_bytes = estimate_value_bytes(&item_json);
 
         // If this single item would push us past the cap and we've
-        // already returned at least one item for this call, defer it —
-        // matches AWS behaviour where a partial response + an
+        // already returned at least one item for this call, defer it.
+        // Matches AWS behaviour where a partial response + an
         // UnprocessedKeys entry beats a hard error.
         if response_bytes > 0 && response_bytes + item_bytes > BATCH_GET_MAX_RESPONSE_BYTES {
             cap_reached = true;
@@ -208,8 +208,8 @@ pub fn batch_write_item(
     // then apply them after the lock is released so we don't hold the
     // DashMap entry across blocking sqlite IO.
     //
-    // The gsi array (5 × Option<String> pairs) is boxed to keep the
-    // SqliteOp enum size in check — without it Put dwarfs Delete by
+    // The gsi array (5 x Option<String> pairs) is boxed to keep the
+    // SqliteOp enum size in check. Without it Put dwarfs Delete by
     // ~500 bytes, which clippy (rightly) flags for `Vec<SqliteOp>`.
     enum SqliteOp {
         Put {
@@ -240,8 +240,8 @@ pub fn batch_write_item(
             AwsError::validation(format!("Requests for {table_name} must be an array"))
         })?;
 
-        // Hold the read guard only long enough to extract storage keys —
-        // the write path is sqlite-only after stage 4.
+        // Hold the read guard only long enough to extract storage keys.
+        // The write path is sqlite-only after stage 4.
         let table = match state.tables.get(table_name.as_str()) {
             Some(t) => t,
             None => {

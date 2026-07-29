@@ -1009,7 +1009,7 @@ fn principal_root_arn_match() {
     assert_eq!(evaluate(&r, &ec), Decision::Allow);
 }
 
-// ── Policy variable substitution ─────────────────────────────────────────────
+// -- Policy variable substitution ---------------------------------------------
 
 #[test]
 fn substitutes_aws_username_in_resource() {
@@ -1025,7 +1025,7 @@ fn substitutes_aws_username_in_resource() {
     };
     let ctx = HashMap::new();
 
-    // Alice reading her own object → allowed
+    // Alice reading her own object -> allowed
     let r = req(
         "arn:aws:iam::1:user/alice",
         "1",
@@ -1035,7 +1035,7 @@ fn substitutes_aws_username_in_resource() {
     );
     assert_eq!(evaluate(&r, &ec), Decision::Allow);
 
-    // Alice reading bob's object → denied (substitution gives wrong path)
+    // Alice reading bob's object -> denied (substitution gives wrong path)
     let r = req(
         "arn:aws:iam::1:user/alice",
         "1",
@@ -1081,7 +1081,7 @@ fn substitutes_principal_arn_in_condition() {
         assert_eq!(evaluate(&r, &ec), Decision::Allow);
     }
 
-    // Owner tag belongs to bob → implicit deny for alice
+    // Owner tag belongs to bob -> implicit deny for alice
     ctx.insert(
         "aws:ResourceTag/Owner".to_string(),
         ContextValue::String("arn:aws:iam::1:user/bob".to_string()),
@@ -1425,7 +1425,7 @@ fn condition_for_all_values_empty_list_vacuously_allows() {
 
 #[test]
 fn condition_for_any_value_missing_key() {
-    // Missing context key with ForAnyValue: no values to test → deny.
+    // Missing context key with ForAnyValue: no values to test -> deny.
     let ctx = HashMap::new();
     assert_decision(
         allow_with_condition(r#"{"ForAnyValue:StringEquals":{"aws:TagKeys":["env"]}}"#),
@@ -1605,7 +1605,7 @@ fn session_explicit_deny_overrides_admin() {
 
 #[test]
 fn boundary_does_not_grant_without_identity_allow() {
-    // Boundary alone cannot grant. Identity has nothing → implicit deny
+    // Boundary alone cannot grant. Identity has nothing -> implicit deny
     // even though the boundary contains an Allow.
     let ctx = HashMap::new();
     let identity: Vec<PolicyDocument> = Vec::new();
@@ -1635,7 +1635,7 @@ fn scp_does_not_grant_without_identity_allow() {
 #[test]
 fn multiple_scps_all_must_allow() {
     // Two SCPs in scope. The action must be allowed in *every* one
-    // (intersection), so missing in one → implicit deny.
+    // (intersection), so missing in one -> implicit deny.
     let ctx = HashMap::new();
     let identity = vec![admin()];
     let scp_s3 =
@@ -1685,7 +1685,7 @@ fn identity_plus_boundary_plus_session_intersection() {
         &ctx,
     );
     assert_eq!(evaluate(&get, &ec), Decision::Allow);
-    // Allowed by identity + boundary but not by session → implicit deny.
+    // Allowed by identity + boundary but not by session -> implicit deny.
     let put = req(
         "arn:aws:iam::1:u/x",
         "1",

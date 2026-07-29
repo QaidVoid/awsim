@@ -41,7 +41,7 @@ fn now_epoch() -> u64 {
 /// the literal username (a UUID for native users, `<provider>_<id>`
 /// for federated users) or the user's `sub`. We try the literal key
 /// first, then scan for a matching sub. Returns `None` if neither
-/// hits — callers raise `UserNotFoundException`.
+/// hits. Callers raise `UserNotFoundException`.
 pub(crate) fn resolve_username(pool: &UserPool, identifier: &str) -> Option<String> {
     if pool.users.contains_key(identifier) {
         return Some(identifier.to_string());
@@ -277,9 +277,9 @@ fn make_user(
 /// Parse `UserAttributes` (or similar) in either of the two shapes
 /// Cognito clients have produced over time:
 ///
-/// 1. JSON array: `[{Name, Value}, ...]` — the standard json-1.1 shape.
+/// 1. JSON array: `[{Name, Value}, ...]`. The standard json-1.1 shape.
 /// 2. Indexed object: `{"1": {Name, Value}, "5": {...}}` or
-///    `{"member.1": {...}, "member.5": {...}}` — what older AWS query
+///    `{"member.1": {...}, "member.5": {...}}`. What older AWS query
 ///    serializers emit when forced through a json bridge. Indices may
 ///    be sparse; entries are gathered in ascending numeric order so
 ///    "last write wins" behaves the same as for the array form.
@@ -1022,7 +1022,7 @@ pub fn admin_set_user_password(
     // next sign-in. We were previously only flipping to CONFIRMED on
     // Permanent=true and leaving the status alone otherwise, which let
     // a CONFIRMED user keep CONFIRMED status when given a temp password
-    // — opposite of what AWS does.
+    //. Opposite of what AWS does.
     user.status = if permanent {
         "CONFIRMED".to_string()
     } else {
@@ -1119,7 +1119,7 @@ fn evaluate_cognito_filter(user: &CognitoUser, filter: &str) -> bool {
     } else if let Some(idx) = filter.find('=') {
         (filter[..idx].trim(), "=", filter[idx + 1..].trim())
     } else {
-        return true; // Unrecognised filter — pass all
+        return true; // Unrecognised filter. Pass all
     };
 
     // Strip surrounding quotes from value
@@ -1229,7 +1229,7 @@ pub fn forgot_password(
 
     // Generate + persist a 6-digit code so ConfirmForgotPassword has
     // something to validate against. We log it at info level so devs
-    // can grab it from the awsim console — a real Cognito would email
+    // can grab it from the awsim console. A real Cognito would email
     // it. Stashed under the existing `pending_verifications` map with
     // the conventional key `forgot_password`.
     let code = generate_reset_code();
@@ -1266,7 +1266,7 @@ pub fn forgot_password(
             let (subject, body) = super::email::forgot_password_message(&pool.extra_config, &code);
             super::email::deliver(ctx, email, &subject, &body, "ForgotPassword");
         }
-        // Custom Message trigger (fire-and-forget) — kept here so the
+        // Custom Message trigger (fire-and-forget). Kept here so the
         // immutable Lambda ARN we cloned out is still in scope.
         if let Some(arn) = lambda_arn {
             let trigger_event = json!({

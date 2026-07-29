@@ -121,7 +121,7 @@ async fn get_referrers(
 /// AWS clients send `Authorization: Basic base64(AWS:<token>)` where
 /// `<token>` is the body we minted in
 /// [`mint_authorization_token`](crate::operations::auth::mint_authorization_token).
-/// When the header is absent we leave the request alone — local
+/// When the header is absent we leave the request alone. Local
 /// testing should keep working without round-tripping
 /// GetAuthorizationToken first. When the header IS present, a
 /// malformed scheme or a forged / expired token is rejected with

@@ -265,7 +265,7 @@ pub async fn test_dynamodb(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         verbose
     ));
 
-    // DescribeGlobalTable (expect not-found — treated as pass)
+    // DescribeGlobalTable (expect not-found. Treated as pass)
     results.push(chk!(
         "DescribeGlobalTable",
         client
@@ -297,7 +297,7 @@ pub async fn test_dynamodb(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         verbose
     ));
 
-    // DescribeContributorInsights (needs a real table — recreate briefly)
+    // DescribeContributorInsights (needs a real table. Recreate briefly)
     let _ = client
         .create_table()
         .table_name("contrib-insights-test")
@@ -335,7 +335,7 @@ pub async fn test_dynamodb(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         .send()
         .await;
 
-    // ExecuteStatement (PartiQL SELECT on already-deleted table — expect service error = pass)
+    // ExecuteStatement (PartiQL SELECT on already-deleted table. Expect service error = pass)
     results.push(chk!(
         "ExecuteStatement",
         client

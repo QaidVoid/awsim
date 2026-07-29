@@ -2,7 +2,7 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// EC2 state — per account+region.
+/// EC2 state. Per account+region.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Ec2State {
     pub vpcs: DashMap<String, Vpc>,
@@ -11,11 +11,11 @@ pub struct Ec2State {
     pub internet_gateways: DashMap<String, InternetGateway>,
     pub route_tables: DashMap<String, RouteTable>,
     pub key_pairs: DashMap<String, KeyPair>,
-    /// instanceId → Instance
+    /// instanceId -> Instance
     pub instances: DashMap<String, Instance>,
-    /// Elastic IP allocation id → Address
+    /// Elastic IP allocation id -> Address
     pub addresses: DashMap<String, Address>,
-    /// resource-specific tags: resource_id → (key → value)
+    /// resource-specific tags: resource_id -> (key -> value)
     pub resource_tags: DashMap<String, HashMap<String, String>>,
     /// Per-subnet host-octet cursor for the next launched instance. Real EC2
     /// allocates from the subnet's CIDR; we just bump a counter starting
@@ -60,7 +60,7 @@ pub struct IpPermission {
     pub ip_protocol: String,
     pub ip_ranges: Vec<IpRange>,
     /// References to other security groups. Each entry is
-    /// `{ GroupId, UserId? }` — AWS allows SGs to authorize traffic
+    /// `{ GroupId, UserId? }`. AWS allows SGs to authorize traffic
     /// from other SGs, including cross-account when UserId is set.
     pub user_id_group_pairs: Vec<UserIdGroupPair>,
 }
@@ -113,7 +113,7 @@ pub struct Instance {
     pub instance_id: String,
     pub instance_type: String,
     pub image_id: String,
-    /// EC2 lifecycle state — `pending` | `running` | `stopping` | `stopped`
+    /// EC2 lifecycle state. `pending` | `running` | `stopping` | `stopped`
     /// | `shutting-down` | `terminated`. Real EC2 transitions through these
     /// asynchronously; we move synchronously since there's nothing to wait
     /// on, but keep the state machine valid (e.g. you can't Start a
@@ -125,7 +125,7 @@ pub struct Instance {
     pub vpc_id: Option<String>,
     pub private_ip_address: Option<String>,
     pub launch_time: String,
-    /// All instances from a single RunInstances batch share a reservation —
+    /// All instances from a single RunInstances batch share a reservation.
     /// DescribeInstances groups them under one reservationSet entry.
     pub reservation_id: String,
     pub tags: HashMap<String, String>,

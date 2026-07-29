@@ -6,7 +6,7 @@ use crate::rule::{
     ChaosEffect, ChaosRule, ErrorEffect, LatencyEffect, OperationMatch, ServiceMatch,
 };
 
-/// Metadata describing one preset — name + description for the UI
+/// Metadata describing one preset. Name + description for the UI
 /// and CLI listing. The `build` fn produces the rules.
 #[derive(Debug, Clone, Copy)]
 pub struct PresetInfo {
@@ -19,7 +19,7 @@ pub struct PresetInfo {
 pub const PRESETS: &[PresetInfo] = &[
     PresetInfo {
         name: "flaky-s3",
-        description: "5% of S3 requests return 503 SlowDown — exercises retry/backoff.",
+        description: "5% of S3 requests return 503 SlowDown. Exercises retry/backoff.",
     },
     PresetInfo {
         name: "ddb-throttle",
@@ -27,19 +27,19 @@ pub const PRESETS: &[PresetInfo] = &[
     },
     PresetInfo {
         name: "slow-lambda",
-        description: "All Lambda Invoke calls get +500-2000ms latency — models cold-start spikes.",
+        description: "All Lambda Invoke calls get +500-2000ms latency. Models cold-start spikes.",
     },
     PresetInfo {
         name: "kms-outage",
-        description: "Every KMS call returns 503 KMSInternalException — total KMS outage.",
+        description: "Every KMS call returns 503 KMSInternalException. Total KMS outage.",
     },
     PresetInfo {
         name: "regional-failover",
-        description: "50% of all calls return 503 ServiceUnavailable — partial regional outage.",
+        description: "50% of all calls return 503 ServiceUnavailable. Partial regional outage.",
     },
     PresetInfo {
         name: "network-jitter",
-        description: "Every call gets +50-300ms latency — slow link / cross-region call.",
+        description: "Every call gets +50-300ms latency. Slow link / cross-region call.",
     },
 ];
 
@@ -93,7 +93,7 @@ pub fn build(name: &str) -> Option<Vec<ChaosRule>> {
             ChaosEffect::Error(error(
                 503,
                 "ServiceUnavailable",
-                "Service is unable to handle request — failover suggested.",
+                "Service is unable to handle request. Failover suggested.",
             )),
             "preset: regional-failover",
         )],

@@ -9,7 +9,7 @@
 //! the response carries those segments.
 //!
 //! Global services (IAM, Route 53, STS at the global endpoint,
-//! Organizations) are intentionally not covered here — they omit the
+//! Organizations) are intentionally not covered here. They omit the
 //! region segment by design, and AWS treats them as per-account-only.
 
 use awsim_core::{RequestContext, ServiceHandler};

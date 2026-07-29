@@ -95,15 +95,15 @@ pub struct OpCounterSnapshot {
 /// Per-service point-in-time storage tracker.
 ///
 /// The poll loop calls `record_sample` periodically; each sample
-/// accrues `(avg_bytes_since_last_sample) × (elapsed_seconds) × rate`
+/// accrues `(avg_bytes_since_last_sample) x (elapsed_seconds) x rate`
 /// into the cost accumulator. Cost is stored as integer pico-USD
 /// (1e-12 USD) to keep tiny per-sample accruals from truncating to
-/// zero — at S3's $0.023/GB-month, 1 MB × 30 s amounts to ~0.27
+/// zero. At S3's $0.023/GB-month, 1 MB x 30 s amounts to ~0.27
 /// micro-USD, which would round away under coarser units. u64 of
 /// pico-USD still gives ~$18M total headroom before overflow.
 #[derive(Debug, Default)]
 pub struct StorageMetering {
-    /// Most recent sampled byte count — also used by the dashboard
+    /// Most recent sampled byte count. Also used by the dashboard
     /// so the UI can show "currently storing X GB".
     pub last_sample_bytes: AtomicU64,
     /// Unix timestamp of the most recent sample (seconds).
@@ -131,14 +131,14 @@ impl StorageMetering {
 
     /// Accrue cost for the interval between the previous sample and
     /// `current_bytes` (taken at `now_secs`). Trapezoidal integration:
-    /// the average of the two samples × elapsed time × rate.
+    /// the average of the two samples x elapsed time x rate.
     pub fn record_sample(&self, current_bytes: u64, now_secs: u64, per_byte_per_sec_usd: f64) {
         let last_ts = self.last_sample_ts.swap(now_secs, Ordering::Relaxed);
         let last_bytes = self
             .last_sample_bytes
             .swap(current_bytes, Ordering::Relaxed);
         if last_ts == 0 || now_secs <= last_ts {
-            // First sample (or clock skew) — nothing to accrue yet.
+            // First sample (or clock skew). Nothing to accrue yet.
             return;
         }
         let elapsed = (now_secs - last_ts) as f64;
@@ -163,16 +163,16 @@ pub struct StorageMeteringSnapshot {
     pub accumulated_cost_picos: u64,
 }
 
-/// Per-service compute tracker — Lambda's GB-second billing axis.
+/// Per-service compute tracker. Lambda's GB-second billing axis.
 ///
-/// Each invocation contributes `duration_ms × assumed_memory_gb × rate`
+/// Each invocation contributes `duration_ms x assumed_memory_gb x rate`
 /// to the accumulated cost; we also keep the running GB-microsecond
 /// total so the dashboard can show "X GB-seconds consumed" alongside
 /// the dollar amount.
 #[derive(Debug, Default)]
 pub struct ComputeMetering {
     /// Total GB-microseconds of compute consumed (1 GB-s = 1e6).
-    /// u64 fits ~1.8e13 GB-seconds — Lambda would have to run a
+    /// u64 fits ~1.8e13 GB-seconds. Lambda would have to run a
     /// 128 MB function flat-out for ~45,000 years to overflow this.
     pub gb_microseconds: AtomicU64,
     /// Accumulated compute cost in pico-USD (1e-12 USD).
@@ -428,7 +428,7 @@ impl BillingState {
         self.storage.entry(service.to_string()).or_default()
     }
 
-    /// Iterate the storage trackers — useful for the report builder.
+    /// Iterate the storage trackers. Useful for the report builder.
     pub fn iter_storage(&self) -> Vec<(String, StorageMeteringSnapshot)> {
         self.storage
             .iter()

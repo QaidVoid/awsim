@@ -41,10 +41,10 @@ pub fn parse_request(headers: &HeaderMap, body: &Bytes) -> Result<ParsedRequest,
 /// Serialize a successful JSON response.
 ///
 /// Recognised "magic" keys on the output value:
-///   * `__raw_body` — base64-encoded bytes that become the response body verbatim.
-///   * `__content_type` — overrides the `content-type` header.
-///   * `__status_code` — overrides the HTTP status (defaults to 200).
-///   * `__headers` — extra response headers `{ "Header-Name": "value", ... }`.
+///   * `__raw_body`. Base64-encoded bytes that become the response body verbatim.
+///   * `__content_type`. Overrides the `content-type` header.
+///   * `__status_code`. Overrides the HTTP status (defaults to 200).
+///   * `__headers`. Extra response headers `{ "Header-Name": "value", ... }`.
 ///
 /// When `__raw_body` is absent, the entire output is JSON-encoded as the body
 /// (after stripping the magic keys above).

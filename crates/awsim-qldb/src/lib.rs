@@ -1,4 +1,4 @@
-//! Amazon QLDB emulator. Stores ledger metadata only — the journal/ION query
+//! Amazon QLDB emulator. Stores ledger metadata only. The journal/ION query
 //! data plane is not implemented.
 
 use std::collections::HashMap;

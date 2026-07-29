@@ -8,11 +8,11 @@ use dashmap::DashMap;
 /// `SqliteStore` (off `state.sqlite`); everything below is metadata.
 #[derive(Debug, Default)]
 pub struct KinesisState {
-    /// Stream name → KinesisStream
+    /// Stream name -> KinesisStream
     pub streams: DashMap<String, KinesisStream>,
-    /// Shard iterator token → ShardIteratorInfo
+    /// Shard iterator token -> ShardIteratorInfo
     pub iterators: DashMap<String, ShardIteratorInfo>,
-    /// ConsumerArn → StreamConsumer
+    /// ConsumerArn -> StreamConsumer
     pub consumers: DashMap<String, StreamConsumer>,
     /// Resource ARN -> policy JSON
     pub resource_policies: DashMap<String, String>,
@@ -150,7 +150,7 @@ impl Shard {
 }
 
 /// Information about an active shard iterator. `position` is now a
-/// sequence-number cursor (exclusive lower bound) — `GetRecords`
+/// sequence-number cursor (exclusive lower bound). `GetRecords`
 /// returns rows with `seq > position`.
 #[derive(Debug, Clone)]
 pub struct ShardIteratorInfo {

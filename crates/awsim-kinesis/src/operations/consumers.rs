@@ -202,7 +202,7 @@ pub fn list_stream_consumers(
 /// single finite buffered batch of frames so the request completes.
 const SUBSCRIBE_BATCH_LIMIT: usize = 10_000;
 
-/// SubscribeToShard — push records for one shard to an enhanced
+/// SubscribeToShard. Push records for one shard to an enhanced
 /// fan-out consumer. The architecture is request/response, so we emit
 /// a finite buffered batch of event-stream frames carrying the records
 /// that match `StartingPosition`. The frames use the protocol-layer

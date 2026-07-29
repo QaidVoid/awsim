@@ -6,7 +6,7 @@
 //! with a message describing which constraint was violated.
 //!
 //! Account lockout in real AWS Cognito is part of Advanced Security (paid),
-//! but a lightweight version is invaluable for local testing — without it,
+//! but a lightweight version is invaluable for local testing. Without it,
 //! brute-force or runaway-loop bugs in client code never surface during
 //! development. We model a fixed 5-strikes / 15-minute window so that
 //! integration tests against a misconfigured client see the same
@@ -31,7 +31,7 @@ pub const LOCKOUT_DURATION_SECS: u64 = 15 * 60;
 /// unbounded history. AdminListUserAuthEvents returns the most recent first.
 pub const MAX_AUTH_EVENTS_PER_USER: usize = 100;
 
-/// Built-in compromised-password list — lets tests exercise the BLOCK action
+/// Built-in compromised-password list. Lets tests exercise the BLOCK action
 /// without needing to wire an external feed. Real Cognito Advanced Security
 /// uses a much larger AWS-curated dataset.
 const COMPROMISED_PASSWORDS: &[&str] = &[
@@ -99,7 +99,7 @@ pub fn check_not_locked(user: &mut CognitoUser) -> Result<(), AwsError> {
                 "Password attempts exceeded",
             ));
         }
-        // Window has elapsed — reset so the user can try again.
+        // Window has elapsed. Reset so the user can try again.
         user.locked_until_secs = None;
         user.failed_login_attempts = 0;
     }

@@ -47,7 +47,7 @@ impl<T: Default + Send + Sync + 'static> AccountRegionStore<T> {
         self.inner.clear();
     }
 
-    /// Iterate over all (account_id, region) → state entries.
+    /// Iterate over all (account_id, region) -> state entries.
     ///
     /// Returns a snapshot of the keys paired with the `Arc<T>` values so the
     /// caller can read state without holding any DashMap locks long-term.

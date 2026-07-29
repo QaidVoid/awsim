@@ -15,7 +15,7 @@ pub async fn test_lambda(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         verbose
     ));
 
-    // CreateFunction — use a minimal ZIP (we can't really invoke it).
+    // CreateFunction. Use a minimal ZIP (we can't really invoke it).
     // The ZIP contains a single file handler.py with a dummy handler.
     let zip_bytes = minimal_lambda_zip();
     let create_r = client

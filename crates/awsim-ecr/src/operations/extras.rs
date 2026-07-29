@@ -256,7 +256,7 @@ fn invalid_lifecycle(msg: impl Into<String>) -> AwsError {
 /// Evaluate a parsed lifecycle policy against a list of images. The
 /// scheduler hands the result to BatchDeleteImage. Output is the
 /// list of `(image_digest, matched_rule_priority, matched_rule_description)`
-/// triples — preserving order of evaluation so the trace is stable.
+/// triples. Preserving order of evaluation so the trace is stable.
 pub(crate) fn evaluate_lifecycle_policy(
     policy: &LifecyclePolicy,
     images: &[crate::state::ContainerImage],
@@ -416,7 +416,7 @@ pub fn set_repository_policy(
     })?;
 
     // AWS rejects non-JSON or structurally-invalid policy documents
-    // up front with InvalidParameterException — the document must be a
+    // up front with InvalidParameterException. The document must be a
     // JSON object with a `Statement` array.
     let parsed: Value = serde_json::from_str(policy_text).map_err(|e| {
         AwsError::bad_request(

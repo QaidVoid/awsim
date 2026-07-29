@@ -21,7 +21,7 @@ pub struct ChaosOutcome {
 const RECENT_INJECTIONS_CAP: usize = 256;
 
 /// One entry in the recent-injections ring buffer surfaced via
-/// `/_awsim/chaos/stats` — used by the dashboard's sparkline.
+/// `/_awsim/chaos/stats`. Used by the dashboard's sparkline.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecentInjection {
     pub ts: u64,
@@ -55,14 +55,14 @@ impl ChaosEngine {
     }
 
     /// Evaluate the rule list against a request. Returns the first
-    /// rule that matches *and* whose probability roll succeeds —
-    /// later rules don't fire even if they'd also match.
+    /// rule that matches *and* whose probability roll succeeds.
+    /// Later rules don't fire even if they'd also match.
     pub fn evaluate(&self, service: &str, operation: Option<&str>) -> Option<ChaosOutcome> {
         let mut rng = rand::thread_rng();
         self.evaluate_with_rng(service, operation, &mut rng)
     }
 
-    /// Same as [`evaluate`] but uses the caller's RNG — useful for
+    /// Same as [`evaluate`] but uses the caller's RNG. Useful for
     /// deterministic tests.
     pub fn evaluate_with_rng(
         &self,
@@ -77,7 +77,7 @@ impl ChaosEngine {
         self.evaluate_with_rng_at(service, operation, now, rng)
     }
 
-    /// Evaluate at a caller-supplied unix timestamp — lets tests
+    /// Evaluate at a caller-supplied unix timestamp. Lets tests
     /// pin the clock so schedule windows / flap cycles are
     /// deterministic.
     pub fn evaluate_with_rng_at(
@@ -100,7 +100,7 @@ impl ChaosEngine {
             if rule.probability <= 0.0 {
                 continue;
             }
-            // Probability ≥ 1.0 always fires; otherwise roll.
+            // Probability >= 1.0 always fires; otherwise roll.
             if rule.probability < 1.0 && rng.gen_range(0.0..1.0) >= rule.probability {
                 continue;
             }
@@ -109,7 +109,7 @@ impl ChaosEngine {
         None
     }
 
-    /// Bookkeep an injection — bump the rule's count, push into the
+    /// Bookkeep an injection. Bump the rule's count, push into the
     /// ring buffer. Called by the gateway after `evaluate` returns.
     pub fn record_injection(&self, rule_id: &str, service: &str, operation: Option<&str>) {
         if let Ok(mut rules) = self.rules.write()
@@ -425,17 +425,17 @@ mod tests {
         e.add_rule(r);
 
         let mut rng = StdRng::seed_from_u64(0);
-        // Before window — inert.
+        // Before window. Inert.
         assert!(
             e.evaluate_with_rng_at("s3", Some("Op"), 50, &mut rng)
                 .is_none()
         );
-        // Inside window — fires.
+        // Inside window. Fires.
         assert!(
             e.evaluate_with_rng_at("s3", Some("Op"), 150, &mut rng)
                 .is_some()
         );
-        // After window (boundary is exclusive) — inert.
+        // After window (boundary is exclusive). Inert.
         assert!(
             e.evaluate_with_rng_at("s3", Some("Op"), 200, &mut rng)
                 .is_none()

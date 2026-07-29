@@ -12,9 +12,9 @@ use tracing::debug;
 
 /// AWS Resource Groups Tagging API emulator.
 ///
-/// Maintains a per-(account, region) ARN → tag map populated through
+/// Maintains a per-(account, region) ARN -> tag map populated through
 /// `TagResources` / `UntagResources`. Cross-service tag propagation is not
-/// modelled — callers explicitly tag resources here for them to show up in
+/// modelled. Callers explicitly tag resources here for them to show up in
 /// `GetResources` / `GetTagKeys` / `GetTagValues`.
 pub struct ResourceGroupsTaggingService {
     store: AccountRegionStore<TaggingState>,
@@ -68,7 +68,7 @@ impl ServiceHandler for ResourceGroupsTaggingService {
             "TagResources" => operations::tagging::tag_resources(&state, &input, ctx),
             "UntagResources" => operations::tagging::untag_resources(&state, &input, ctx),
 
-            // Compliance / report ops — not modelled. Return empty shapes that
+            // Compliance / report ops. Not modelled. Return empty shapes that
             // satisfy the SDK without claiming the work was done.
             "DescribeReportCreation" => Ok(json!({
                 "Status": "NONE",

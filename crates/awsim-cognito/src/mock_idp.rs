@@ -9,18 +9,18 @@
 //! end-to-end without any external network calls.
 //!
 //! Endpoints exposed under `/_awsim/idp/{provider_id}`:
-//!   - `.well-known/openid-configuration` — discovery
-//!   - `.well-known/jwks.json` — public key for ID-token verification
-//!   - `authorize` — GET shows a free-form claim entry form, POST mints
+//!   - `.well-known/openid-configuration`. Discovery
+//!   - `.well-known/jwks.json`. Public key for ID-token verification
+//!   - `authorize`. GET shows a free-form claim entry form, POST mints
 //!     an authorization code
-//!   - `token` — POST exchanges code for ID + access tokens
-//!   - `userinfo` — GET returns claims for an access token
+//!   - `token`. POST exchanges code for ID + access tokens
+//!   - `userinfo`. GET returns claims for an access token
 //!
 //! And under `/_awsim/idp` (admin / control plane):
-//!   - `POST` — register a new mock provider, returns `{provider_id,
+//!   - `POST`. Register a new mock provider, returns `{provider_id,
 //!     client_id, client_secret, discovery_url}`
-//!   - `GET` — list registered providers
-//!   - `DELETE /{provider_id}` — remove
+//!   - `GET`. List registered providers
+//!   - `DELETE /{provider_id}`. Remove
 //!
 //! All mock providers sign with a single process-wide RSA keypair
 //! distinct from the Cognito pool key, so the IdP looks like a real
@@ -526,7 +526,7 @@ async fn token(
         );
     }
 
-    // Client auth: Basic header beats body params (RFC 6749 §2.3.1).
+    // Client auth: Basic header beats body params (RFC 6749 section 2.3.1).
     let (client_id, client_secret) = basic_auth_credentials(&headers).unwrap_or((
         form.client_id.clone().unwrap_or_default(),
         form.client_secret.clone().unwrap_or_default(),
@@ -795,7 +795,7 @@ fn render_login_form(
         .unwrap_or_default();
     format!(
         r#"<!doctype html>
-<html><head><meta charset="utf-8"><title>Mock IdP — sign in</title>
+<html><head><meta charset="utf-8"><title>Mock IdP. Sign in</title>
 <style>
 body {{ font-family: ui-sans-serif, system-ui; max-width: 600px; margin: 2em auto; padding: 1em; }}
 h1 {{ font-size: 1.1em; }}
@@ -805,7 +805,7 @@ textarea {{ width: 100%; min-height: 220px; font-family: ui-monospace, monospace
 button {{ margin-top: 0.8em; padding: 0.5em 1em; background: #2563eb; color: white; border: 0; border-radius: 4px; cursor: pointer; }}
 .muted {{ color: #6b7280; font-size: 0.8em; }}
 </style></head><body>
-<div class="banner">awsim built-in mock OIDC IdP — provider <code>{provider}</code>. Edit the
+<div class="banner">awsim built-in mock OIDC IdP. Provider <code>{provider}</code>. Edit the
 JSON below to choose what claims this sign-in should produce, then submit.</div>
 <h1>Sign in</h1>
 {err}
@@ -819,7 +819,7 @@ JSON below to choose what claims this sign-in should produce, then submit.</div>
   <input type="hidden" name="code_challenge_method" value="{code_challenge_method}">
   <label for="claims_json">Claims to issue (JSON object, must include <code>sub</code>):</label>
   <textarea name="claims_json" id="claims_json">{claims}</textarea>
-  <p class="muted">Edit freely — anything you put here lands as claims on the
+  <p class="muted">Edit freely. Anything you put here lands as claims on the
   ID token + userinfo response. The Cognito side maps these to
   user attributes via the <code>AttributeMapping</code> on the IdentityProvider.</p>
   <button type="submit">Sign in</button>

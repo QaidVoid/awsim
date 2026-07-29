@@ -3,28 +3,28 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
-/// CloudFront state — global per account (region-independent).
+/// CloudFront state. Global per account (region-independent).
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct CloudFrontState {
     pub distributions: DashMap<String, Distribution>,
     pub origin_access_controls: DashMap<String, OriginAccessControl>,
     /// Legacy OAIs (CloudFront Origin Access Identities)
     pub oais: DashMap<String, OriginAccessIdentity>,
-    /// Invalidation ID → Invalidation
+    /// Invalidation ID -> Invalidation
     pub invalidations: DashMap<String, Invalidation>,
-    /// Cache policy ID → CachePolicy
+    /// Cache policy ID -> CachePolicy
     pub cache_policies: DashMap<String, CachePolicy>,
-    /// Origin request policy ID → OriginRequestPolicy
+    /// Origin request policy ID -> OriginRequestPolicy
     pub origin_request_policies: DashMap<String, OriginRequestPolicy>,
-    /// Key group ID → KeyGroup
+    /// Key group ID -> KeyGroup
     pub key_groups: DashMap<String, KeyGroup>,
-    /// Public key ID → PublicKey
+    /// Public key ID -> PublicKey
     pub public_keys: DashMap<String, PublicKey>,
-    /// Field level encryption config ID → FieldLevelEncryptionConfig
+    /// Field level encryption config ID -> FieldLevelEncryptionConfig
     pub field_level_encryption_configs: DashMap<String, FieldLevelEncryptionConfig>,
-    /// Real-time log config ARN → RealtimeLogConfig
+    /// Real-time log config ARN -> RealtimeLogConfig
     pub realtime_log_configs: DashMap<String, RealtimeLogConfig>,
-    /// Function name → CloudFrontFunction
+    /// Function name -> CloudFrontFunction
     pub functions: DashMap<String, CloudFrontFunction>,
 }
 

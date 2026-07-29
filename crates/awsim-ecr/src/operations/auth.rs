@@ -21,7 +21,7 @@ fn signing_key() -> &'static [u8] {
     static KEY: OnceLock<[u8; 32]> = OnceLock::new();
     KEY.get_or_init(|| {
         let mut k = [0u8; 32];
-        // FNV-1a over a few unstable bits — Uuid pulls from OS randomness on
+        // FNV-1a over a few unstable bits. Uuid pulls from OS randomness on
         // every call, so two consecutive uuids xored give us 256 bits of
         // process-unique state without an extra rand dependency.
         let a = uuid::Uuid::new_v4().as_bytes().to_owned();
@@ -59,7 +59,7 @@ pub fn mint_authorization_token(expires_at: u64) -> String {
 
 /// Verify an ECR authorization token produced by
 /// [`mint_authorization_token`]. The token is the value docker / OCI
-/// clients place in the `Authorization: Basic …` header (after they
+/// clients place in the `Authorization: Basic ...` header (after they
 /// base64-decode the credentials). Returns the credential body on
 /// success so the registry HTTP layer can log per-request audit
 /// information; returns an `AwsError` with code `InvalidAuthorization`

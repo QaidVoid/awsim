@@ -245,7 +245,7 @@ fn delete_replica_records(
 
 /// Parse the `AddReplicaRegions` array, rejecting entries that duplicate
 /// or target the primary region. AWS surfaces both via
-/// InvalidParameterException with distinct messages — we collapse to the
+/// InvalidParameterException with distinct messages. We collapse to the
 /// same code, which is what the SDK already keys off.
 fn parse_replica_regions(
     value: &Value,
@@ -336,7 +336,7 @@ pub fn get_secret_value(
     let version_id = match (requested_version_id, requested_stage) {
         // Both supplied: AWS requires that the named version actually
         // carries the named stage. A mismatch surfaces as
-        // InvalidRequestException — the version exists, just not under
+        // InvalidRequestException. The version exists, just not under
         // the stage the caller asked for.
         (Some(vid), Some(stage)) => {
             let v = secret
@@ -915,8 +915,8 @@ pub fn untag_resource(
 
 /// Accept either `rate(N unit)` (unit = minute|minutes|hour|hours|day|days)
 /// or `cron(...)` with the standard six-field expression. We don't
-/// evaluate the schedule — Secrets Manager keeps these as opaque
-/// strings until the next tick — but mismatched shapes get rejected at
+/// evaluate the schedule. Secrets Manager keeps these as opaque
+/// strings until the next tick. But mismatched shapes get rejected at
 /// the API boundary the way real AWS does.
 fn validate_schedule_expression(expr: &str) -> Result<(), AwsError> {
     if let Some(rest) = expr.strip_prefix("rate(").and_then(|s| s.strip_suffix(')')) {
@@ -993,7 +993,7 @@ pub fn rotate_secret(
     if let Some(rules) = input["RotationRules"].as_object() {
         // AWS bounds AutomaticallyAfterDays at 1..=1000 and accepts
         // either it or a ScheduleExpression (`rate(...)` / `cron(...)`)
-        // — not both. Reject the documented invalid shapes here so
+        //. Not both. Reject the documented invalid shapes here so
         // callers don't silently install rotations that AWS would have
         // refused.
         let after_days = rules.get("AutomaticallyAfterDays").and_then(|v| v.as_u64());
@@ -1122,7 +1122,7 @@ fn rotate_core(
     // Dispatch the four-step rotation state machine when a Lambda ARN
     // is configured AND the gateway has wired up a `LambdaInvoker`.
     // Any step that fails leaves AWSPENDING in place but does NOT
-    // promote it to AWSCURRENT — matching real AWS, which surfaces
+    // promote it to AWSCURRENT. Matching real AWS, which surfaces
     // the failure to the caller for retry via the same token.
     if let (Some(arn_ref), Some(invoker)) = (lambda_arn.as_deref(), lambda_invoker) {
         for step in ROTATION_STEPS {
@@ -1322,7 +1322,7 @@ fn check_policy_structure(policy: &str) -> Vec<String> {
     issues
 }
 
-/// Returns true when any Allow statement names a wildcard Principal — i.e.
+/// Returns true when any Allow statement names a wildcard Principal. I.e.
 /// `Principal: "*"` or `Principal.AWS: "*"`. AWS uses this signal for
 /// BlockPublicPolicy on PutResourcePolicy.
 fn policy_grants_public_access(policy: &str) -> bool {
@@ -1758,7 +1758,7 @@ pub fn put_resource_policy(
         .ok_or_else(|| error::missing_parameter("ResourcePolicy"))?;
     let block_public = input["BlockPublicPolicy"].as_bool().unwrap_or(false);
 
-    // Reject malformed JSON regardless of BlockPublicPolicy — AWS doesn't
+    // Reject malformed JSON regardless of BlockPublicPolicy. AWS doesn't
     // store policies it can't parse.
     if serde_json::from_str::<Value>(policy).is_err() {
         return Err(AwsError::bad_request(
@@ -2465,7 +2465,7 @@ mod tests {
         // Only three steps fire (createSecret, setSecret, testSecret).
         assert_eq!(invoker.calls().len(), 3);
 
-        // The original AWSCURRENT must still be current — failed
+        // The original AWSCURRENT must still be current. Failed
         // rotations don't promote AWSPENDING.
         let current = state.secrets.get("s").unwrap().current_version_id.clone();
         assert_eq!(current, original_current);

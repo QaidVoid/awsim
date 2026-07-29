@@ -139,7 +139,7 @@ async fn delete_log_stream_removes_persisted_events() {
     .unwrap();
 
     // Re-create the stream after delete and confirm GetLogEvents
-    // returns empty — the row would still be there if delete didn't
+    // returns empty. The row would still be there if delete didn't
     // hit SQLite.
     svc.handle(
         "DeleteLogStream",

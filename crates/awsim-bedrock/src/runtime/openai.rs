@@ -1,10 +1,10 @@
-//! OpenAI-compatible request / response types — the wire format
+//! OpenAI-compatible request / response types. The wire format
 //! every translator emits, regardless of which Bedrock model
 //! family the SDK called with. Backed by Ollama / LM Studio /
 //! llama.cpp server / vLLM, all of which clone this contract.
 //!
-//! Only the fields awsim actually emits / consumes are modeled —
-//! per OpenAI's compatibility doc most additional fields are
+//! Only the fields awsim actually emits / consumes are modeled.
+//! Per OpenAI's compatibility doc most additional fields are
 //! optional and unused servers tolerate them either way.
 
 use serde::{Deserialize, Serialize};
@@ -54,7 +54,7 @@ pub struct FunctionDef {
 
 /// OpenAI streaming options. The only field that exists today is
 /// `include_usage`, which makes the server emit a final chunk with
-/// the token counters — without it usage stays absent and downstream
+/// the token counters. Without it usage stays absent and downstream
 /// `prompt_tokens` / `completion_tokens` ride out at 0.
 #[derive(Debug, Clone, Serialize)]
 pub struct StreamOptions {
@@ -224,7 +224,7 @@ pub struct Usage {
     pub total_tokens: u32,
 }
 
-// ── /v1/embeddings ────────────────────────────────────────────────
+// -- /v1/embeddings ------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]

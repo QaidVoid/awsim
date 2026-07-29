@@ -190,9 +190,9 @@ enum SecretRefKind {
 }
 
 /// Classify a container `secrets[].valueFrom` value. AWS accepts:
-///   - `arn:aws:secretsmanager:...` → SecretsManager
-///   - `arn:aws:ssm:...:parameter/...` → SSM Parameter Store
-///   - Plain parameter name (e.g. `/myapp/db-pass`) → SSM
+///   - `arn:aws:secretsmanager:...` -> SecretsManager
+///   - `arn:aws:ssm:...:parameter/...` -> SSM Parameter Store
+///   - Plain parameter name (e.g. `/myapp/db-pass`) -> SSM
 fn classify_secret_reference(value_from: &str) -> SecretRefKind {
     if value_from.starts_with("arn:aws:secretsmanager:") {
         SecretRefKind::SecretsManager
@@ -216,7 +216,7 @@ fn parse_aws_arn_account_region(arn: &str) -> Option<(String, String)> {
 }
 
 /// Look up the network mode declared on a task definition by ARN.
-/// Returns `None` when the definition can't be resolved — RunTask
+/// Returns `None` when the definition can't be resolved. RunTask
 /// falls back to "no awsvpc handling" in that case rather than
 /// rejecting the call.
 fn task_definition_network_mode(state: &EcsState, task_def_arn: &str) -> Option<String> {
@@ -280,7 +280,7 @@ pub fn run_task(
     let task_def_arn = if task_definition.starts_with("arn:") {
         task_definition.clone()
     } else {
-        // family:revision or family — look up
+        // family:revision or family. Look up
         let (family, maybe_rev) =
             crate::operations::task_definitions::parse_task_definition_id(&task_definition);
         match state.task_definitions.get(family) {

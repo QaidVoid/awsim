@@ -36,7 +36,7 @@ impl GrantLookup for KmsGrantLookup {
         };
         // The current GrantLookup trait does not surface encryption
         // context per call. Treat the call as carrying an empty context
-        // for constraint evaluation — grants with any constraints will
+        // for constraint evaluation. Grants with any constraints will
         // require the IAM evaluator hook to be extended later.
         let empty_ctx = std::collections::BTreeMap::new();
         for (_, state) in self.store.iter_all() {
@@ -167,7 +167,7 @@ mod tests {
 
     #[test]
     fn key_policy_is_consulted_during_authz_evaluation() {
-        // Resource policy explicitly denies decrypts by anyone — expectation
+        // Resource policy explicitly denies decrypts by anyone. Expectation
         // is that even an identity policy that allows kms:Decrypt is
         // overridden by the explicit deny on the key itself.
         let policy = r#"{

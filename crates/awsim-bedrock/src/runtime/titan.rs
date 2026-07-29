@@ -1,4 +1,4 @@
-//! Amazon Titan text format ↔ OpenAI chat.completions translator.
+//! Amazon Titan text format <-> OpenAI chat.completions translator.
 //!
 //! Titan request body:
 //! ```text

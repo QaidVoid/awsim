@@ -1,7 +1,7 @@
 //! Tracking of STS-issued temp credentials.
 //!
-//! `AssumeRole` and the various role-assumption variants — together with
-//! Cognito Identity's `GetCredentialsForIdentity` — return short-lived
+//! `AssumeRole` and the various role-assumption variants. Together with
+//! Cognito Identity's `GetCredentialsForIdentity`. Return short-lived
 //! credentials (`ASIA...`) that callers immediately use to sign further
 //! requests. Without a way to map those access keys back to the role
 //! that issued them, the IAM enforcement layer can't resolve a
@@ -38,12 +38,12 @@ pub struct AssumedRoleSession {
     pub session_name: String,
     /// Account that owns the role.
     pub account_id: String,
-    /// `AROA...:session_name` — the AWS `UserId` shape that
+    /// `AROA...:session_name`. The AWS `UserId` shape that
     /// `GetCallerIdentity` reports for assumed-role callers.
     pub assumed_role_id: String,
     /// Wall-clock expiration. Real AWS sessions cap at 12 hours; we
     /// honour whatever the caller passed in. `None` means "no expiry"
-    /// — only used by tests; production paths always set one.
+    ///. Only used by tests; production paths always set one.
     pub expiry: Option<SystemTime>,
 
     /// Optional inline session policy document JSON captured from the
@@ -65,7 +65,7 @@ pub struct AssumedRoleSession {
     /// AWS surfaces these on the temporary credentials and uses them
     /// when evaluating tag-based conditions on subsequent calls.
     pub session_tags: Vec<(String, String)>,
-    /// Subset of session tag keys flagged transitive — when this
+    /// Subset of session tag keys flagged transitive. When this
     /// session itself calls `AssumeRole`, those tags propagate to the
     /// new session.
     pub transitive_tag_keys: Vec<String>,
@@ -106,7 +106,7 @@ impl StsSessionStore {
     }
 
     /// Look up a session by access key. Returns `None` if absent or if
-    /// the entry has expired — expired entries are removed in-place so
+    /// the entry has expired. Expired entries are removed in-place so
     /// the next caller doesn't have to re-check.
     pub fn lookup(&self, access_key: &str) -> Option<AssumedRoleSession> {
         let now = SystemTime::now();

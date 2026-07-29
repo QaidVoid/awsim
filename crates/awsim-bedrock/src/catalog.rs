@@ -8,7 +8,7 @@
 //!
 //! The JSON ships with the binary via `include_str!`. Parsing
 //! happens once on first access and is cached for the lifetime of
-//! the process — a malformed bundle panics at first request, which
+//! the process. A malformed bundle panics at first request, which
 //! is what we want: it's a compile-time-fixable bug, not a runtime
 //! condition we should silently degrade through.
 
@@ -89,7 +89,7 @@ pub struct CatalogModel {
 }
 
 /// Parse-once view of the bundled catalog. Panics on first call if
-/// the bundled JSON is malformed — that's a compile-time-fixable
+/// the bundled JSON is malformed. That's a compile-time-fixable
 /// bug, so failing loudly at startup beats degrading silently.
 pub fn catalog() -> &'static ProviderCatalog {
     static CELL: OnceLock<ProviderCatalog> = OnceLock::new();

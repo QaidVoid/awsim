@@ -250,8 +250,8 @@ fn record_invocation(
     let (prompt_tokens, completion_tokens, cost_usd) = match usage {
         Some((p, c)) => {
             // `cost_for_metrics` is what we bump cumulative counters
-            // by — 0.0 when unpriced. `cost_for_record` is what the
-            // activity-ring entry surfaces — `None` when unpriced so
+            // by. 0.0 when unpriced. `cost_for_record` is what the
+            // activity-ring entry surfaces. `None` when unpriced so
             // the UI can render an em-dash rather than a misleading
             // $0.000.
             let pricing = backends.pricing(bedrock_id);
@@ -436,7 +436,7 @@ fn flatten_request_content(req: &mut openai::ChatRequest) -> bool {
 /// `(text, finish_reason, prompt_tokens, completion_tokens)` tuple.
 /// Per-family streaming translators wrap the result in their native
 /// chunk envelope. Wire-level vnd.amazon.eventstream framing is
-/// future work — chunks are returned as a JSON array on the response.
+/// future work. Chunks are returned as a JSON array on the response.
 pub(crate) async fn call_chat_stream(
     backends: &BedrockBackends,
     bedrock_id: &str,
@@ -763,7 +763,7 @@ pub(crate) fn stream_envelope(chunks: Vec<Value>) -> Value {
 /// Wrap a list of typed Converse-stream events (each is `{ "<eventType>":
 /// <payload> }`) into the protocol-layer event-stream marker shape.
 /// Each event becomes its own binary frame whose `:event-type` header
-/// names the variant — `messageStart`, `contentBlockDelta`,
+/// names the variant. `messageStart`, `contentBlockDelta`,
 /// `contentBlockStop`, `messageStop`, `metadata`.
 pub(crate) fn converse_stream_envelope(events: Vec<Value>) -> Value {
     let frames: Vec<Value> = events
@@ -824,7 +824,7 @@ async fn call_embed(
                 // Embeddings have no completion tokens, so report
                 // 0 on the output side. Pricing's `cost_usd` is
                 // multiplied through, which leaves the output rate
-                // contributing nothing — same shape as the
+                // contributing nothing. Same shape as the
                 // translator-side patch.
                 let usage = resp.usage.as_ref().map(|u| (u.prompt_tokens, 0u32));
                 record_invocation(
@@ -924,7 +924,7 @@ async fn try_embed_once(
 /// Validate `contentType` / `accept` per InvokeModel(WithResponseStream).
 /// AWS only accepts `application/json` for the request payload and for
 /// the non-streaming response. The streaming variant must accept the
-/// event-stream content type — anything else returns a 400 at the API
+/// event-stream content type. Anything else returns a 400 at the API
 /// boundary rather than a confusing decode failure deeper in.
 fn validate_invoke_content_types(input: &Value, streaming: bool) -> Result<(), AwsError> {
     let content_type = input
@@ -1173,7 +1173,7 @@ impl ModelFamily {
     }
 }
 
-// ── Real streaming entry point ───────────────────────────────────────────────
+// -- Real streaming entry point -----------------------------------------------
 
 /// Open a streaming response for `ConverseStream` /
 /// `InvokeModelWithResponseStream`. Forwards each Ollama SSE chunk
@@ -1182,7 +1182,7 @@ impl ModelFamily {
 /// response buffers.
 ///
 /// Falls back to a single-frame canned stream when no backend is
-/// configured or the resolved backend can't be reached — same
+/// configured or the resolved backend can't be reached. Same
 /// behaviour as the buffered path, just shipped as proper binary
 /// frames.
 pub(crate) async fn stream_response(
@@ -1202,12 +1202,12 @@ pub(crate) async fn stream_response(
 
     let resolved = registry.and_then(|r| r.resolve_invoke(&model_id));
     let Some((backend, model_tag)) = resolved else {
-        // No backend mapping — emit a single canned frame.
+        // No backend mapping. Emit a single canned frame.
         return Ok(canned_stream(&model_id, is_converse));
     };
 
     if !is_converse {
-        // Vendor-family chunked streaming is more involved — we'd
+        // Vendor-family chunked streaming is more involved. We'd
         // need per-family chunk translators that base64-wrap each
         // partial. Fall back to the buffered path (which already
         // emits proper binary frames) until we wire those up.
@@ -1237,7 +1237,7 @@ pub(crate) async fn stream_response(
         stream::once(async move { Ok::<Bytes, AwsError>(Bytes::from(header_frame)) });
     let combined: BoxStream<'static, Result<Bytes, AwsError>> =
         header_stream.chain(translated).boxed();
-    void_use(body); // silence unused warning — body parsed for validation only
+    void_use(body); // silence unused warning. Body parsed for validation only
     Ok(HandlerResult::Streaming {
         body: combined,
         content_type: "application/vnd.amazon.eventstream",
@@ -1315,7 +1315,7 @@ struct ConverseStreamState {
     /// fragments arrive and flush the completed frames at EOF.
     tool_calls: Vec<AccumulatedToolCall>,
     /// After upstream EOF we still have to emit closing frames in
-    /// sequence — this queue holds them.
+    /// sequence. This queue holds them.
     trailing: std::collections::VecDeque<Bytes>,
 }
 
@@ -1431,7 +1431,7 @@ fn converse_stream_from_sse(
     .boxed()
 }
 
-/// Pull complete `data: …` lines out of the buffer one at a time.
+/// Pull complete `data: ...` lines out of the buffer one at a time.
 /// Returns a `contentBlockDelta` frame when a chunk has text, or
 /// `None` when the buffer doesn't yet hold a full event. Updates
 /// usage/finish-reason counters as it sees them.
@@ -1507,13 +1507,13 @@ fn encode_event_frame(event_type: &str, payload: &Value) -> Vec<u8> {
     buf
 }
 
-/// Single-frame canned stream — used when no backend is configured
+/// Single-frame canned stream. Used when no backend is configured
 /// or the model id has no mapping. Keeps the stream interface
 /// consistent so the AI SDK's stream parser sees a valid (if short)
 /// event sequence.
 fn canned_stream(model_id: &str, is_converse: bool) -> HandlerResult {
     let canned_text = format!(
-        "AWSim canned response for {model_id} — configure a Bedrock backend to proxy to a real LLM."
+        "AWSim canned response for {model_id}. Configure a Bedrock backend to proxy to a real LLM."
     );
     let frames: Vec<Vec<u8>> = if is_converse {
         vec![
@@ -1566,7 +1566,7 @@ fn canned_stream(model_id: &str, is_converse: bool) -> HandlerResult {
     }
 }
 
-/// Single-chunk frame for `InvokeModelWithResponseStream` — wraps a
+/// Single-chunk frame for `InvokeModelWithResponseStream`. Wraps a
 /// base64-encoded vendor JSON payload under `bytes`.
 fn encode_chunk_frame(b64_payload: &str) -> Vec<u8> {
     use awsim_core::protocol::eventstream::{EventHeader, append_message};
@@ -1591,7 +1591,7 @@ fn encode_chunk_frame(b64_payload: &str) -> Vec<u8> {
     buf
 }
 
-/// Fallback for InvokeModelWithResponseStream — re-uses the existing
+/// Fallback for InvokeModelWithResponseStream. Re-uses the existing
 /// buffered translator and converts the resulting marker-shaped
 /// Value into a single-shot streaming response. Same content as
 /// before, just delivered through the streaming pipeline so the
@@ -1599,8 +1599,8 @@ fn encode_chunk_frame(b64_payload: &str) -> Vec<u8> {
 fn buffered_stream_to_streaming(value: Value) -> HandlerResult {
     use awsim_core::protocol::eventstream::try_encode;
     let bytes = try_encode(&value).unwrap_or_else(|| {
-        // Shouldn't happen — invoke_model_with_response_stream always
-        // wraps in the marker — but we keep the response shape
+        // Shouldn't happen. Invoke_model_with_response_stream always
+        // wraps in the marker. But we keep the response shape
         // sensible by encoding the value as-is if not.
         serde_json::to_vec(&value).unwrap_or_default()
     });

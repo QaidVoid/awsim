@@ -1,8 +1,8 @@
 //! HTTP client + config for OpenAI-compatible LLM backends.
 //!
 //! `BedrockBackend` represents one endpoint (URL + optional bearer
-//! key + reqwest client). `BedrockBackends` is a named registry —
-//! one or many — plus the model map and a default name. The runtime
+//! key + reqwest client). `BedrockBackends` is a named registry.
+//! One or many. Plus the model map and a default name. The runtime
 //! takes a registry handle and resolves `(backend, tag)` per request,
 //! so a single awsim instance can fan out across Ollama, Groq,
 //! OpenAI, etc. simultaneously.
@@ -32,7 +32,7 @@ struct BackendInner {
     client: reqwest::Client,
     /// Base URL ending in `/v1` (OpenAI compat). Trailing slash optional.
     endpoint: String,
-    /// `Authorization: Bearer …` value when set; absent for backends
+    /// `Authorization: Bearer ...` value when set; absent for backends
     /// like a default Ollama install that don't require auth.
     api_key: Option<String>,
 }
@@ -73,7 +73,7 @@ impl BedrockBackend {
 
 /// Named-backend registry. Owns the model map. The runtime asks
 /// `resolve_invoke` / `resolve_embed` for each request and gets back
-/// the right `(BedrockBackend, tag)` pair — even when different
+/// the right `(BedrockBackend, tag)` pair. Even when different
 /// Bedrock ids point at different backends.
 #[derive(Clone)]
 pub struct BedrockBackends(Arc<BackendsInner>);

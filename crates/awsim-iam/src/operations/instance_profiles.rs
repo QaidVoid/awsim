@@ -147,7 +147,7 @@ pub fn remove_role_from_instance_profile(
     Ok(json!({}))
 }
 
-/// ListInstanceProfiles — Return all instance profiles for the account.
+/// ListInstanceProfiles. Return all instance profiles for the account.
 pub fn list_instance_profiles(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let path_prefix = opt_str(input, "PathPrefix").unwrap_or("/");
 
@@ -175,7 +175,7 @@ pub fn list_instance_profiles(state: &IamState, input: &Value) -> Result<Value, 
     }))
 }
 
-/// ListInstanceProfilesForRole — Return all instance profiles referencing the given role.
+/// ListInstanceProfilesForRole. Return all instance profiles referencing the given role.
 pub fn list_instance_profiles_for_role(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let role_name = require_str(input, "RoleName")?;
 

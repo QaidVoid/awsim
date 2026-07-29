@@ -180,7 +180,7 @@ pub async fn test_cognito_idp(endpoint: &str, verbose: bool) -> Vec<OpResult> {
                 verbose
             ));
 
-            // ConfirmSignUp (auto-confirm in sim — may pass or need admin confirm)
+            // ConfirmSignUp (auto-confirm in sim. May pass or need admin confirm)
             results.push(chk!(
                 "ConfirmSignUp",
                 client
@@ -536,7 +536,7 @@ pub async fn test_cognito_idp(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             verbose
         ));
 
-        // DescribeUserPoolDomain (for a domain that doesn't exist — should return empty)
+        // DescribeUserPoolDomain (for a domain that doesn't exist. Should return empty)
         results.push(chk!(
             "DescribeUserPoolDomain",
             client

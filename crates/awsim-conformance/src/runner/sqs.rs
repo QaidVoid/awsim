@@ -128,7 +128,7 @@ pub async fn test_sqs(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         results.push(OpResult::Skipped("DeleteMessage".to_string()));
     }
 
-    // DeleteMessageBatch — receive a fresh message first
+    // DeleteMessageBatch. Receive a fresh message first
     let recv2 = client
         .receive_message()
         .queue_url(&queue_url)

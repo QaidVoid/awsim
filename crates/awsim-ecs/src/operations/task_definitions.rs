@@ -113,7 +113,7 @@ fn validate_secret_reference(
 }
 
 /// Returns `(account, region)` when `arn` is a well-formed
-/// SecretsManager secret ARN. Otherwise `None` — the caller falls
+/// SecretsManager secret ARN. Otherwise `None`. The caller falls
 /// back to the request context.
 fn parse_secretsmanager_arn(arn: &str) -> Option<(String, String)> {
     let rest = arn.strip_prefix("arn:aws:secretsmanager:")?;

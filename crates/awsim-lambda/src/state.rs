@@ -5,15 +5,15 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock};
 
-/// Lambda state — per account and region.
+/// Lambda state. Per account and region.
 #[derive(Debug, Default)]
 pub struct LambdaState {
     pub functions: DashMap<String, LambdaFunction>,
     pub event_source_mappings: DashMap<String, EventSourceMapping>,
     pub layers: DashMap<String, Vec<LayerVersion>>,
-    /// function_name → FunctionUrlConfig
+    /// function_name -> FunctionUrlConfig
     pub url_configs: DashMap<String, FunctionUrlConfig>,
-    /// function_name[:qualifier] → EventInvokeConfig
+    /// function_name[:qualifier] -> EventInvokeConfig
     pub event_invoke_configs: DashMap<String, EventInvokeConfig>,
     pub body_store: OnceLock<Arc<BodyStore>>,
     /// Per-function active-invocation counter. Used to enforce
@@ -285,7 +285,7 @@ pub struct LambdaFunction {
     /// Tags attached to this function.
     pub tags: HashMap<String, String>,
     /// Reserved concurrent executions ceiling per PutFunctionConcurrency.
-    /// `None` means unreserved — the function shares the account pool.
+    /// `None` means unreserved. The function shares the account pool.
     pub reserved_concurrent_executions: Option<u32>,
     /// Provisioned concurrency configurations keyed by qualifier (alias name
     /// or function version). Each entry tracks the requested capacity along
@@ -368,14 +368,14 @@ pub struct Alias {
     pub arn: String,
     pub function_version: String,
     pub description: String,
-    /// Traffic-shifting weights: `version → fraction in [0, 1]`. When set,
+    /// Traffic-shifting weights: `version -> fraction in [0, 1]`. When set,
     /// invocations through the alias split between `function_version` and
-    /// the listed versions per their weights. Must total ≤ 1; the
+    /// the listed versions per their weights. Must total <= 1; the
     /// implicit remainder is routed to `function_version`.
     pub routing_config: HashMap<String, f64>,
 }
 
-/// Stored for debugging and the admin console — fields read externally.
+/// Stored for debugging and the admin console. Fields read externally.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct InvocationRecord {
@@ -398,7 +398,7 @@ pub struct EventSourceMapping {
     pub enabled: bool,
     pub state: String,
     pub last_modified: String,
-    /// TRIM_HORIZON | LATEST | AT_TIMESTAMP — only meaningful for Kinesis/DDB streams.
+    /// TRIM_HORIZON | LATEST | AT_TIMESTAMP. Only meaningful for Kinesis/DDB streams.
     pub starting_position: Option<String>,
     pub starting_position_timestamp: Option<f64>,
     pub maximum_batching_window_in_seconds: u32,
@@ -409,7 +409,7 @@ pub struct EventSourceMapping {
     pub tumbling_window_in_seconds: Option<u32>,
     /// Raw FilterCriteria JSON: { "Filters": [{ "Pattern": "..." }, ...] }.
     pub filter_criteria: Option<serde_json::Value>,
-    /// DestinationConfig.OnFailure.Destination ARN — receives failed batches.
+    /// DestinationConfig.OnFailure.Destination ARN. Receives failed batches.
     pub destination_on_failure: Option<String>,
     pub function_response_types: Vec<String>,
     /// Last poll result, surfaced via Get/List for diagnostics.

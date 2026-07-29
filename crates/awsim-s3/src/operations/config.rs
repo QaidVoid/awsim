@@ -8,7 +8,7 @@ use crate::state::{NotificationConfiguration, NotificationDestination, S3State, 
 use super::bucket::no_such_bucket;
 use super::require_str;
 
-// ─── Tagging ─────────────────────────────────────────────────────────────────
+// --- Tagging -----------------------------------------------------------------
 
 /// PUT /{Bucket}?tagging
 pub fn put_bucket_tagging(state: &S3State, input: &Value) -> Result<Value, AwsError> {
@@ -55,7 +55,7 @@ pub fn delete_bucket_tagging(state: &S3State, input: &Value) -> Result<Value, Aw
     Ok(json!({}))
 }
 
-// ─── Versioning ───────────────────────────────────────────────────────────────
+// --- Versioning ---------------------------------------------------------------
 
 /// PUT /{Bucket}?versioning
 pub fn put_bucket_versioning(state: &S3State, input: &Value) -> Result<Value, AwsError> {
@@ -103,7 +103,7 @@ pub fn get_bucket_versioning(state: &S3State, input: &Value) -> Result<Value, Aw
     }
 }
 
-// ─── Policy ──────────────────────────────────────────────────────────────────
+// --- Policy ------------------------------------------------------------------
 
 /// PUT /{Bucket}?policy
 pub fn put_bucket_policy(state: &S3State, input: &Value) -> Result<Value, AwsError> {
@@ -171,7 +171,7 @@ pub fn delete_bucket_policy(state: &S3State, input: &Value) -> Result<Value, Aws
     Ok(json!({}))
 }
 
-// ─── CORS ─────────────────────────────────────────────────────────────────────
+// --- CORS ---------------------------------------------------------------------
 
 /// PUT /{Bucket}?cors
 pub fn put_bucket_cors(state: &S3State, input: &Value) -> Result<Value, AwsError> {
@@ -305,7 +305,7 @@ pub fn delete_bucket_cors(state: &S3State, input: &Value) -> Result<Value, AwsEr
     Ok(json!({}))
 }
 
-// ─── Notification Configuration ──────────────────────────────────────────────
+// --- Notification Configuration ----------------------------------------------
 
 /// PUT /{Bucket}?notification
 pub fn put_bucket_notification_configuration(
@@ -584,14 +584,14 @@ fn notification_entry(arn_field: &str, dest: &NotificationDestination) -> Value 
     Value::Object(entry)
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// --- Helpers -----------------------------------------------------------------
 
 /// Parse tags from the XML-parsed input.
 /// Expected: {"Tagging": {"TagSet": {"Tag": [...]}}} or similar.
 fn parse_tags(input: &Value) -> HashMap<String, String> {
     let mut tags = HashMap::new();
 
-    // Navigate: Tagging → TagSet → Tag (may be array or single object)
+    // Navigate: Tagging -> TagSet -> Tag (may be array or single object)
     let tag_list = input
         .get("Tagging")
         .and_then(|v| v.get("TagSet"))
@@ -627,7 +627,7 @@ fn parse_tags(input: &Value) -> HashMap<String, String> {
     tags
 }
 
-// ─── Object Tagging ─────────────────────────────────────────────────────────
+// --- Object Tagging ---------------------------------------------------------
 
 /// PUT /{Bucket}/{Key+}?tagging
 /// Read the caller's VersionId in either Smithy member-name (`VersionId`)
@@ -749,9 +749,9 @@ pub fn delete_object_tagging(state: &S3State, input: &Value) -> Result<Value, Aw
     Ok(result)
 }
 
-// ─── ACL ──────────────────────────────────────────────────────────────────────
+// --- ACL ----------------------------------------------------------------------
 
-/// GET /{Bucket}?acl — Return default owner-full-control ACL for a bucket.
+/// GET /{Bucket}?acl. Return default owner-full-control ACL for a bucket.
 pub fn get_bucket_acl(
     state: &S3State,
     input: &Value,
@@ -773,7 +773,7 @@ pub fn get_bucket_acl(
     Ok(default_bucket_acl(&ctx.account_id))
 }
 
-/// PUT /{Bucket}?acl — Store ACL for a bucket (accept and store).
+/// PUT /{Bucket}?acl. Store ACL for a bucket (accept and store).
 pub fn put_bucket_acl(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
 
@@ -786,7 +786,7 @@ pub fn put_bucket_acl(state: &S3State, input: &Value) -> Result<Value, AwsError>
     Ok(json!({}))
 }
 
-/// GET /{Bucket}/{Key+}?acl — Return default ACL for an object.
+/// GET /{Bucket}/{Key+}?acl. Return default ACL for an object.
 pub fn get_object_acl(
     state: &S3State,
     input: &Value,
@@ -837,9 +837,9 @@ fn default_bucket_acl(owner_id: &str) -> Value {
     })
 }
 
-// ─── Lifecycle Configuration ─────────────────────────────────────────────────
+// --- Lifecycle Configuration -------------------------------------------------
 
-/// GET /{Bucket}?lifecycle — Return stored lifecycle configuration.
+/// GET /{Bucket}?lifecycle. Return stored lifecycle configuration.
 pub fn get_bucket_lifecycle_configuration(
     state: &S3State,
     input: &Value,
@@ -869,7 +869,7 @@ pub fn get_bucket_lifecycle_configuration(
     }
 }
 
-/// PUT /{Bucket}?lifecycle — Store lifecycle configuration.
+/// PUT /{Bucket}?lifecycle. Store lifecycle configuration.
 pub fn put_bucket_lifecycle_configuration(
     state: &S3State,
     input: &Value,
@@ -932,7 +932,7 @@ fn validate_lifecycle_configuration(input: &Value) -> Result<(), AwsError> {
     Ok(())
 }
 
-/// DELETE /{Bucket}?lifecycle — Remove lifecycle configuration.
+/// DELETE /{Bucket}?lifecycle. Remove lifecycle configuration.
 pub fn delete_bucket_lifecycle_configuration(
     state: &S3State,
     input: &Value,
@@ -948,9 +948,9 @@ pub fn delete_bucket_lifecycle_configuration(
     Ok(json!({}))
 }
 
-// ─── Encryption ──────────────────────────────────────────────────────────────
+// --- Encryption --------------------------------------------------------------
 
-/// GET /{Bucket}?encryption — Return stored encryption configuration or default SSE-S3.
+/// GET /{Bucket}?encryption. Return stored encryption configuration or default SSE-S3.
 pub fn get_bucket_encryption(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
 
@@ -983,7 +983,7 @@ pub fn get_bucket_encryption(state: &S3State, input: &Value) -> Result<Value, Aw
     }
 }
 
-/// PUT /{Bucket}?encryption — Store encryption configuration.
+/// PUT /{Bucket}?encryption. Store encryption configuration.
 pub fn put_bucket_encryption(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
 
@@ -996,7 +996,7 @@ pub fn put_bucket_encryption(state: &S3State, input: &Value) -> Result<Value, Aw
     Ok(json!({}))
 }
 
-/// DELETE /{Bucket}?encryption — Remove encryption configuration.
+/// DELETE /{Bucket}?encryption. Remove encryption configuration.
 pub fn delete_bucket_encryption(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
 
@@ -1022,9 +1022,9 @@ fn default_sse_s3_config() -> Value {
     })
 }
 
-// ─── Generic config helpers ──────────────────────────────────────────────────
+// --- Generic config helpers --------------------------------------------------
 
-/// GET /{Bucket}?<param> — Retrieve a stored JSON config from bucket.configs.
+/// GET /{Bucket}?<param>. Retrieve a stored JSON config from bucket.configs.
 /// Returns `not_found_code` error if not set.
 /// `xml_root` is the expected XML root element name (used to wrap the response).
 /// `config_key` is the JSON key under which the config data was stored.
@@ -1072,7 +1072,7 @@ pub fn get_bucket_config_xml(
     }
 }
 
-/// PUT /{Bucket}?<param> — Store a JSON config on bucket.configs.
+/// PUT /{Bucket}?<param>. Store a JSON config on bucket.configs.
 /// Extracts `config_key` subfield if present, otherwise stores the input JSON (excluding path params).
 pub fn put_bucket_config_key(
     state: &S3State,
@@ -1099,7 +1099,7 @@ pub fn put_bucket_config_key(
     Ok(json!({}))
 }
 
-/// DELETE /{Bucket}?<param> — Remove a stored config from bucket.configs.
+/// DELETE /{Bucket}?<param>. Remove a stored config from bucket.configs.
 pub fn delete_bucket_config(
     state: &S3State,
     input: &Value,
@@ -1116,7 +1116,7 @@ pub fn delete_bucket_config(
     Ok(json!({}))
 }
 
-// ─── Website ─────────────────────────────────────────────────────────────────
+// --- Website -----------------------------------------------------------------
 
 pub fn get_bucket_website(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     get_bucket_config_xml(
@@ -1192,7 +1192,7 @@ pub fn delete_bucket_website(state: &S3State, input: &Value) -> Result<Value, Aw
     delete_bucket_config(state, input, "website")
 }
 
-// ─── Replication ─────────────────────────────────────────────────────────────
+// --- Replication -------------------------------------------------------------
 
 pub fn get_bucket_replication(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     get_bucket_config_xml(
@@ -1218,7 +1218,7 @@ pub fn delete_bucket_replication(state: &S3State, input: &Value) -> Result<Value
     delete_bucket_config(state, input, "replication")
 }
 
-// ─── Request Payment ─────────────────────────────────────────────────────────
+// --- Request Payment ---------------------------------------------------------
 
 pub fn get_bucket_request_payment(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
@@ -1265,7 +1265,7 @@ pub fn put_bucket_request_payment(state: &S3State, input: &Value) -> Result<Valu
     Ok(json!({}))
 }
 
-// ─── Accelerate Configuration ─────────────────────────────────────────────────
+// --- Accelerate Configuration -------------------------------------------------
 
 pub fn get_bucket_accelerate_configuration(
     state: &S3State,
@@ -1322,7 +1322,7 @@ pub fn put_bucket_accelerate_configuration(
     Ok(json!({}))
 }
 
-// ─── Analytics Configurations (keyed by Id) ───────────────────────────────────
+// --- Analytics Configurations (keyed by Id) -----------------------------------
 
 pub fn get_bucket_analytics_configuration(
     state: &S3State,
@@ -1413,7 +1413,7 @@ pub fn list_bucket_analytics_configurations(
     Ok(json!({ "AnalyticsConfigurationList": configs, "IsTruncated": false }))
 }
 
-// ─── Metrics Configurations (keyed by Id) ────────────────────────────────────
+// --- Metrics Configurations (keyed by Id) ------------------------------------
 
 pub fn get_bucket_metrics_configuration(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     if input.get("Id").and_then(Value::as_str).is_none() {
@@ -1494,7 +1494,7 @@ pub fn list_bucket_metrics_configurations(
     Ok(json!({ "MetricsConfigurationList": configs, "IsTruncated": false }))
 }
 
-// ─── Intelligent Tiering Configurations (keyed by Id) ────────────────────────
+// --- Intelligent Tiering Configurations (keyed by Id) ------------------------
 
 pub fn get_bucket_intelligent_tiering_configuration(
     state: &S3State,
@@ -1588,7 +1588,7 @@ pub fn list_bucket_intelligent_tiering_configurations(
     Ok(json!({ "IntelligentTieringConfigurationList": configs, "IsTruncated": false }))
 }
 
-// ─── Inventory Configurations (keyed by Id) ───────────────────────────────────
+// --- Inventory Configurations (keyed by Id) -----------------------------------
 
 pub fn get_bucket_inventory_configuration(
     state: &S3State,
@@ -1678,7 +1678,7 @@ pub fn list_bucket_inventory_configurations(
     Ok(json!({ "InventoryConfigurationList": configs, "IsTruncated": false }))
 }
 
-// ─── Ownership Controls ───────────────────────────────────────────────────────
+// --- Ownership Controls -------------------------------------------------------
 
 pub fn get_bucket_ownership_controls(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     get_bucket_config_xml(
@@ -1704,7 +1704,7 @@ pub fn delete_bucket_ownership_controls(state: &S3State, input: &Value) -> Resul
     delete_bucket_config(state, input, "ownership-controls")
 }
 
-// ─── Public Access Block ──────────────────────────────────────────────────────
+// --- Public Access Block ------------------------------------------------------
 
 pub fn get_public_access_block(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
@@ -1756,7 +1756,7 @@ pub fn delete_public_access_block(state: &S3State, input: &Value) -> Result<Valu
     delete_bucket_config(state, input, "public-access-block")
 }
 
-// ─── Bucket Policy Status ────────────────────────────────────────────────────
+// --- Bucket Policy Status ----------------------------------------------------
 
 pub fn get_bucket_policy_status(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
@@ -1778,7 +1778,7 @@ pub fn get_bucket_policy_status(state: &S3State, input: &Value) -> Result<Value,
     }))
 }
 
-// ─── Object Lock Configuration ───────────────────────────────────────────────
+// --- Object Lock Configuration -----------------------------------------------
 
 pub fn get_object_lock_configuration(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
@@ -1818,7 +1818,7 @@ pub fn put_object_lock_configuration(state: &S3State, input: &Value) -> Result<V
     put_bucket_config_key(state, input, "object-lock", Some("ObjectLockConfiguration"))
 }
 
-// ─── Object Legal Hold ───────────────────────────────────────────────────────
+// --- Object Legal Hold -------------------------------------------------------
 
 pub fn get_object_legal_hold(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
@@ -1888,7 +1888,7 @@ pub fn put_object_legal_hold(state: &S3State, input: &Value) -> Result<Value, Aw
     Ok(json!({}))
 }
 
-// ─── Object Retention ────────────────────────────────────────────────────────
+// --- Object Retention --------------------------------------------------------
 
 pub fn get_object_retention(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
@@ -1971,7 +1971,7 @@ pub fn put_object_retention(state: &S3State, input: &Value) -> Result<Value, Aws
     Ok(json!({}))
 }
 
-// ─── Put Object ACL ──────────────────────────────────────────────────────────
+// --- Put Object ACL ----------------------------------------------------------
 
 pub fn put_object_acl(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
@@ -1993,7 +1993,7 @@ pub fn put_object_acl(state: &S3State, input: &Value) -> Result<Value, AwsError>
     Ok(json!({}))
 }
 
-// ─── Get Object Attributes ───────────────────────────────────────────────────
+// --- Get Object Attributes ---------------------------------------------------
 
 pub fn get_object_attributes(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
@@ -2020,7 +2020,7 @@ pub fn get_object_attributes(state: &S3State, input: &Value) -> Result<Value, Aw
     }))
 }
 
-// ─── Restore Object ──────────────────────────────────────────────────────────
+// --- Restore Object ----------------------------------------------------------
 
 pub fn restore_object(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
@@ -2042,7 +2042,7 @@ pub fn restore_object(state: &S3State, input: &Value) -> Result<Value, AwsError>
     Ok(json!({}))
 }
 
-// ─── Rename Object ───────────────────────────────────────────────────────────
+// --- Rename Object -----------------------------------------------------------
 
 pub fn rename_object(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
@@ -2070,7 +2070,7 @@ pub fn rename_object(state: &S3State, input: &Value) -> Result<Value, AwsError> 
     Ok(json!({}))
 }
 
-// ─── Create Session ──────────────────────────────────────────────────────────
+// --- Create Session ----------------------------------------------------------
 
 pub fn create_session(_state: &S3State, _input: &Value) -> Result<Value, AwsError> {
     use crate::util::now_iso8601;
@@ -2085,9 +2085,9 @@ pub fn create_session(_state: &S3State, _input: &Value) -> Result<Value, AwsErro
     }))
 }
 
-// ─── Logging ─────────────────────────────────────────────────────────────────
+// --- Logging -----------------------------------------------------------------
 
-/// GET /{Bucket}?logging — Return empty logging configuration.
+/// GET /{Bucket}?logging. Return empty logging configuration.
 pub fn get_bucket_logging(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
 
@@ -2120,7 +2120,7 @@ pub fn get_bucket_logging(state: &S3State, input: &Value) -> Result<Value, AwsEr
     }
 }
 
-/// PUT /{Bucket}?logging — Store logging configuration.
+/// PUT /{Bucket}?logging. Store logging configuration.
 pub fn put_bucket_logging(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
 

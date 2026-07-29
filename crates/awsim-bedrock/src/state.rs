@@ -4,21 +4,21 @@ use std::collections::HashMap;
 /// Per-account/region Bedrock state.
 #[derive(Debug, Default)]
 pub struct BedrockState {
-    /// guardrail_id → Guardrail
+    /// guardrail_id -> Guardrail
     pub guardrails: DashMap<String, Guardrail>,
-    /// job_id → CustomizationJob
+    /// job_id -> CustomizationJob
     pub customization_jobs: DashMap<String, CustomizationJob>,
-    /// resource_arn → tags
+    /// resource_arn -> tags
     pub tags: DashMap<String, HashMap<String, String>>,
     /// Stored logging configuration (one per state)
     pub logging_config: DashMap<String, LoggingConfig>,
-    /// provisioned model id → ProvisionedModel
+    /// provisioned model id -> ProvisionedModel
     pub provisioned_models: DashMap<String, ProvisionedModel>,
-    /// invocation job id → InvocationJob
+    /// invocation job id -> InvocationJob
     pub invocation_jobs: DashMap<String, InvocationJob>,
-    /// custom model name → CustomModel
+    /// custom model name -> CustomModel
     pub custom_models: DashMap<String, CustomModel>,
-    /// knowledge base id → KnowledgeBase
+    /// knowledge base id -> KnowledgeBase
     pub knowledge_bases: DashMap<String, KnowledgeBase>,
 }
 

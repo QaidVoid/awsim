@@ -23,10 +23,10 @@ use state::{DynamoState, DynamoStateSnapshot, Table};
 
 /// The AWSim DynamoDB service handler.
 ///
-/// Holds two stores during the in-memory → SQLite transition:
-///   * `store` — the legacy in-memory `DashMap` per (account, region).
+/// Holds two stores during the in-memory -> SQLite transition:
+///   * `store`. The legacy in-memory `DashMap` per (account, region).
 ///     Reads still go here; writes are mirrored to SQLite (stage 2 dual-write).
-///   * `sqlite` — the persistent backing store that Query/Scan/etc. will
+///   * `sqlite`. The persistent backing store that Query/Scan/etc. will
 ///     migrate to in subsequent stages. When AWSim is started without
 ///     `--data-dir` we open it on a per-process temp file so behaviour
 ///     is consistent in tests and ephemeral runs.
@@ -43,14 +43,14 @@ pub struct DynamoDbService {
     s3_reader: std::sync::OnceLock<Arc<dyn awsim_core::S3ObjectReader>>,
     /// Holds the per-process `TempDir` for the no-data-dir case so
     /// `dynamodb.db` + `.db-wal` + `.db-shm` are deleted when the
-    /// service drops. `None` when persistent storage is in use — the
+    /// service drops. `None` when persistent storage is in use. The
     /// user owns that directory.
     _tempdir: Option<tempfile::TempDir>,
 }
 
 impl DynamoDbService {
     /// Ephemeral in-process store. Useful for tests and `awsim` runs
-    /// that don't pass `--data-dir` — files live in a `TempDir` that
+    /// that don't pass `--data-dir`. Files live in a `TempDir` that
     /// the OS cleans up on graceful shutdown via the Drop impl.
     pub fn new() -> Self {
         // Best-effort cleanup of leaked legacy temp files from prior
@@ -84,7 +84,7 @@ impl DynamoDbService {
     /// SQLite needs the parent directory to exist before `open()`, so we
     /// create it here. Other services that lazily write files (S3 body
     /// store, lambda code) get away without this because their first
-    /// write does the create — sqlite can't.
+    /// write does the create. Sqlite can't.
     pub fn with_data_dir(dir: impl AsRef<Path>) -> Self {
         let dir = dir.as_ref();
         std::fs::create_dir_all(dir)
@@ -119,7 +119,7 @@ impl DynamoDbService {
         let _ = self.s3_reader.set(reader);
     }
 
-    /// Reclaim disk space after heavy DELETE / UPDATE churn — exposed
+    /// Reclaim disk space after heavy DELETE / UPDATE churn. Exposed
     /// so the awsim binary can wire it to a CLI / admin endpoint.
     pub fn vacuum(&self) -> Result<(), AwsError> {
         self.sqlite.vacuum()
@@ -177,7 +177,7 @@ impl DynamoDbService {
                         let sqlite = Arc::clone(&sqlite);
                         let account = account.clone();
                         let region = region.clone();
-                        // sqlite calls block — run them on the
+                        // sqlite calls block. Run them on the
                         // blocking pool so we don't stall the runtime.
                         let res = tokio::task::spawn_blocking(move || {
                             sqlite.delete_expired_items(
@@ -285,8 +285,8 @@ impl DynamoDbService {
     }
 
     /// Bulk-seed `tables` tables, each with `items_per_table` items,
-    /// directly into state + SQLite — bypasses the SigV4 / gateway path
-    /// so a 1k-table × 100-item seed completes in well under a second.
+    /// directly into state + SQLite. Bypasses the SigV4 / gateway path
+    /// so a 1k-table x 100-item seed completes in well under a second.
     /// Each table gets a single `id` (String) hash key. The `id_prefix`
     /// is used as the basename for the generated table names so seed
     /// data is easy to spot / clean up later.
@@ -413,7 +413,7 @@ impl Default for DynamoDbService {
 
 /// Remove any leftover `awsim-ddb-{uuid}.db[-wal|-shm]?` files in
 /// the system temp directory. These came from older awsim builds
-/// (pre-tempdir) that didn't clean up on shutdown — once the
+/// (pre-tempdir) that didn't clean up on shutdown. Once the
 /// process owning them is gone, the files are pure garbage.
 ///
 /// Best-effort: failure to read $TMPDIR or unlink any individual
@@ -431,8 +431,8 @@ fn sweep_legacy_temp_files() {
             continue;
         };
         // Old pattern: `awsim-ddb-{uuid}.db` plus optional `-wal` / `-shm`.
-        // The new tempdir-based pattern is `awsim-ddb-{random}/...` —
-        // a directory, not a regular file — so this filter doesn't
+        // The new tempdir-based pattern is `awsim-ddb-{random}/...`.
+        // A directory, not a regular file. So this filter doesn't
         // accidentally delete a live tempdir.
         if !name_str.starts_with("awsim-ddb-") {
             continue;
@@ -458,7 +458,7 @@ fn sweep_legacy_temp_files() {
 
 /// Run a sync DynamoDB op (which may touch SQLite) on tokio's blocking
 /// pool so we don't stall worker threads on rusqlite IO. Cheap when no
-/// IO actually happens — the blocking pool reuses threads.
+/// IO actually happens. The blocking pool reuses threads.
 async fn run_blocking<F>(f: F) -> Result<Value, AwsError>
 where
     F: FnOnce() -> Result<Value, AwsError> + Send + 'static,
@@ -515,7 +515,7 @@ impl ServiceHandler for DynamoDbService {
                 run_blocking(move || operations::table::delete_table(&state, &sqlite, &input, &ctx))
                     .await
             }
-            // awsim-only — no AWS equivalent. Clears items, keeps schema.
+            // awsim-only. No AWS equivalent. Clears items, keeps schema.
             "TruncateTable" => {
                 let state = state.clone();
                 let sqlite = self.sqlite.clone();
@@ -566,7 +566,7 @@ impl ServiceHandler for DynamoDbService {
             "UntagResource" => operations::table::untag_resource(&state, &input, ctx),
             "ListTagsOfResource" => operations::table::list_tags_of_resource(&state, &input, ctx),
 
-            // Item operations — dual-write to SQLite, so they go through
+            // Item operations. Dual-write to SQLite, so they go through
             // the blocking pool to avoid stalling tokio workers on rusqlite IO.
             "PutItem" => {
                 let state = state.clone();
@@ -601,7 +601,7 @@ impl ServiceHandler for DynamoDbService {
                     .await
             }
 
-            // Query & Scan — read items from SQLite, evaluate filters in Rust.
+            // Query & Scan. Read items from SQLite, evaluate filters in Rust.
             "Query" => {
                 let state = state.clone();
                 let sqlite = self.sqlite.clone();
@@ -639,7 +639,7 @@ impl ServiceHandler for DynamoDbService {
                 .await
             }
 
-            // Transactions — sqlite-backed (best-effort consistency for now;
+            // Transactions. Sqlite-backed (best-effort consistency for now;
             // stage 5 wraps writes in a single sqlite transaction).
             "TransactGetItems" => {
                 let state = state.clone();
@@ -746,7 +746,7 @@ impl ServiceHandler for DynamoDbService {
                 operations::table::list_contributor_insights(&state, &input, ctx)
             }
 
-            // PartiQL — sqlite-backed.
+            // PartiQL. Sqlite-backed.
             "ExecuteStatement" => {
                 let state = state.clone();
                 let sqlite = self.sqlite.clone();

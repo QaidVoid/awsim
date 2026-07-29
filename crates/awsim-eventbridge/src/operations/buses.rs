@@ -109,7 +109,7 @@ pub fn describe_event_bus(
 }
 
 // ---------------------------------------------------------------------------
-// PutPermission / RemovePermission — manages the resource policy that
+// PutPermission / RemovePermission. Manages the resource policy that
 // guards cross-account PutEvents. AWS accepts either a flat
 // `{Action, Principal, StatementId}` triplet or a full `Policy`
 // document; we follow the same shape and persist the policy verbatim

@@ -104,7 +104,7 @@ pub async fn handle_proxy(
         return invoke_lambda(&state, &method, &uri, &proxy.integration_uri, proxy.event).await;
     }
 
-    // No v2 match — try v1 (REST APIs). Same id namespace from the
+    // No v2 match. Try v1 (REST APIs). Same id namespace from the
     // caller's perspective; we check both stores in turn.
     let v1_state = state
         .apigw_v1
@@ -189,7 +189,7 @@ async fn dispatch_v1(
         "MOCK" => dispatch_mock(&m, &render_ctx),
         "AWS_PROXY" => invoke_lambda(state, method, uri, &m.integration_uri, m.event).await,
         "AWS" => dispatch_aws_non_proxy(state, method, uri, &m, &render_ctx).await,
-        // HTTP_PROXY forwards verbatim — no template processing, no
+        // HTTP_PROXY forwards verbatim. No template processing, no
         // method/integration response mapping.
         "HTTP_PROXY" => {
             proxy_http(
@@ -232,7 +232,7 @@ enum AuthResolution {
 /// Drive the authorizer state machine. Most cases resolve in one step;
 /// custom Lambda authorizers take one Lambda invocation first, then
 /// `apply_lambda_response` returns the final step. The loop bound is
-/// 2 — there's no scenario in which a single authorizer needs more
+/// 2. There's no scenario in which a single authorizer needs more
 /// than one Lambda round-trip.
 async fn resolve_authorization(
     state: &ProxyState,
@@ -281,7 +281,7 @@ async fn invoke_authorizer_lambda(
     let lambda = state
         .lambda
         .as_ref()
-        .ok_or_else(|| "Lambda service not registered — cannot invoke authorizer".to_string())?;
+        .ok_or_else(|| "Lambda service not registered. Cannot invoke authorizer".to_string())?;
     let function_name = extract_function_name(&invocation.authorizer_uri);
     let ctx = RequestContext {
         account_id: state.default_account_id.clone(),
@@ -313,7 +313,7 @@ async fn invoke_authorizer_lambda(
 }
 
 /// Fold the authorizer's outcome into the proxy event so the integration
-/// — and any VTL templates — can access it as `requestContext.authorizer`
+///. And any VTL templates. Can access it as `requestContext.authorizer`
 /// or `$context.authorizer`.
 fn merge_authorizer_into_event(m: &mut V1ProxyMatch, outcome: &AuthorizationOutcome) {
     let mut authorizer = serde_json::Map::new();
@@ -352,7 +352,7 @@ fn render_context_from_match(m: &V1ProxyMatch, body: &Bytes) -> RenderContext {
 }
 
 /// MOCK integrations don't reach a backend. AWS resolves them by:
-/// 1. Rendering the request template — its JSON output drives which
+/// 1. Rendering the request template. Its JSON output drives which
 ///    integration response to pick (via the `statusCode` field).
 /// 2. Rendering the chosen integration response's template as the body.
 fn dispatch_mock(m: &V1ProxyMatch, render_ctx: &RenderContext) -> Response<Body> {
@@ -545,7 +545,7 @@ fn pick_default_response(integration: &Integration) -> Option<&IntegrationRespon
 }
 
 /// Approximate AWS' regex selection pattern. We don't pull in a regex
-/// crate just for this — a literal substring check covers the common
+/// crate just for this. A literal substring check covers the common
 /// `5\d\d` / `4\d\d` / `Error.*` patterns well enough that templates
 /// at least exercise the right branch in tests.
 fn regex_like_match(pattern: &str, body: &str) -> bool {
@@ -681,7 +681,7 @@ async fn invoke_lambda_raw(
     let lambda_handler = match &state.lambda {
         Some(h) => Arc::clone(h),
         None => {
-            warn!("Lambda service not registered — cannot invoke function");
+            warn!("Lambda service not registered. Cannot invoke function");
             return Err(error_response(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "Lambda service not registered",
@@ -823,7 +823,7 @@ async fn invoke_lambda(
     let lambda_handler = match &state.lambda {
         Some(h) => Arc::clone(h),
         None => {
-            warn!("Lambda service not registered — cannot invoke function");
+            warn!("Lambda service not registered. Cannot invoke function");
             return error_response(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "Lambda service not registered",
@@ -929,7 +929,7 @@ fn lambda_response_to_http(result: serde_json::Value) -> Response<Body> {
                 .unwrap()
         })
     } else {
-        // Raw result — serialize as JSON.
+        // Raw result. Serialize as JSON.
         let body = serde_json::to_vec(&result).unwrap_or_default();
         Response::builder()
             .status(StatusCode::OK)

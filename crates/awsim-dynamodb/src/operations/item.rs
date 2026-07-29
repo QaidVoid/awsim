@@ -372,7 +372,7 @@ pub fn item_to_json(item: &DynamoItem) -> Value {
 
 /// Approximate the on-the-wire bytes a JSON value will contribute to
 /// a response. Walks the tree summing string lengths plus small
-/// constants for structural overhead — a couple orders of magnitude
+/// constants for structural overhead. A couple orders of magnitude
 /// faster than `serde_json::to_string`. Used to enforce the
 /// AWS-defined response caps on Query/Scan/BatchGetItem/TransactGetItems
 /// without paying serialization cost twice.
@@ -403,7 +403,7 @@ pub(crate) fn estimate_item_bytes(item: &DynamoItem) -> usize {
     total + item.len() * 4 + 2
 }
 
-/// AWS caps every persisted DynamoDB item at 400 KB — applies to
+/// AWS caps every persisted DynamoDB item at 400 KB. Applies to
 /// PutItem, UpdateItem, BatchWriteItem.PutRequest, and TransactWriteItems
 /// Put / Update. Shared via this constant so all writers reject the
 /// same threshold.
@@ -624,7 +624,7 @@ pub fn delete_item(
     let expr_attr_names = get_expr_attr_names(input);
     let expr_attr_values = get_expr_attr_values(input);
 
-    // Snapshot the existing item before delete — needed for both
+    // Snapshot the existing item before delete. Needed for both
     // ConditionExpression evaluation and the REMOVE stream record.
     let old_item = fetch_existing(sqlite, ctx, &table_name, &sqlite_pk_sk.0, &sqlite_pk_sk.1)?;
 
@@ -715,7 +715,7 @@ pub fn update_item(
     let expr_attr_names = get_expr_attr_names(input);
     let expr_attr_values = get_expr_attr_values(input);
 
-    // Load the existing item (upsert semantics — Update creates the row
+    // Load the existing item (upsert semantics. Update creates the row
     // when it doesn't yet exist, with just the key attributes populated).
     let old_item = fetch_existing(sqlite, ctx, &table_name, &sqlite_pk_sk.0, &sqlite_pk_sk.1)?;
 
@@ -749,7 +749,7 @@ pub fn update_item(
     // item so we don't persist something the AWS API would have rejected.
     validate_item(&new_item)?;
 
-    // Re-extract SQLite keys from the merged item — UpdateExpression may
+    // Re-extract SQLite keys from the merged item. UpdateExpression may
     // have introduced or changed GSI key attributes.
     let sqlite_keys = {
         let table = state.tables.get(&table_name).ok_or_else(|| {
@@ -1296,7 +1296,7 @@ mod tests {
         )
         .unwrap();
         let cc = resp.get("ConsumedCapacity").unwrap();
-        // Strongly consistent, tiny item → exactly 1 RCU.
+        // Strongly consistent, tiny item -> exactly 1 RCU.
         assert_eq!(cc["ReadCapacityUnits"].as_f64().unwrap(), 1.0);
         assert_eq!(cc["CapacityUnits"].as_f64().unwrap(), 1.0);
     }
@@ -1439,7 +1439,7 @@ mod tests {
         });
         delete_item(&state, &sqlite, &del_input, &ctx).unwrap();
 
-        // Items live only in SQLite — verify the row is gone there.
+        // Items live only in SQLite. Verify the row is gone there.
         assert_eq!(
             sqlite
                 .get_item(&ctx.account_id, &ctx.region, "t", "x", "y")
@@ -1455,7 +1455,7 @@ mod tests {
         let ctx = ctx();
 
         // Seed via put_item (dual-writes), then read via get_item
-        // (sqlite-only) — proves the read path picks up the mirror.
+        // (sqlite-only). Proves the read path picks up the mirror.
         let put = json!({
             "TableName": "t",
             "Item": {"pk": {"S": "u"}, "sk": {"S": "p"}, "n": {"S": "Bob"}}

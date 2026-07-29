@@ -6,7 +6,7 @@ use crate::util::now_iso8601;
 
 use super::require_str;
 
-/// GET / — list all buckets.
+/// GET /. List all buckets.
 pub fn list_buckets(state: &S3State, ctx: &RequestContext) -> Result<Value, AwsError> {
     let mut buckets: Vec<Value> = state
         .buckets
@@ -38,7 +38,7 @@ pub fn list_buckets(state: &S3State, ctx: &RequestContext) -> Result<Value, AwsE
     }))
 }
 
-/// PUT /{Bucket} — create a bucket.
+/// PUT /{Bucket}. Create a bucket.
 pub fn create_bucket(
     state: &S3State,
     input: &Value,
@@ -66,7 +66,7 @@ pub fn create_bucket(
         }
     } else if ctx.region != "us-east-1" {
         // Outside us-east-1, AWS requires LocationConstraint to be
-        // supplied — there is no implicit default.
+        // supplied. There is no implicit default.
         return Err(AwsError::bad_request(
             "IllegalLocationConstraintException",
             format!(
@@ -115,7 +115,7 @@ fn parse_location_constraint(input: &Value) -> Option<String> {
     }
 }
 
-/// DELETE /{Bucket} — delete an empty bucket.
+/// DELETE /{Bucket}. Delete an empty bucket.
 pub fn delete_bucket(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
 
@@ -148,7 +148,7 @@ pub fn delete_bucket(state: &S3State, input: &Value) -> Result<Value, AwsError> 
     Ok(json!({}))
 }
 
-/// HEAD /{Bucket} — check if bucket exists.
+/// HEAD /{Bucket}. Check if bucket exists.
 pub fn head_bucket(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
 
@@ -159,7 +159,7 @@ pub fn head_bucket(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     Ok(json!({}))
 }
 
-/// GET /{Bucket}?location — return bucket region.
+/// GET /{Bucket}?location. Return bucket region.
 pub fn get_bucket_location(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
 

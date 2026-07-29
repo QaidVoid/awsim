@@ -104,7 +104,7 @@ impl EventBus {
         self.sender.subscribe()
     }
 
-    /// Number of currently subscribed receivers — surfaced by the
+    /// Number of currently subscribed receivers. Surfaced by the
     /// `/_awsim/debug/objects` diagnostic to detect leaked SSE
     /// subscribers.
     pub fn subscriber_count(&self) -> usize {

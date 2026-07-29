@@ -70,7 +70,7 @@ fn matches_pattern(pattern: &Value, record: &Value) -> bool {
             }
         }),
         Value::Array(alternatives) => alternatives.iter().any(|alt| matches_leaf(alt, record)),
-        // Literal scalar at non-leaf — only matches if the record is the same scalar.
+        // Literal scalar at non-leaf. Only matches if the record is the same scalar.
         _ => pattern == record,
     }
 }

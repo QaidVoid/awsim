@@ -57,7 +57,7 @@ pub async fn start_server_with_scp(
     state.register(iam.clone(), vec![]);
 
     // Shared STS session store: STS records issued temp creds here so
-    // the principal-lookup chain can resolve `ASIA…` keys back to the
+    // the principal-lookup chain can resolve `ASIA...` keys back to the
     // assumed role.
     let sts_sessions = Arc::new(awsim_sts::StsSessionStore::new());
     let sts = Arc::new(awsim_sts::StsService::with_session_store(Arc::clone(

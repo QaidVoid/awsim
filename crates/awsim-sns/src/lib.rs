@@ -484,7 +484,7 @@ mod tests {
         ))
         .unwrap();
 
-        // Pull the actual generated token out of internal state — AWS would
+        // Pull the actual generated token out of internal state. AWS would
         // have delivered this via the SubscriptionConfirmation control
         // message to the endpoint, which we don't simulate.
         let token = {
@@ -572,7 +572,7 @@ mod tests {
             block_on(svc.handle("CreateTopic", json!({ "Name": "json-topic" }), &ctx)).unwrap();
         let arn = created["TopicArn"].as_str().unwrap();
 
-        // Missing "default" key — must reject.
+        // Missing "default" key. Must reject.
         let err = block_on(svc.handle(
             "Publish",
             json!({

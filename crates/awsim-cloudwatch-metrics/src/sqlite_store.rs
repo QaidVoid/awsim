@@ -1,12 +1,12 @@
 //! SQLite-backed storage for CloudWatch Metrics datapoints. The
 //! previous in-memory `DashMap<String, Vec<MetricDatum>>` had no
-//! retention enforcement — every PutMetricData appended forever. Now
+//! retention enforcement. Every PutMetricData appended forever. Now
 //! datapoints live in a SQLite table indexed by (account, region,
 //! namespace, metric_name, ts_ms), and a periodic sweeper trims by
 //! retention (default 15 days, mirroring AWS's retention for high-
 //! resolution datapoints).
 //!
-//! Alarms and dashboards stay in DashMap on `CloudWatchState` — they
+//! Alarms and dashboards stay in DashMap on `CloudWatchState`. They
 //! are small (one entry per alarm/dashboard) and read on every alarm
 //! evaluation, so the in-memory map is fine.
 
@@ -49,7 +49,7 @@ pub struct MetricDatumRow {
     pub unit: String,
     /// RFC3339 timestamp string (echoed back to clients verbatim).
     pub timestamp: String,
-    /// Parsed timestamp in epoch-ms — used for indexing + retention.
+    /// Parsed timestamp in epoch-ms. Used for indexing + retention.
     pub ts_ms: i64,
     /// Wire-format dimensions: `[{"Name":..,"Value":..}, ...]`.
     pub dimensions_json: Value,

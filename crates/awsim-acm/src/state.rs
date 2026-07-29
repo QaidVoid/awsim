@@ -33,7 +33,7 @@ pub struct Certificate {
     #[serde(default = "default_ct_pref")]
     pub certificate_transparency_logging_preference: String,
     /// `AMAZON_ISSUED`, `IMPORTED`, or `PRIVATE`. Drives
-    /// `RenewalEligibility` — imported certs are always
+    /// `RenewalEligibility`. Imported certs are always
     /// `INELIGIBLE` because AWS has no key material to renew.
     #[serde(default = "default_cert_type")]
     pub certificate_type: String,
@@ -70,7 +70,7 @@ pub struct AcmAccountConfig {
 /// Per-account/region ACM state.
 #[derive(Debug, Default)]
 pub struct AcmState {
-    /// CertificateArn → Certificate
+    /// CertificateArn -> Certificate
     pub certificates: DashMap<String, Certificate>,
     /// Account-level configuration (stored at "default" key)
     pub account_config: DashMap<String, AcmAccountConfig>,

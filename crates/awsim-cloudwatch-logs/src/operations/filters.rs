@@ -163,7 +163,7 @@ pub fn put_subscription_filter(
 
     require_log_group(state, log_group_name)?;
 
-    // AWS validates RoleArn shape upfront — must be an IAM role ARN.
+    // AWS validates RoleArn shape upfront. Must be an IAM role ARN.
     // Persist for downstream delivery (which uses it to assume into
     // the destination's account).
     let role_arn = match input["roleArn"].as_str() {

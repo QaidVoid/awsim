@@ -1,11 +1,11 @@
-//! Alias groups: bedrock_id → ordered list of (backend, tag)
+//! Alias groups: bedrock_id -> ordered list of (backend, tag)
 //! targets. The resolver picks the first target whose backend
 //! exists, so aliases double as "static fallback" for a missing
 //! backend even without runtime error fallback (which lands in
 //! Phase 4).
 //!
 //! Aliases are a strict superset of the legacy `[invoke]` / `[embed]`
-//! single-target mappings — a single-target alias is equivalent to a
+//! single-target mappings. A single-target alias is equivalent to a
 //! `Routed { backend, tag }` entry. The runtime checks aliases first
 //! and falls through to the legacy tables, so existing TOMLs keep
 //! working unchanged while new mappings get the multi-target shape.

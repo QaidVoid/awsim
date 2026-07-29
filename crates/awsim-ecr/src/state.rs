@@ -132,9 +132,9 @@ impl ReplicationTask {
 /// Per-account/region ECR state.
 #[derive(Debug)]
 pub struct EcrState {
-    /// repositoryName → Repository
+    /// repositoryName -> Repository
     pub repositories: DashMap<String, Repository>,
-    /// uploadId → LayerUpload (in-progress layer uploads)
+    /// uploadId -> LayerUpload (in-progress layer uploads)
     pub layer_uploads: DashMap<String, LayerUpload>,
     pub pull_through_cache_rules: DashMap<String, PullThroughCacheRule>,
     pub registry_policy: dashmap::DashMap<String, String>,

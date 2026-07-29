@@ -92,10 +92,10 @@ pub struct EventDestination {
     pub name: String,
     pub enabled: bool,
     pub matching_event_types: Vec<String>,
-    /// `SnsDestination.TopicArn` — set when this destination forwards to
+    /// `SnsDestination.TopicArn`. Set when this destination forwards to
     /// an SNS topic.
     pub sns_topic_arn: Option<String>,
-    /// `KinesisFirehoseDestination.DeliveryStreamArn` — set when this
+    /// `KinesisFirehoseDestination.DeliveryStreamArn`. Set when this
     /// destination forwards to a Firehose delivery stream.
     pub firehose_delivery_stream_arn: Option<String>,
     /// `CloudWatchDestination.DimensionConfigurations` stored verbatim;
@@ -191,7 +191,7 @@ pub struct SesState {
     /// Account-level suppression attributes:
     /// `{ SuppressedReasons: [BOUNCE | COMPLAINT] }`.
     pub account_suppression_attributes: Mutex<Option<serde_json::Value>>,
-    /// Outbound email persistence — populated by `SesService` on the
+    /// Outbound email persistence. Populated by `SesService` on the
     /// first `get_state()` call so operations can write to it without
     /// holding a service handle.
     pub sqlite: OnceLock<Arc<crate::SqliteStore>>,

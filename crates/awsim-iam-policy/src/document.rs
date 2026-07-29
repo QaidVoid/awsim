@@ -218,7 +218,7 @@ pub fn parse(json: &str) -> Result<PolicyDocument, ParseError> {
 /// malformed policy doesn't re-allocate the ParseError chain on
 /// every request that touches it.
 ///
-/// Keyed by SipHash of the input string — collisions are
+/// Keyed by SipHash of the input string. Collisions are
 /// vanishingly unlikely for the volumes of JSON policy documents
 /// AWSim ever sees, and the cost of a collision is just a single
 /// redundant parse. No eviction: the working set of distinct

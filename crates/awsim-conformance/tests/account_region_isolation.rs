@@ -226,7 +226,7 @@ async fn cloudwatch_logs_is_account_region_scoped() {
     let svc = awsim_cloudwatch_logs::CloudWatchLogsService::new();
     // CWLogs CreateLogGroup is success-only; lookups happen via
     // DescribeLogGroups with a prefix filter. The cross-account
-    // / cross-region calls must return an empty list — a non-empty
+    // / cross-region calls must return an empty list. A non-empty
     // hit means the store was shared.
     svc.handle(
         "CreateLogGroup",

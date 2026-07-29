@@ -132,7 +132,7 @@ pub struct PolicyAttributions<'a> {
     pub session: Option<&'a PolicyAttribution>,
 }
 
-/// One row in the simulator's `MatchedStatements` array — a statement
+/// One row in the simulator's `MatchedStatements` array. A statement
 /// from one of the input policies whose `Action` + `Resource` (+
 /// `Principal`, for resource policies) + `Condition` all matched the
 /// simulated request.
@@ -692,7 +692,7 @@ fn stmt_matches(s: &Statement, req: &AuthzRequest, resource_policy: bool) -> boo
 }
 
 fn action_matches(s: &Statement, action: &str) -> bool {
-    // Actions don't typically use policy variables — but substituting
+    // Actions don't typically use policy variables. But substituting
     // is cheap and correct for the rare case someone sticks a var in
     // an action string (e.g. via templating).
     if let Some(actions) = &s.action {
@@ -789,11 +789,11 @@ fn condition_matches_with_subst(block: &ConditionBlock, req: &AuthzRequest) -> b
 /// Substitute IAM policy variables in `template` using values
 /// derived from the request. Supported:
 ///
-///   `${aws:PrincipalArn}`     — full principal ARN
-///   `${aws:PrincipalAccount}` — principal account ID
-///   `${aws:username}`         — IAM user name (suffix of user ARN)
-///   `${aws:userid}`           — same as `${aws:username}` for users
-///   `${<context-key>}`        — any key in the request context map
+///   `${aws:PrincipalArn}`. Full principal ARN
+///   `${aws:PrincipalAccount}`. Principal account ID
+///   `${aws:username}`. IAM user name (suffix of user ARN)
+///   `${aws:userid}`. Same as `${aws:username}` for users
+///   `${<context-key>}`. Any key in the request context map
 ///
 /// Unknown variables are left as the literal `${...}` string so a
 /// typo doesn't accidentally widen a policy. AWS documents this
@@ -816,7 +816,7 @@ pub fn substitute(template: &str, req: &AuthzRequest) -> String {
             if let Some(value) = lookup_variable(var, req) {
                 out.push_str(&value);
             } else {
-                // Unrecognised — keep the literal.
+                // Unrecognised. Keep the literal.
                 out.push_str(&template[i..i + 2 + end_rel + 1]);
             }
             i += 2 + end_rel + 1;

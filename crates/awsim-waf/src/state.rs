@@ -67,15 +67,15 @@ pub struct WafStateSnapshot {
 /// Per-account/region WAF state.
 #[derive(Debug, Default)]
 pub struct WafState {
-    /// "{scope}:{name}" → WebAcl
+    /// "{scope}:{name}" -> WebAcl
     pub web_acls: DashMap<String, WebAcl>,
-    /// "{scope}:{name}" → IpSet
+    /// "{scope}:{name}" -> IpSet
     pub ip_sets: DashMap<String, IpSet>,
-    /// "{scope}:{name}" → RuleGroup
+    /// "{scope}:{name}" -> RuleGroup
     pub rule_groups: DashMap<String, RuleGroup>,
-    /// resource_arn → LoggingConfig
+    /// resource_arn -> LoggingConfig
     pub logging_configs: DashMap<String, LoggingConfig>,
-    /// resource_arn → web_acl_arn
+    /// resource_arn -> web_acl_arn
     pub web_acl_associations: DashMap<String, String>,
 }
 

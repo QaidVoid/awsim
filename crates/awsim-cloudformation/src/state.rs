@@ -2,11 +2,11 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// CloudFormation state — per account+region.
+/// CloudFormation state. Per account+region.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct CloudFormationState {
     pub stacks: DashMap<String, Stack>,
-    /// stack name → HashMap<tag key, tag value> (for TagResource/UntagResource)
+    /// stack name -> HashMap<tag key, tag value> (for TagResource/UntagResource)
     pub stack_tags: DashMap<String, HashMap<String, String>>,
 }
 
@@ -103,7 +103,7 @@ pub struct Change {
     pub action: String,
     pub logical_resource_id: String,
     pub resource_type: String,
-    /// `True`, `False`, or `Conditional` — only set for `Modify`
+    /// `True`, `False`, or `Conditional`. Only set for `Modify`
     /// actions. AWS computes this from per-resource-type property
     /// metadata; AWSim uses a conservative heuristic (any non-tag
     /// property change implies replacement) since the simulator

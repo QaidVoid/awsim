@@ -79,7 +79,7 @@ pub fn parse_xml_request(
                 }
             }
         } else {
-            // Non-XML body — always store as raw binary.
+            // Non-XML body. Always store as raw binary.
             use base64::Engine;
             let encoded = base64::engine::general_purpose::STANDARD.encode(body);
             let mut map = serde_json::Map::new();
@@ -98,9 +98,9 @@ pub fn parse_xml_request(
         }
         // Extract relevant headers: all `x-amz-*` headers plus the standard
         // HTTP headers that S3 (and other restXml services) bind as request
-        // input via `smithy.api#httpHeader` — Range and the four RFC 7232
+        // input via `smithy.api#httpHeader`. Range and the four RFC 7232
         // conditional headers. The Smithy field name is the PascalCase of
-        // the header (e.g. `If-Match` → `IfMatch`, `Range` → `Range`).
+        // the header (e.g. `If-Match` -> `IfMatch`, `Range` -> `Range`).
         for (name, value) in headers.iter() {
             let name_str = name.as_str();
             let is_amz = name_str.starts_with("x-amz-") && name_str != "x-amz-target";
@@ -141,11 +141,11 @@ fn match_route<'a>(
     routes: &'a [RouteDefinition],
 ) -> Result<RouteMatch<'a>, AwsError> {
     // Strip a trailing slash ONLY for bucket-level operations (paths like `/bucket/`).
-    // Don't strip for object keys like `/bucket/folder/` — the trailing slash is
+    // Don't strip for object keys like `/bucket/folder/`. The trailing slash is
     // significant (it marks S3 "folder" objects).
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     let path = if segments.len() <= 1 {
-        // Bucket-level: `/bucket/` → `/bucket`
+        // Bucket-level: `/bucket/` -> `/bucket`
         let stripped = path.strip_suffix('/').unwrap_or(path);
         if stripped.is_empty() { "/" } else { stripped }
     } else {
@@ -267,7 +267,7 @@ fn percent_decode(s: &str) -> String {
 }
 
 /// Convert x-amz-* header names to PascalCase parameter names.
-/// e.g., "x-amz-copy-source" → "CopySource"
+/// e.g., "x-amz-copy-source" -> "CopySource"
 fn header_to_param_name(header: &str) -> String {
     header
         .strip_prefix("x-amz-")
@@ -294,7 +294,7 @@ fn parse_xml_body(body: &Bytes) -> Result<Value, AwsError> {
     parse_xml_element(s)
 }
 
-/// Simple XML → JSON parser for AWS request bodies.
+/// Simple XML -> JSON parser for AWS request bodies.
 fn parse_xml_element(xml: &str) -> Result<Value, AwsError> {
     use quick_xml::Reader;
     use quick_xml::events::Event;
@@ -384,7 +384,7 @@ pub fn serialize_xml_response(output: &Value, request_id: &str) -> (StatusCode, 
     let mut headers = HeaderMap::new();
     headers.insert("x-amz-request-id", request_id.parse().unwrap());
 
-    // Optional `__status_code` override — used by S3 for 206 Partial Content
+    // Optional `__status_code` override. Used by S3 for 206 Partial Content
     // (range responses) and 304 Not Modified (conditional GETs).
     let status = output
         .get("__status_code")
@@ -486,7 +486,7 @@ pub fn serialize_xml_response(output: &Value, request_id: &str) -> (StatusCode, 
 
     let body = if let Some(root) = xml_root {
         // When an explicit XML root is present, always emit a root element
-        // (even if there are no child fields — e.g. empty BucketLoggingStatus).
+        // (even if there are no child fields. E.g. empty BucketLoggingStatus).
         let fields = super::query::json_to_xml_fields(&output_for_xml);
         format!(
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
@@ -557,9 +557,9 @@ const HEADER_BOUND_FIELDS: &[&str] = &[
 ];
 
 /// Convert a PascalCase field name to a lowercase HTTP header name.
-/// e.g., "ContentType" → "content-type", "ETag" → "etag"
+/// e.g., "ContentType" -> "content-type", "ETag" -> "etag"
 fn pascal_to_header(name: &str) -> String {
-    // Special cases where the generic PascalCase→kebab-case doesn't match HTTP conventions
+    // Special cases where the generic PascalCase->kebab-case doesn't match HTTP conventions
     match name {
         "ETag" => return "etag".to_string(),
         "ContentType" => return "content-type".to_string(),

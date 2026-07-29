@@ -6,7 +6,7 @@ use crate::state::DynamoState;
 
 use super::opt_str;
 
-/// `DescribeStream` — return stream metadata including shards.
+/// `DescribeStream`. Return stream metadata including shards.
 ///
 /// In AWSim we model a single shard per table stream.
 pub fn describe_stream(
@@ -42,7 +42,7 @@ pub fn describe_stream(
     Ok(json!({ "StreamDescription": description }))
 }
 
-/// `GetShardIterator` — return an opaque iterator token for reading records.
+/// `GetShardIterator`. Return an opaque iterator token for reading records.
 ///
 /// Iterator format: `{stream_arn}|{shard_id}|{seq_start}`
 pub fn get_shard_iterator(
@@ -70,7 +70,7 @@ pub fn get_shard_iterator(
                 .unwrap_or("0");
             raw.parse::<u64>().unwrap_or(0)
         }
-        // LATEST — point to the next record to be written.
+        // LATEST. Point to the next record to be written.
         _ => {
             let table = find_table_by_stream_arn(state, stream_arn)?;
             table.stream_sequence
@@ -81,14 +81,14 @@ pub fn get_shard_iterator(
     // tampered or stale handle is rejected as ExpiredIteratorException
     // instead of being silently honored. The pagination helper signs
     // with the per-process key and gives us a 6h TTL out of the box,
-    // which exceeds AWS's 15-minute iterator window — close enough for
+    // which exceeds AWS's 15-minute iterator window. Close enough for
     // a simulator; tightening the TTL would require a per-domain
     // encoder we don't have yet.
     let iterator = encode_token(&format!("{stream_arn}|{shard_id}|{seq_start}"));
     Ok(json!({ "ShardIterator": iterator }))
 }
 
-/// `GetRecords` — read records from the stream starting at the given iterator.
+/// `GetRecords`. Read records from the stream starting at the given iterator.
 pub fn get_records(
     state: &DynamoState,
     input: &Value,
@@ -169,7 +169,7 @@ pub fn get_records(
     }))
 }
 
-/// `ListStreams` — list all streams, optionally filtered by table name.
+/// `ListStreams`. List all streams, optionally filtered by table name.
 pub fn list_streams(
     state: &DynamoState,
     input: &Value,
@@ -226,7 +226,7 @@ pub fn list_streams(
     Ok(result)
 }
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+// -- helpers ------------------------------------------------------------------
 
 fn require_stream_arn(input: &Value) -> Result<&str, AwsError> {
     input
@@ -322,7 +322,7 @@ mod tests {
         )
         .unwrap();
         let token = resp["ShardIterator"].as_str().unwrap().to_string();
-        // Token must NOT be the legacy pipe-separated form — it should
+        // Token must NOT be the legacy pipe-separated form. It should
         // be an HMAC-signed base64 envelope.
         assert!(!token.contains('|'));
 

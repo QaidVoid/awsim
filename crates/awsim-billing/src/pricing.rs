@@ -65,20 +65,20 @@ pub struct ServicePricing {
     /// Cost per GB of outbound response payload.
     #[serde(default)]
     pub data_transfer_out_per_gb: Option<f64>,
-    /// Cost per GB of inbound request payload — used for ingest-billed
+    /// Cost per GB of inbound request payload. Used for ingest-billed
     /// services (Firehose, CloudWatch Logs ingest, etc.) where AWS
     /// charges by data volume rather than per-request.
     #[serde(default)]
     pub data_ingest_per_gb: Option<f64>,
-    /// Cost per GB stored per month — point-in-time billing for
+    /// Cost per GB stored per month. Point-in-time billing for
     /// services like S3 / DynamoDB / Lambda function code. The meter
     /// samples the at-rest size periodically and accrues cost over
     /// elapsed time using this rate.
     #[serde(default)]
     pub storage_per_gb_month: Option<f64>,
-    /// Cost per GB-second of compute time — Lambda's invocation
+    /// Cost per GB-second of compute time. Lambda's invocation
     /// duration model. The meter multiplies request duration_ms by an
-    /// assumed memory size (128 MB default — AWSim doesn't carry the
+    /// assumed memory size (128 MB default. AWSim doesn't carry the
     /// per-function memory through the request event yet) and applies
     /// this rate.
     #[serde(default)]
@@ -95,7 +95,7 @@ pub struct ServicePricing {
     /// `provisioned_rcu_per_hour`.
     #[serde(default)]
     pub provisioned_wcu_per_hour: Option<f64>,
-    /// Cost per running instance per hour — for "always on" services
+    /// Cost per running instance per hour. For "always on" services
     /// like EC2 / RDS / OpenSearch where AWS bills by instance-type
     /// hours regardless of API activity. AWSim doesn't carry the
     /// per-instance type through, so this is a baseline rate

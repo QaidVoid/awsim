@@ -8,7 +8,7 @@ use crate::state::{Addon, EksState, now_secs};
 /// existing in-cluster configuration on conflict; OVERWRITE replaces
 /// it; NONE fails the call when any field already exists with a
 /// different value. We don't model the in-cluster state, so the
-/// validation surface here is shape-only — the persisted value drives
+/// validation surface here is shape-only. The persisted value drives
 /// the merge strategy on later UpdateAddon calls.
 const RESOLVE_CONFLICTS_VALUES: &[&str] = &["NONE", "OVERWRITE", "PRESERVE"];
 
@@ -231,7 +231,7 @@ pub fn update_addon(
     }
 
     // PRESERVE keeps the existing configurationValues even when the
-    // caller supplies a new one — AWS interprets PRESERVE as "don't
+    // caller supplies a new one. AWS interprets PRESERVE as "don't
     // clobber what's already in the cluster". OVERWRITE and NONE both
     // replace it on a successful call.
     if let Some(cfg) = new_cfg

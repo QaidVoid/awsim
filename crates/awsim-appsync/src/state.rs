@@ -6,11 +6,11 @@ use serde::{Deserialize, Serialize};
 /// Per-account/region AppSync state.
 #[derive(Debug, Default)]
 pub struct AppSyncState {
-    /// api_id → GraphqlApi
+    /// api_id -> GraphqlApi
     pub apis: DashMap<String, GraphqlApi>,
-    /// resource_arn → tags
+    /// resource_arn -> tags
     pub tags: DashMap<String, HashMap<String, String>>,
-    /// association_id → SourceApiAssociation
+    /// association_id -> SourceApiAssociation
     pub source_api_associations: DashMap<String, SourceApiAssociation>,
 }
 

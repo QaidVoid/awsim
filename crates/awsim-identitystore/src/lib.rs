@@ -1,5 +1,5 @@
 //! AWS Identity Store emulator. Users, groups, and group memberships scoped
-//! by IdentityStoreId — usually paired with the existing `awsim-sso-admin`
+//! by IdentityStoreId. Usually paired with the existing `awsim-sso-admin`
 //! service for full IAM Identity Center coverage.
 
 use std::sync::Arc;
@@ -1109,7 +1109,7 @@ mod tests {
         .unwrap();
         assert_eq!(page2["Users"].as_array().unwrap().len(), 1);
         // Same token replayed against a *different* IdentityStoreId
-        // must be rejected — that's the cross-tenant defence.
+        // must be rejected. That's the cross-tenant defence.
         let err = block_on(svc.handle(
             "ListUsers",
             json!({ "IdentityStoreId": store_b, "MaxResults": 1, "NextToken": token }),

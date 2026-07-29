@@ -114,7 +114,7 @@ pub fn put_metric_data(
     let sqlite = require_sqlite(state)?;
     sqlite.put_datapoints(&ctx.account_id, &ctx.region, &rows)?;
 
-    // Best-effort retention sweep on every write — cheap when the
+    // Best-effort retention sweep on every write. Cheap when the
     // table is already trimmed; one indexed DELETE otherwise.
     let cutoff = parse_timestamp_ms(&chrono_now()).saturating_sub(DEFAULT_RETENTION_MS);
     let _ = sqlite.trim_older_than(&ctx.account_id, &ctx.region, cutoff);
@@ -318,7 +318,7 @@ pub fn get_metric_statistics(
 
     // Dimensions parameter narrows to datapoints whose stored
     // dimensions match exactly (same set of name/value pairs). AWS
-    // treats missing Dimensions as "match any" — so when the caller
+    // treats missing Dimensions as "match any". So when the caller
     // doesn't supply any, we skip the filter.
     if let Some(dims_arr) = input.get("Dimensions").and_then(Value::as_array)
         && !dims_arr.is_empty()

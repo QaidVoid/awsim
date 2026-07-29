@@ -69,9 +69,9 @@ pub struct Bucket {
     /// Logging configuration (stored as raw JSON-serialized value).
     pub logging: Option<String>,
     /// Generic named configs (website, replication, requestpayment, accelerate, etc.)
-    /// keyed by config name → JSON string.
+    /// keyed by config name -> JSON string.
     pub configs: HashMap<String, String>,
-    /// Objects keyed by object key — each value carries the full version
+    /// Objects keyed by object key. Each value carries the full version
     /// history for that key, in chronological order.
     pub objects: DashMap<String, ObjectVersions>,
     /// Multipart uploads keyed by upload ID.
@@ -108,7 +108,7 @@ impl Bucket {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct S3Object {
     pub key: String,
-    /// Object body — either in memory or backed by disk.
+    /// Object body. Either in memory or backed by disk.
     pub body: Body,
     pub content_type: String,
     pub content_length: u64,
@@ -119,7 +119,7 @@ pub struct S3Object {
     /// User-defined metadata from x-amz-meta-* headers.
     pub metadata: HashMap<String, String>,
     pub version_id: Option<String>,
-    /// Object tags (key → value).
+    /// Object tags (key -> value).
     #[serde(default)]
     pub tags: HashMap<String, String>,
     #[serde(default)]
@@ -133,7 +133,7 @@ pub struct S3Object {
     #[serde(default)]
     pub expires: Option<String>,
     /// SDK-supplied integrity check (`x-amz-checksum-*`). The algorithm
-    /// is one of CRC32, CRC32C, SHA1, SHA256 — store the value as the
+    /// is one of CRC32, CRC32C, SHA1, SHA256. Store the value as the
     /// SDK sent it (base64) so we can round-trip it on GetObject when the
     /// caller asks for ChecksumMode=ENABLED.
     #[serde(default)]
@@ -162,7 +162,7 @@ pub struct S3Object {
     /// `x-amz-server-side-encryption-customer-key-MD5`.
     #[serde(default)]
     pub sse_customer_key_md5: Option<String>,
-    /// True when this entry is a delete marker — a tombstone written when
+    /// True when this entry is a delete marker. A tombstone written when
     /// DeleteObject lands on a versioning-enabled bucket without a VersionId.
     /// Delete markers carry a version_id but no body, and reads against them
     /// surface as NoSuchKey + `x-amz-delete-marker: true`.
@@ -173,7 +173,7 @@ pub struct S3Object {
 /// All versions of a single key within a bucket, in chronological order.
 ///
 /// The last entry is the "current" version per S3 semantics. Versioning is
-/// not "on" until the bucket transitions to Enabled — Disabled buckets keep
+/// not "on" until the bucket transitions to Enabled. Disabled buckets keep
 /// at most one entry with `version_id = None`. Suspended buckets keep prior
 /// versions but new writes overwrite the single `null`-version slot.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -187,7 +187,7 @@ impl ObjectVersions {
         self.versions.last()
     }
 
-    /// The most recent non-delete-marker entry — what GetObject returns
+    /// The most recent non-delete-marker entry. What GetObject returns
     /// when no VersionId is supplied. `None` when every version is a DM.
     pub fn current(&self) -> Option<&S3Object> {
         match self.versions.last() {
@@ -196,7 +196,7 @@ impl ObjectVersions {
         }
     }
 
-    /// Mutable view of the current entry — for header-only mutations such
+    /// Mutable view of the current entry. For header-only mutations such
     /// as PutObjectTagging that update the latest version's metadata in
     /// place rather than producing a new version.
     pub fn current_mut(&mut self) -> Option<&mut S3Object> {
@@ -302,7 +302,7 @@ pub struct BucketSnapshot {
     pub logging: Option<String>,
     #[serde(default)]
     pub configs: HashMap<String, String>,
-    /// Object metadata only — `data` field is intentionally empty to avoid huge snapshots.
+    /// Object metadata only. `data` field is intentionally empty to avoid huge snapshots.
     pub objects: Vec<S3ObjectMetadata>,
 }
 
@@ -348,7 +348,7 @@ pub struct S3RegionSnapshot {
     pub buckets: Vec<BucketSnapshot>,
 }
 
-/// Global S3 state — all buckets are stored here.
+/// Global S3 state. All buckets are stored here.
 #[derive(Debug, Default)]
 pub struct S3State {
     /// Buckets keyed by bucket name.

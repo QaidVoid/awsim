@@ -2,19 +2,19 @@
 //!
 //! Three authorizer types are supported:
 //!
-//!   * **COGNITO_USER_POOLS** — fully evaluated locally. Decode the JWT,
+//!   * **COGNITO_USER_POOLS**. Fully evaluated locally. Decode the JWT,
 //!     check `exp`, surface claims as the authorizer context.
-//!   * **CUSTOM / TOKEN** — caller invokes the configured Lambda with the
+//!   * **CUSTOM / TOKEN**. Caller invokes the configured Lambda with the
 //!     header value as `authorizationToken`, then feeds the response back
 //!     in to validate the policy and pull out `principalId` + `context`.
-//!   * **CUSTOM / REQUEST** — same as TOKEN but the Lambda event carries
+//!   * **CUSTOM / REQUEST**. Same as TOKEN but the Lambda event carries
 //!     the full request shape (headers, query, path, stage vars).
 //!
 //! Decisions are cached per `(authorizer_id, identity_string)` for the
 //! authorizer's `result_ttl_in_seconds` so a token only triggers one
 //! Lambda invocation per TTL window, matching real AWS.
 //!
-//! AWS_IAM (SigV4) is intentionally out of scope here — anything carrying
+//! AWS_IAM (SigV4) is intentionally out of scope here. Anything carrying
 //! authorization_type `AWS_IAM` or unset just falls through to NONE.
 
 use std::collections::HashMap;
@@ -80,9 +80,9 @@ pub enum AuthorizationStep {
     Allowed(AuthorizationOutcome),
     /// Authorization not configured. Dispatch the integration unchanged.
     NotConfigured,
-    /// 401 Unauthorized — identity source is missing or empty.
+    /// 401 Unauthorized. Identity source is missing or empty.
     Unauthorized(String),
-    /// 403 Forbidden — explicit deny, JWT expired, or invalid token shape.
+    /// 403 Forbidden. Explicit deny, JWT expired, or invalid token shape.
     Forbidden(String),
     /// Caller must invoke the Lambda authorizer with `event` and call
     /// `apply_authorizer_response` with the result. The `cache_key` and
@@ -104,7 +104,7 @@ pub struct LambdaInvocation {
     pub event: Value,
     pub cache_key: String,
     pub ttl_seconds: u32,
-    /// Method ARN built into the event — also re-checked against the
+    /// Method ARN built into the event. Also re-checked against the
     /// returned policy when the response comes back.
     pub method_arn: String,
 }
@@ -152,7 +152,7 @@ pub fn evaluate(
         return AuthorizationStep::NotConfigured;
     }
     if method.authorization_type == "AWS_IAM" {
-        // SigV4 enforcement isn't modeled here yet — proceed.
+        // SigV4 enforcement isn't modeled here yet. Proceed.
         return AuthorizationStep::NotConfigured;
     }
 
@@ -257,7 +257,7 @@ fn evaluate_cognito(
     authorizer: &Authorizer,
     token: &str,
 ) -> AuthorizationStep {
-    // Cognito sends the token in `Authorization: <jwt>` — if the SDK
+    // Cognito sends the token in `Authorization: <jwt>`. If the SDK
     // prefixes `Bearer `, strip it.
     let raw = token.strip_prefix("Bearer ").unwrap_or(token).trim();
     let claims = match decode_jwt_claims(raw) {
@@ -296,7 +296,7 @@ fn evaluate_cognito(
     AuthorizationStep::Allowed(outcome)
 }
 
-/// Decode a JWT's claims segment. Doesn't verify the signature — the
+/// Decode a JWT's claims segment. Doesn't verify the signature. The
 /// emulator's Cognito service issued the token, and validating signatures
 /// across services would couple awsim crates more than is worthwhile.
 fn decode_jwt_claims(token: &str) -> Option<Value> {
@@ -409,7 +409,7 @@ fn statement_resource_matches(stmt: &Value, method_arn: &str) -> bool {
 /// IAM-style glob matching: `*` matches any character run, `?` matches one.
 /// Wider IAM matching (e.g. ARN-segment-aware) lives in `awsim-iam-policy`,
 /// but pulling that dep into the apigateway crate just for authorizer
-/// resource checks is overkill — string globs cover the patterns
+/// resource checks is overkill. String globs cover the patterns
 /// authorizer policies actually emit.
 fn resource_pattern_matches(pattern: &str, value: &str) -> bool {
     fn rec(p: &[u8], v: &[u8]) -> bool {
@@ -740,7 +740,7 @@ mod tests {
     fn identity_validation_expression_skipped_for_request_authorizer() {
         let mut authorizers = HashMap::new();
         let mut a = auth("REQUEST", 300, "method.request.header.X-Token");
-        // Even a strict regex is ignored on REQUEST authorizers — AWS
+        // Even a strict regex is ignored on REQUEST authorizers. AWS
         // only consults it for the legacy TOKEN type.
         a.identity_validation_expression = Some("^impossible$".into());
         authorizers.insert("auth1".into(), a);

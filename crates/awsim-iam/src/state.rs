@@ -2,7 +2,7 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// IAM state — global per account (region is always "global" for IAM).
+/// IAM state. Global per account (region is always "global" for IAM).
 #[derive(Debug, Default)]
 pub struct IamState {
     pub users: DashMap<String, User>,
@@ -92,7 +92,7 @@ pub struct User {
     pub access_keys: Vec<AccessKey>,
     /// ARNs of attached managed policies
     pub attached_policies: Vec<String>,
-    /// name → document
+    /// name -> document
     pub inline_policies: HashMap<String, String>,
     /// group names this user belongs to
     pub groups: Vec<String>,
@@ -134,7 +134,7 @@ pub struct Group {
     pub members: Vec<String>,
     /// ARNs of attached managed policies
     pub attached_policies: Vec<String>,
-    /// name → document
+    /// name -> document
     pub inline_policies: HashMap<String, String>,
     #[serde(default)]
     pub tags: HashMap<String, String>,
@@ -155,7 +155,7 @@ pub struct Role {
     pub max_session_duration: u32,
     /// ARNs of attached managed policies
     pub attached_policies: Vec<String>,
-    /// name → document
+    /// name -> document
     pub inline_policies: HashMap<String, String>,
     #[serde(default)]
     pub tags: HashMap<String, String>,
@@ -290,7 +290,7 @@ pub struct VirtualMfaDevice {
     ///   `Active` (after EnableMFADevice with two valid codes) ->
     ///   `Unassigned` (after DeactivateMFADevice).
     /// `Resynced` marks a successful ResyncMFADevice without breaking the
-    /// Active state — the field is set to a fresh `Active` afterwards.
+    /// Active state. The field is set to a fresh `Active` afterwards.
     /// AWS doesn't expose a discrete state field on Virtual MFA, but
     /// surfacing one keeps the simulator's transitions observable.
     #[serde(default = "default_mfa_status")]

@@ -1,4 +1,4 @@
-//! Bulk-seed helpers — hit `/_awsim/seed/<service>` to populate a
+//! Bulk-seed helpers. Hit `/_awsim/seed/<service>` to populate a
 //! service with realistic fake data without going through SigV4.
 //! Each submodule owns one service's writer + a small request/response
 //! shape; this file holds the cross-service helpers (random names /
@@ -33,7 +33,7 @@ pub fn fake_word() -> String {
     Word().fake()
 }
 
-/// Short random sentence (3-7 words) — useful as a bio / description.
+/// Short random sentence (3-7 words). Useful as a bio / description.
 #[allow(dead_code)] // wired in upcoming s3/secrets seeders
 pub fn fake_sentence() -> String {
     Sentence(3..7).fake()

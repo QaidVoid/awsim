@@ -41,13 +41,13 @@ pub struct AppState {
     pub default_account_id: String,
     /// Default AWS partition (`aws`, `aws-cn`, `aws-us-gov`, ...).
     pub default_partition: String,
-    /// Internal event bus for cross-service fan-out (SNS→SQS, etc.).
+    /// Internal event bus for cross-service fan-out (SNS->SQS, etc.).
     pub event_bus: EventBus,
     /// Total number of AWS API requests handled since startup.
     pub request_count: Arc<AtomicU64>,
     /// Server startup time.
     pub start_time: std::time::Instant,
-    /// IAM authorization engine — opt-in via AWSIM_IAM_ENFORCE=true.
+    /// IAM authorization engine. Opt-in via AWSIM_IAM_ENFORCE=true.
     pub authz: Arc<AuthzEngine>,
     /// Per-service `BodyStore` handles, populated when persistence is enabled.
     pub body_stores: Arc<Vec<BodyStoreHandle>>,
@@ -170,11 +170,11 @@ struct ProcessMeta {
     access_key: Option<String>,
 }
 
-/// Main request handler — all AWS API requests funnel through here.
+/// Main request handler. All AWS API requests funnel through here.
 /// Spawn the periodic tick loop. Runs in the background until the
 /// process exits, calling `tick` on every registered service every
 /// `interval`. Per the [`ServiceHandler::tick`] contract, individual
-/// services must keep each tick under ~10 ms — slow work is enqueued
+/// services must keep each tick under ~10 ms. Slow work is enqueued
 /// elsewhere so this loop stays responsive.
 ///
 /// Returns the [`tokio::task::JoinHandle`] so callers can cancel the
@@ -252,7 +252,7 @@ pub async fn handle_request(
 ) -> Response<Body> {
     // Short-circuit common browser probes (favicon, devtools well-known
     // path) before the AWS dispatch pipeline runs. They are not API
-    // calls — silently 204'ing keeps them out of the request log and
+    // calls. Silently 204'ing keeps them out of the request log and
     // out of the inspect drawer.
     if is_browser_probe(&method, uri.path()) {
         return Response::builder()
@@ -265,7 +265,7 @@ pub async fn handle_request(
 }
 
 /// Recognise the handful of unsolicited paths browsers hit when you point
-/// them at AWSim's port — they're not AWS requests and shouldn't appear
+/// them at AWSim's port. They're not AWS requests and shouldn't appear
 /// in logs or stats. Conservative on purpose: only paths we've actually
 /// seen in real traces are listed.
 fn is_browser_probe(method: &Method, path: &str) -> bool {
@@ -354,7 +354,7 @@ pub async fn dispatch_request(
     };
     let status_code = status.as_u16();
     // Streaming responses don't have a known length up front and we
-    // never buffer them — report 0 for now (they show up in the log
+    // never buffer them. Report 0 for now (they show up in the log
     // with a fixed marker).
     let response_size = resp_body.buffered_len().unwrap_or(0) as u64;
 
@@ -611,7 +611,7 @@ async fn process_request(
     // 5. Parse the request. If the auth-derived service has no
     // matching route, fall back to path-based service detection
     // before erroring. This is the magic that makes tools like
-    // Vercel's `@ai-sdk/amazon-bedrock` work — when pointed at a
+    // Vercel's `@ai-sdk/amazon-bedrock` work. When pointed at a
     // localhost endpoint the underlying signer can't infer the
     // right service from the hostname (no `bedrock-runtime.`
     // subdomain), so it signs with `bedrock` (control plane) even
@@ -734,13 +734,13 @@ async fn process_request(
         debug!(
             service = %service_name,
             operation = %parsed.operation,
-            "Skipping IAM check — handler does not declare action/resource"
+            "Skipping IAM check. Handler does not declare action/resource"
         );
     }
 
     let operation = parsed.operation.clone();
 
-    // 6c. Chaos injection — sleep + optionally short-circuit with a
+    // 6c. Chaos injection. Sleep + optionally short-circuit with a
     // synthetic AWS error before the handler runs. Empty engine is a
     // no-op fast path so the cost is negligible when chaos is off.
     if let Some(outcome) = state.chaos.evaluate(&service_name, Some(&operation)) {
@@ -778,7 +778,7 @@ async fn process_request(
         .map_err(|e| (detected, e))?;
 
     // 8. Build the response. Streaming results bypass the per-protocol
-    // serializer — the handler has already encoded the bytes (e.g.
+    // serializer. The handler has already encoded the bytes (e.g.
     // AWS event-stream binary frames) and supplied the wire-level
     // content-type. For everything else, serialize the JSON
     // response using the detected protocol so the wire format
@@ -1010,7 +1010,7 @@ fn extract_service_info(
     headers: &HeaderMap,
     uri: &Uri,
 ) -> (String, String, String, Option<String>) {
-    // 1. Authorization header — SigV4-signed direct calls.
+    // 1. Authorization header. SigV4-signed direct calls.
     if let Some(auth_header) = headers.get("authorization").and_then(|v| v.to_str().ok())
         && let Some(creds) = auth::parse_authorization(auth_header)
     {
@@ -1022,7 +1022,7 @@ fn extract_service_info(
         );
     }
 
-    // 2. X-Amz-Credential query string — presigned URLs (S3 GetObject /
+    // 2. X-Amz-Credential query string. Presigned URLs (S3 GetObject /
     //    PutObject, CloudFront, ...). Must beat Host detection because
     //    the URL host is whatever bucket / CDN front-end the SDK
     //    chose, which can be misleading: a presigned PUT against a
@@ -1049,7 +1049,7 @@ fn extract_service_info(
         }
     }
 
-    // 3. X-Amz-Target header — awsJson services (DynamoDB, Cognito, ...).
+    // 3. X-Amz-Target header. AwsJson services (DynamoDB, Cognito, ...).
     if let Some(target) = headers.get("x-amz-target").and_then(|v| v.to_str().ok())
         && let Some(service) = resolve_service_from_target(target)
     {
@@ -1061,7 +1061,7 @@ fn extract_service_info(
         );
     }
 
-    // 4. Host header — convention-based, only trusted when the host's
+    // 4. Host header. Convention-based, only trusted when the host's
     //    leftmost segment matches a registered service signing name.
     if let Some(host) = headers.get("host").and_then(|v| v.to_str().ok())
         && let Some(service) = extract_service_from_host(host, state)
@@ -1074,7 +1074,7 @@ fn extract_service_info(
         );
     }
 
-    // 5. Path-based detection — last resort for unsigned REST calls
+    // 5. Path-based detection. Last resort for unsigned REST calls
     //    (admin console, health probes, ...).
     let path = uri.path();
     if let Some(service) = resolve_service_from_path(path) {
@@ -1092,7 +1092,7 @@ fn extract_service_info(
         target = ?headers.get("x-amz-target").map(|v| v.to_str().unwrap_or("<non-utf8>")),
         host = ?headers.get("host").map(|v| v.to_str().unwrap_or("<non-utf8>")),
         path = %path,
-        "Could not determine service — falling back to 'unknown'"
+        "Could not determine service. Falling back to 'unknown'"
     );
     (
         "unknown".to_string(),
@@ -1154,11 +1154,11 @@ fn resolve_service_from_target(target: &str) -> Option<String> {
 /// registered service's signing name.
 ///
 /// Examples:
-///   `s3.us-east-1.amazonaws.com`     → `s3`
-///   `sqs.us-east-1.localhost`        → `sqs`
-///   `sqs.us-east-1.aws.qaidvoid.dev` → `sqs`
-///   `aws.qaidvoid.dev`               → `None`  (no service segment)
-///   `localhost:4566`                 → `None`  (no service segment)
+///   `s3.us-east-1.amazonaws.com`     -> `s3`
+///   `sqs.us-east-1.localhost`        -> `sqs`
+///   `sqs.us-east-1.aws.qaidvoid.dev` -> `sqs`
+///   `aws.qaidvoid.dev`               -> `None`  (no service segment)
+///   `localhost:4566`                 -> `None`  (no service segment)
 ///
 /// The earlier hard-coded allowlist + "skip if first contains a
 /// dash" heuristic falsely returned `aws` for the bundled
@@ -1220,7 +1220,7 @@ fn resolve_service_from_path(path: &str) -> Option<String> {
         p if p.starts_with("/schedules") || p.starts_with("/schedule-groups") => "scheduler",
         // EKS
         p if p.starts_with("/clusters") || p == "/tags" || p.starts_with("/tags/") => "eks",
-        // S3 (catch-all — any path starting with / that doesn't match above could be S3)
+        // S3 (catch-all. Any path starting with / that doesn't match above could be S3)
         // Don't add S3 here as it would catch everything
         _ => return None,
     };

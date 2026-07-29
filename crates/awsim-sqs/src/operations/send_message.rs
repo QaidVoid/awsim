@@ -72,8 +72,8 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
         )
     } else {
         // Real AWS rejects MessageGroupId / MessageDeduplicationId on
-        // standard queues with InvalidParameterValue. Mirror that —
-        // silently dropping these makes test divergences hard to find.
+        // standard queues with InvalidParameterValue. Mirror that.
+        // Silently dropping these makes test divergences hard to find.
         if input
             .get("MessageGroupId")
             .and_then(Value::as_str)
@@ -313,8 +313,8 @@ pub fn handle_batch(
     }
 
     // AWS rejects a SendMessageBatch whose summed message-body bytes
-    // exceed 256 KiB (262 144 bytes). The limit is a sum of body sizes —
-    // attribute payloads are not included in this calculation.
+    // exceed 256 KiB (262 144 bytes). The limit is a sum of body sizes.
+    // Attribute payloads are not included in this calculation.
     const SQS_MAX_BATCH_PAYLOAD_BYTES: usize = 262_144;
     let total_payload: usize = entries
         .iter()
@@ -571,7 +571,7 @@ mod tests {
         let state = standard_queue();
         let ctx = awsim_core::RequestContext::new("sqs", "us-east-1");
         let big = "a".repeat(100_000);
-        // 3 × 100 000 bytes = 300 000 > 262 144.
+        // 3 x 100 000 bytes = 300 000 > 262 144.
         let entries: Vec<Value> = (0..3)
             .map(|i| {
                 json!({
@@ -596,7 +596,7 @@ mod tests {
     fn send_message_batch_accepts_payload_at_limit() {
         let state = standard_queue();
         let ctx = awsim_core::RequestContext::new("sqs", "us-east-1");
-        // Exactly 262 144 bytes — must succeed.
+        // Exactly 262 144 bytes. Must succeed.
         let body = "a".repeat(262_144);
         let resp = handle_batch(
             &state,
@@ -615,7 +615,7 @@ mod tests {
         let state = fifo_queue(true);
         let ctx = awsim_core::RequestContext::new("sqs", "us-east-1");
 
-        // First send — duplicates should be suppressed by the SHA-256 of
+        // First send. Duplicates should be suppressed by the SHA-256 of
         // the body when ContentBasedDeduplication is enabled.
         let r1 = handle(
             &state,
@@ -629,7 +629,7 @@ mod tests {
         .unwrap();
         let id1 = r1["MessageId"].as_str().unwrap().to_string();
 
-        // Same body — should be deduped (returns the original message id).
+        // Same body. Should be deduped (returns the original message id).
         let r2 = handle(
             &state,
             &json!({
@@ -642,7 +642,7 @@ mod tests {
         .unwrap();
         assert_eq!(r2["MessageId"].as_str().unwrap(), id1);
 
-        // Different body — should NOT be deduped.
+        // Different body. Should NOT be deduped.
         let r3 = handle(
             &state,
             &json!({
@@ -678,7 +678,7 @@ mod tests {
     fn fifo_explicit_dedup_id_takes_precedence_over_content_based() {
         let state = fifo_queue(true);
         let ctx = awsim_core::RequestContext::new("sqs", "us-east-1");
-        // Same body, but two different explicit dedup IDs → both deliver.
+        // Same body, but two different explicit dedup IDs -> both deliver.
         handle(
             &state,
             &json!({

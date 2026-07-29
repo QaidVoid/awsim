@@ -45,7 +45,7 @@ pub async fn test_sns(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         verbose
     ));
 
-    // Subscribe (email — no confirmation needed in sim)
+    // Subscribe (email. No confirmation needed in sim)
     let sub_r = client
         .subscribe()
         .topic_arn(&topic_arn)

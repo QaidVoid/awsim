@@ -229,7 +229,7 @@ pub fn revoke_grant(
 
     let _resolved_id = resolve_key_id(state, key_id_input)?;
 
-    // Remove grant (succeed silently if absent — matches AWS behavior).
+    // Remove grant (succeed silently if absent. Matches AWS behavior).
     state.grants.remove(grant_id);
 
     Ok(json!({}))
@@ -350,7 +350,7 @@ mod grant_token_tests {
     #[test]
     fn expired_token_returns_invalid_grant_token() {
         let state = KmsState::default();
-        // 1 hour ago — past the 5-min window.
+        // 1 hour ago. Past the 5-min window.
         seed_grant(&state, "stale", now_secs().saturating_sub(3600));
         let err = validate_grant_tokens(&state, &json!({ "GrantTokens": ["stale"] })).unwrap_err();
         assert_eq!(err.code, "InvalidGrantTokenException");
@@ -452,17 +452,17 @@ mod grant_constraints_tests {
             &grant,
             &ctx_map(&[("env", "prod"), ("team", "data")])
         ));
-        // Missing key → no match.
+        // Missing key -> no match.
         assert!(!grant_constraints_match(
             &grant,
             &ctx_map(&[("env", "prod")])
         ));
-        // Extra key → no match (this is the Equals-vs-Subset distinction).
+        // Extra key -> no match (this is the Equals-vs-Subset distinction).
         assert!(!grant_constraints_match(
             &grant,
             &ctx_map(&[("env", "prod"), ("team", "data"), ("extra", "x")])
         ));
-        // Different value → no match.
+        // Different value -> no match.
         assert!(!grant_constraints_match(
             &grant,
             &ctx_map(&[("env", "dev"), ("team", "data")])
@@ -476,12 +476,12 @@ mod grant_constraints_tests {
             &grant,
             &ctx_map(&[("env", "prod"), ("extra", "x")])
         ));
-        // Missing required pair → no match.
+        // Missing required pair -> no match.
         assert!(!grant_constraints_match(
             &grant,
             &ctx_map(&[("extra", "x")])
         ));
-        // Wrong value → no match.
+        // Wrong value -> no match.
         assert!(!grant_constraints_match(
             &grant,
             &ctx_map(&[("env", "dev")])

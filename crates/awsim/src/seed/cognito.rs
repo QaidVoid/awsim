@@ -1,5 +1,5 @@
 //! Bulk-seed users into a Cognito user pool. Writes directly into
-//! `CognitoState.user_pools` — bypasses the SigV4 / gateway path so a
+//! `CognitoState.user_pools`. Bypasses the SigV4 / gateway path so a
 //! 10k-user seed completes in well under a second instead of taking
 //! the full request-cycle hit per user.
 
@@ -37,7 +37,7 @@ pub struct SeedCognitoUsersBody {
 }
 
 const STATUSES: &[&str] = &[
-    // 80% CONFIRMED, 15% FORCE_CHANGE_PASSWORD, 5% UNCONFIRMED — biased
+    // 80% CONFIRMED, 15% FORCE_CHANGE_PASSWORD, 5% UNCONFIRMED. Biased
     // via repetition since the picker is uniform.
     "CONFIRMED",
     "CONFIRMED",
@@ -67,7 +67,7 @@ pub async fn seed(
             StatusCode::BAD_REQUEST,
             Json(json!({
                 "error": "ValidationException",
-                "message": format!("count must be ≤ {MAX_COUNT}"),
+                "message": format!("count must be <= {MAX_COUNT}"),
             })),
         )
             .into_response();

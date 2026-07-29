@@ -1,5 +1,5 @@
 //! Bulk-seed Secrets Manager secrets. SecretsState is fully public so
-//! we can write directly into the AccountRegionStore — no service
+//! we can write directly into the AccountRegionStore. No service
 //! method indirection needed.
 
 use std::collections::HashMap;
@@ -53,7 +53,7 @@ pub async fn seed(
             StatusCode::BAD_REQUEST,
             Json(json!({
                 "error": "ValidationException",
-                "message": format!("count must be ≤ {MAX_COUNT}"),
+                "message": format!("count must be <= {MAX_COUNT}"),
             })),
         )
             .into_response();
@@ -85,7 +85,7 @@ pub async fn seed(
                 "arn:{partition}:secretsmanager:{region}:{account}:secret:{name}-{}",
                 Uuid::new_v4().simple()
             );
-            // Realistic-shaped credential blob — small JSON like what
+            // Realistic-shaped credential blob. Small JSON like what
             // most apps store: { username, password, host, port }.
             let secret_string = json!({
                 "username": format!("user-{}", fake_slug(1)),

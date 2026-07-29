@@ -1,15 +1,15 @@
-//! API Gateway v1 — REST APIs.
+//! API Gateway v1. REST APIs.
 //!
 //! AWS exposes two distinct API Gateway services:
-//!   * v1 (REST APIs) — signed as `apigateway`, paths like `/restapis/...`,
+//!   * v1 (REST APIs). Signed as `apigateway`, paths like `/restapis/...`,
 //!     resource-tree model with per-resource `Method`s and `Integration`s.
-//!   * v2 (HTTP / WebSocket APIs) — signed as `execute-api`, paths like
+//!   * v2 (HTTP / WebSocket APIs). Signed as `execute-api`, paths like
 //!     `/v2/apis/...`, simpler routes-and-integrations model.
 //!
 //! `ApiGatewayService` (in `lib.rs`) handles v2. This module adds a
 //! parallel handler for v1 so the management UI (which is built on REST
 //! APIs) stops returning `UnknownService`. The two handlers share no
-//! state — they really are two different services in AWS too.
+//! state. They really are two different services in AWS too.
 //!
 //! Scope is intentionally tight: every operation the UI client calls is
 //! covered, plus enough surface for create/list/delete to round-trip.
@@ -131,11 +131,11 @@ pub struct Integration {
 pub struct IntegrationResponse {
     pub status_code: String,
     /// Regex on the integration's raw output that picks this response.
-    /// Empty string means "default" — used when no other pattern matches.
+    /// Empty string means "default". Used when no other pattern matches.
     pub selection_pattern: String,
     /// Response body mapping templates keyed by content-type.
     pub response_templates: HashMap<String, String>,
-    /// Response header mappings (header-name → source expression).
+    /// Response header mappings (header-name -> source expression).
     pub response_parameters: HashMap<String, String>,
     /// `CONVERT_TO_BINARY` decodes a base64-encoded body before sending
     /// to the client; `CONVERT_TO_TEXT` base64-encodes a binary body.
@@ -196,7 +196,7 @@ pub struct Authorizer {
 
 /// API key as stored. The `value` is the bearer string the SDK sends in
 /// `x-api-key`; the `id` is a short opaque handle the management API
-/// uses. Keys exist at the account+region level — not under any one API.
+/// uses. Keys exist at the account+region level. Not under any one API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKey {
     pub id: String,
@@ -1217,7 +1217,7 @@ fn delete_resource(state: &ApiGatewayV1State, input: &Value) -> Result<Value, Aw
                 "Cannot delete the root resource",
             ));
         }
-        // Refuse if any other resource lists this one as parent — keeps the
+        // Refuse if any other resource lists this one as parent. Keeps the
         // tree consistent and matches the AWS behaviour.
         if api.resources.values().any(|r| r.parent_id == resource_id) {
             return Err(AwsError::conflict(
@@ -1340,7 +1340,7 @@ fn put_integration(state: &ApiGatewayV1State, input: &Value) -> Result<Value, Aw
         let method = resource.methods.get_mut(&http_method).ok_or_else(|| {
             AwsError::not_found(
                 "NotFoundException",
-                format!("Method {http_method} not configured — call PutMethod first"),
+                format!("Method {http_method} not configured. Call PutMethod first"),
             )
         })?;
         let json = integration_to_json(&integration);
@@ -1599,7 +1599,7 @@ fn parse_canary_settings(input: &Value) -> Result<Option<CanarySettings>, AwsErr
 }
 
 /// Decide whether a request hits the canary deployment. AWS distributes
-/// traffic based on `percentTraffic` — we hash the seed (typically the
+/// traffic based on `percentTraffic`. We hash the seed (typically the
 /// request id) to a deterministic [0, 100) bucket so the same request
 /// id always resolves to the same deployment.
 pub fn route_to_canary(canary: &CanarySettings, seed: &str) -> bool {
@@ -1861,7 +1861,7 @@ fn request_validator_to_json(v: &RequestValidator) -> Value {
 }
 
 /// Validate a request body against a model's JSON Schema. Supports the
-/// subset AWS commonly emits in generated SDK examples — `type`,
+/// subset AWS commonly emits in generated SDK examples. `type`,
 /// `required`, `properties`, `items`, `enum`, plus min/max for strings
 /// and numbers. Returns a human-readable error pointing at the first
 /// constraint that failed.
@@ -2490,8 +2490,8 @@ fn delete_usage_plan_key(state: &ApiGatewayV1State, input: &Value) -> Result<Val
 
 /// Look up an `x-api-key` header against the configured ApiKeys + their
 /// linked UsagePlans. Returns Ok if the key is enabled and at least one
-/// usage plan covers `(api_id, stage)`. Modeled after AWS' enforcement —
-/// throttle / quota aren't tracked yet so any matching plan grants
+/// usage plan covers `(api_id, stage)`. Modeled after AWS' enforcement.
+/// Throttle / quota aren't tracked yet so any matching plan grants
 /// access.
 pub fn validate_api_key(
     state: &ApiGatewayV1State,
@@ -2546,21 +2546,21 @@ pub struct V1ProxyMatch {
     /// Lambda-style v1 proxy event (`apiGateway1.0` payload format).
     /// The caller can pass this verbatim as the Lambda Invoke `Payload`.
     pub event: Value,
-    /// Path of the matched resource — used purely for diagnostics.
+    /// Path of the matched resource. Used purely for diagnostics.
     pub matched_resource_path: String,
     /// Full integration record so the caller can run request/response
     /// template mapping for non-PROXY integrations.
     pub integration: Integration,
-    /// Stage variables — exposed so non-PROXY templates can resolve
+    /// Stage variables. Exposed so non-PROXY templates can resolve
     /// `$stageVariables.x`.
     pub stage_variables: HashMap<String, String>,
     /// Path parameters extracted from the matched resource pattern.
     pub path_params: HashMap<String, String>,
     /// Query parameters parsed from the URL.
     pub query_params: HashMap<String, String>,
-    /// Request headers as a string→string map.
+    /// Request headers as a string->string map.
     pub headers: HashMap<String, String>,
-    /// `requestContext` object — same shape as the proxy event sub-object.
+    /// `requestContext` object. Same shape as the proxy event sub-object.
     pub request_context: Value,
     /// What the caller must do for authorization before running the
     /// integration. May be `NotConfigured` (run integration unchanged),
@@ -3457,7 +3457,7 @@ mod tests {
     #[test]
     fn content_handling_invalid_base64_falls_through() {
         // CONVERT_TO_BINARY on something that isn't valid base64 should
-        // return the original bytes rather than panicking — matches AWS.
+        // return the original bytes rather than panicking. Matches AWS.
         let out = apply_response_content_handling(b"not-base64!!", Some("CONVERT_TO_BINARY"));
         assert_eq!(out, b"not-base64!!");
     }
@@ -3544,7 +3544,7 @@ mod tests {
         assert!(path_matches("/api/{proxy+}", "/api/users"));
         assert!(path_matches("/api/{proxy+}", "/api/users/42"));
         assert!(path_matches("/api/{proxy+}", "/api/users/42/orders/abc"));
-        // Pattern prefix doesn't match → no greedy save.
+        // Pattern prefix doesn't match -> no greedy save.
         assert!(!path_matches("/api/{proxy+}", "/other/users"));
     }
 
@@ -3560,7 +3560,7 @@ mod tests {
 
     #[test]
     fn extract_path_params_returns_null_for_unmatched_pattern() {
-        // Without greedy + segment count differs → no match.
+        // Without greedy + segment count differs -> no match.
         let params = extract_path_params("/users/{id}", "/users/42/extra");
         assert_eq!(params, Value::Null);
     }
@@ -4218,7 +4218,7 @@ mod tests {
         // CreateDeployment with stageName auto-creates the stage.
         let _ = dep;
         // Set stage variables via internal mutation, since UpdateStage isn't
-        // implemented — walk the state directly.
+        // implemented. Walk the state directly.
         {
             let store = svc.store.get("000000000000", "us-east-1");
             let mut entry = store.apis.get_mut(&api_id).unwrap();
@@ -4354,7 +4354,7 @@ mod tests {
 
         let store = svc.store.get("000000000000", "us-east-1");
 
-        // No usage plan yet → rejected.
+        // No usage plan yet -> rejected.
         assert!(validate_api_key(&store, Some(&key_value), &api_id, "prod").is_err());
 
         let plan = svc
@@ -4370,7 +4370,7 @@ mod tests {
             .unwrap();
         let plan_id = plan["id"].as_str().unwrap().to_string();
 
-        // Plan exists but no key linkage → still rejected.
+        // Plan exists but no key linkage -> still rejected.
         assert!(validate_api_key(&store, Some(&key_value), &api_id, "prod").is_err());
 
         svc.handle(
@@ -4385,7 +4385,7 @@ mod tests {
         .await
         .unwrap();
 
-        // Now associated with a plan covering this stage → accepted.
+        // Now associated with a plan covering this stage -> accepted.
         validate_api_key(&store, Some(&key_value), &api_id, "prod").unwrap();
         // Wrong stage still rejected.
         assert!(validate_api_key(&store, Some(&key_value), &api_id, "dev").is_err());

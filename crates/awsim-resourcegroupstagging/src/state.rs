@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// The real service maintains a cross-service tag index that is populated
 /// asynchronously from each tagged resource's owning service. We model that
-/// as a flat ARN → tag map; callers wire tags in via `TagResources` /
+/// as a flat ARN -> tag map; callers wire tags in via `TagResources` /
 /// `UntagResources` and read them back via `GetResources` / `GetTagKeys` /
 /// `GetTagValues`.
 #[derive(Debug, Default)]

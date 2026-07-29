@@ -18,9 +18,9 @@ use crate::{
 
 use super::{opt_str, require_str};
 
-// ── ListServiceSpecificCredentials ────────────────────────────────────────────
+// -- ListServiceSpecificCredentials --------------------------------------------
 
-/// ListServiceSpecificCredentials — Return credentials owned by user.
+/// ListServiceSpecificCredentials. Return credentials owned by user.
 pub fn list_service_specific_credentials(
     state: &IamState,
     input: &Value,
@@ -59,9 +59,9 @@ pub fn list_service_specific_credentials(
     }))
 }
 
-// ── ListSigningCertificates ───────────────────────────────────────────────────
+// -- ListSigningCertificates ---------------------------------------------------
 
-/// ListSigningCertificates — Return certificates owned by the user.
+/// ListSigningCertificates. Return certificates owned by the user.
 pub fn list_signing_certificates(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let user_name = input.get("UserName").and_then(|v| v.as_str());
     if let Some(name) = user_name
@@ -300,7 +300,7 @@ pub fn generate_organizations_access_report(
     Ok(json!({ "JobId": crate::ids::new_uuid() }))
 }
 
-// ── Policy Simulator ─────────────────────────────────────────────────────────
+// -- Policy Simulator ---------------------------------------------------------
 
 fn extract_string_list(input: &Value, key: &str) -> Vec<String> {
     let v = match input.get(key) {
@@ -411,7 +411,7 @@ fn build_evaluation_results(
     for action in actions {
         for resource in resources {
             // Resource policy lookups happen per (resource, action) so
-            // we re-fetch on each iteration. Cheap — service lookups
+            // we re-fetch on each iteration. Cheap. Service lookups
             // are HashMap reads behind an Arc.
             let (resource_policy_doc, resource_attr) =
                 lookup_resource_policy(authz, action, resource);
@@ -528,7 +528,7 @@ fn lookup_resource_policy(
         return (None, None);
     };
     // Service prefix is the part before ':' in the action (e.g.
-    // "s3:GetObject" → "s3"). The lookup map is keyed by service
+    // "s3:GetObject" -> "s3"). The lookup map is keyed by service
     // name, mirroring how the gateway authz path resolves them.
     let service = action.split(':').next().unwrap_or(action);
     let Some(lookup) = authz.resource_policy_lookups.get(service) else {
@@ -558,7 +558,7 @@ pub fn simulate_custom_policy(
 
     // Treat each PolicyInputList entry as an inline identity-style
     // policy. Attribute by 1-based index since the user provides the
-    // raw documents — we don't have a stable name to use.
+    // raw documents. We don't have a stable name to use.
     let identity_docs = parse_policy_input_list(input, "PolicyInputList")?;
     let identity_attrs: Vec<PolicyAttribution> = (0..identity_docs.len())
         .map(|i| PolicyAttribution {
@@ -606,7 +606,7 @@ pub fn simulate_principal_policy(
     let context = extract_context_entries(input);
 
     // Inline PolicyInputList entries supplement the principal's own
-    // policies — same as AWS, where you can add ad-hoc policies on
+    // policies. Same as AWS, where you can add ad-hoc policies on
     // top of what the principal already has.
     let inline_docs = parse_policy_input_list(input, "PolicyInputList")?;
     let inline_attrs: Vec<PolicyAttribution> = (0..inline_docs.len())
@@ -622,7 +622,7 @@ pub fn simulate_principal_policy(
     bundle.identity.extend(inline_docs);
     bundle.identity_attributions.extend(inline_attrs);
 
-    // SCPs — the gateway's Organizations lookup gives us the
+    // SCPs. The gateway's Organizations lookup gives us the
     // org-scoped SCPs that apply to this principal. Same source we
     // use on the live request path, so the simulator output matches.
     if let Some(authz) = authz
@@ -762,9 +762,9 @@ fn parse_required(raw: &str) -> Result<PolicyDocument, AwsError> {
         .map_err(|e| malformed_policy_document(format!("Syntax errors in policy. {e}")))
 }
 
-// ── GetContextKeys stubs ──────────────────────────────────────────────────────
+// -- GetContextKeys stubs ------------------------------------------------------
 
-/// GetContextKeysForCustomPolicy — Return empty context key list.
+/// GetContextKeysForCustomPolicy. Return empty context key list.
 pub fn get_context_keys_for_custom_policy(
     _state: &IamState,
     _input: &Value,
@@ -774,7 +774,7 @@ pub fn get_context_keys_for_custom_policy(
     }))
 }
 
-/// GetContextKeysForPrincipalPolicy — Return empty context key list.
+/// GetContextKeysForPrincipalPolicy. Return empty context key list.
 pub fn get_context_keys_for_principal_policy(
     _state: &IamState,
     _input: &Value,

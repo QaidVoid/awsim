@@ -196,7 +196,7 @@ pub fn reject_attrs_to_get_with_projection(
 
 /// Translate a byte count to read capacity units. AWS rounds up by 4 KiB
 /// for strongly consistent reads and halves the result for eventually
-/// consistent (the default). Transactional reads consume 2× the
+/// consistent (the default). Transactional reads consume 2x the
 /// strongly-consistent value.
 pub fn read_capacity_units(bytes: usize, consistent: bool, transactional: bool) -> f64 {
     let blocks = bytes.div_ceil(4 * 1024).max(1) as f64;
@@ -211,7 +211,7 @@ pub fn read_capacity_units(bytes: usize, consistent: bool, transactional: bool) 
 }
 
 /// Translate a byte count to write capacity units (1 WCU per 1 KiB,
-/// rounded up). Transactional writes consume 2× the standard cost.
+/// rounded up). Transactional writes consume 2x the standard cost.
 pub fn write_capacity_units(bytes: usize, transactional: bool) -> f64 {
     let blocks = bytes.div_ceil(1024).max(1) as f64;
     let mult = if transactional { 2.0 } else { 1.0 };

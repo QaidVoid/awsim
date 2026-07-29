@@ -25,7 +25,7 @@ use super::{
 
 /// Decode a stored sqlite row into a `DynamoItem`. Returns `None` when
 /// the row doesn't exist; surfaces an internal error if the row exists
-/// but isn't a JSON object (shouldn't happen — we only ever write
+/// but isn't a JSON object (shouldn't happen. We only ever write
 /// objects).
 fn decode_existing(stored: Option<Value>) -> Result<Option<DynamoItem>, AwsError> {
     stored
@@ -69,7 +69,7 @@ fn transaction_canceled(total: usize, failed_idx: usize, failed_code: &str) -> A
 
 /// AWS TransactGetItems caps a single call at 100 actions and 4 MB
 /// of response payload. Unlike BatchGetItem, transactions don't
-/// paginate — exceeding the response cap is a hard
+/// paginate. Exceeding the response cap is a hard
 /// ValidationException, so the workload doesn't quietly leak memory
 /// while building a 100 MB Value tree.
 const TRANSACT_GET_MAX_ACTIONS: usize = 100;
@@ -135,7 +135,7 @@ pub fn transact_get_items(
         });
     }
 
-    // Snapshot read across all gets — a deferred sqlite txn pins the
+    // Snapshot read across all gets. A deferred sqlite txn pins the
     // visible commit point.
     let (responses, per_table_units) = sqlite.with_read_transaction(|tx: &ReadTx<'_>| -> Result<
         (Vec<Value>, std::collections::HashMap<String, f64>),
@@ -226,7 +226,7 @@ pub fn transact_write_items(
     // Translate each transact-item into a fully-resolved Action up front.
     // We do schema-dependent key extraction here while the in-memory
     // schema cache is in scope; the sqlite txn body just runs the actions.
-    // Boxed gsi keeps the Put variant from dwarfing the others — the
+    // Boxed gsi keeps the Put variant from dwarfing the others. The
     // 5-slot array would otherwise pad every Action to ~500 bytes.
     enum Action {
         Put {
@@ -474,7 +474,7 @@ pub fn transact_write_items(
 
     // AWS rejects a TransactWriteItems whose actions target the same
     // (table, primary key) more than once. The atomicity guarantee
-    // doesn't extend to "last write wins" within the same call — the
+    // doesn't extend to "last write wins" within the same call. The
     // SDK gets ValidationException with the offending operation index.
     let mut seen_keys: std::collections::HashSet<(String, String, String)> =
         std::collections::HashSet::with_capacity(mutations.len());
@@ -494,8 +494,8 @@ pub fn transact_write_items(
         }
     }
 
-    // Snapshot the schema cache up front so the txn body — which can't
-    // reach back into the dashmap (we'd block other writers) — has every
+    // Snapshot the schema cache up front so the txn body. Which can't
+    // reach back into the dashmap (we'd block other writers). Has every
     // GSI key schema it needs.
     use std::collections::HashMap;
     let mut schema_cache: HashMap<String, crate::state::Table> = HashMap::new();
@@ -1056,7 +1056,7 @@ mod tests {
             .unwrap();
 
         // Transaction: Put a NEW row p2/s1 + Update p1/s1 with a
-        // condition that will FAIL (attribute_not_exists(pk) — but p1
+        // condition that will FAIL (attribute_not_exists(pk). But p1
         // does exist). Expectation: neither write commits.
         let input = json!({
             "TransactItems": [

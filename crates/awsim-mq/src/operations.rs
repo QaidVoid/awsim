@@ -135,8 +135,8 @@ fn broker_describe(b: &Broker, users: Vec<Value>) -> Value {
     if let Some(ref v) = b.maintenance_window_start_time {
         obj["MaintenanceWindowStartTime"] = v.clone();
     }
-    // AWS always emits an `ActionsRequired` array on DescribeBroker —
-    // an empty one when the broker is healthy. Surfacing it
+    // AWS always emits an `ActionsRequired` array on DescribeBroker.
+    // An empty one when the broker is healthy. Surfacing it
     // unconditionally lets SDK clients iterate the field without a
     // None check.
     obj["ActionsRequired"] = json!([]);
@@ -869,7 +869,7 @@ fn validate_configuration_data(engine_type: &str, decoded: &[u8]) -> Result<(), 
         "RABBITMQ" => {
             // RabbitMQ cuttlefish style: lines of `key = value` (with
             // comments / blank lines allowed). Reject when every
-            // non-blank line looks XML-shaped — i.e., it's an ActiveMQ
+            // non-blank line looks XML-shaped. I.e., it's an ActiveMQ
             // payload misrouted onto a RabbitMQ configuration.
             let non_blank: Vec<&str> = text
                 .lines()

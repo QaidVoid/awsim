@@ -344,6 +344,6 @@ pub fn list_origination_numbers(
     _input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    // Stub — no origination numbers in simulation.
+    // Stub. No origination numbers in simulation.
     Ok(json!({ "PhoneNumbers": [] }))
 }

@@ -17,7 +17,7 @@ fn new_job_id() -> String {
 }
 
 fn resource_type_from_arn(arn: &str) -> String {
-    // Best-effort heuristic — the real service infers this from the ARN prefix.
+    // Best-effort heuristic. The real service infers this from the ARN prefix.
     if arn.contains(":dynamodb:") {
         "DynamoDB".into()
     } else if arn.contains(":s3:") {
@@ -94,7 +94,7 @@ pub fn start_backup_job(
         "arn:aws:backup:{}:{}:recovery-point:{}",
         ctx.region, ctx.account_id, job_id
     );
-    // Emulator collapses the queued/running cycle — jobs land in COMPLETED
+    // Emulator collapses the queued/running cycle. Jobs land in COMPLETED
     // immediately so callers don't have to poll. The recovery-point bookkeeping
     // is kept light: count it and move on.
     let job = BackupJob {

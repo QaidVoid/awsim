@@ -51,13 +51,13 @@ pub struct RouteDefinition {
     pub path_pattern: &'static str,
     pub operation: &'static str,
     /// For S3-style query parameter disambiguation.
-    /// e.g., PUT /{Bucket}?versioning → PutBucketVersioning
+    /// e.g., PUT /{Bucket}?versioning -> PutBucketVersioning
     pub required_query_param: Option<&'static str>,
 }
 
 /// Detect which protocol an incoming request uses.
 pub fn detect_protocol(headers: &HeaderMap, body: &Bytes) -> Option<Protocol> {
-    // Check X-Amz-Target header → awsJson
+    // Check X-Amz-Target header -> awsJson
     if let Some(target) = headers.get("x-amz-target") {
         let content_type = headers
             .get("content-type")
@@ -76,7 +76,7 @@ pub fn detect_protocol(headers: &HeaderMap, body: &Bytes) -> Option<Protocol> {
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    // Check form-encoded → awsQuery or ec2Query
+    // Check form-encoded -> awsQuery or ec2Query
     if content_type.contains("x-www-form-urlencoded") {
         let body_str = std::str::from_utf8(body).unwrap_or("");
         if body_str.contains("Action=") {
@@ -84,12 +84,12 @@ pub fn detect_protocol(headers: &HeaderMap, body: &Bytes) -> Option<Protocol> {
         }
     }
 
-    // Check JSON content type → restJson1
+    // Check JSON content type -> restJson1
     if content_type.contains("json") {
         return Some(Protocol::RestJson1);
     }
 
-    // Check XML content type → restXml
+    // Check XML content type -> restXml
     if content_type.contains("xml") {
         return Some(Protocol::RestXml);
     }

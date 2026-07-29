@@ -16,7 +16,7 @@
 //! We satisfy all three with an HMAC-SHA256 signature keyed off the
 //! pagination signing key (per-process random) and a cert URL that
 //! points at a fixed `/_awsim/sns/SimpleNotificationService-{region}.pem`
-//! mock — callers verifying signatures end-to-end need real keys, but
+//! mock. Callers verifying signatures end-to-end need real keys, but
 //! everyone else gets a byte-for-byte deterministic envelope.
 
 use base64::Engine as _;
@@ -29,7 +29,7 @@ type HmacSha256 = Hmac<Sha256>;
 
 /// Inputs needed to build an SNS HTTP notification envelope. Held
 /// together as a struct so the field order isn't load-bearing and so
-/// future additions (Subject, MessageAttributes, …) don't reshuffle
+/// future additions (Subject, MessageAttributes, ...) don't reshuffle
 /// every call site.
 #[derive(Debug, Clone)]
 pub struct NotificationInputs<'a> {
@@ -46,7 +46,7 @@ pub struct NotificationInputs<'a> {
 /// Build the JSON envelope SNS posts to HTTP(S) subscribers. The
 /// `Signature` field is an HMAC-SHA256 over the canonical string
 /// described by AWS, base64-encoded; verifying it requires the
-/// per-process key (out of band) — real subscribers should use
+/// per-process key (out of band). Real subscribers should use
 /// `SignatureVersion=2` once awsim gains a per-region keypair.
 pub fn build_notification(inputs: &NotificationInputs<'_>, signing_key: &[u8]) -> Value {
     let canonical = canonical_string(inputs);

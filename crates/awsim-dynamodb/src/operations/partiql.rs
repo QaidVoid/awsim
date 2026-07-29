@@ -9,7 +9,7 @@
 ///
 /// Parameters (`?`) are substituted from the `Parameters` list in order.
 ///
-/// Stage 4: backed by SqliteStore — items live only in SQLite.
+/// Stage 4: backed by SqliteStore. Items live only in SQLite.
 use std::collections::HashMap;
 
 use awsim_core::{AwsError, RequestContext};
@@ -28,7 +28,7 @@ use super::{
     read_capacity_units, write_capacity_units,
 };
 
-// ─── Public entry points ──────────────────────────────────────────────────────
+// --- Public entry points ------------------------------------------------------
 
 pub fn execute_statement(
     state: &DynamoState,
@@ -185,7 +185,7 @@ pub fn execute_transaction(
     Ok(result)
 }
 
-// ─── Core statement runner ────────────────────────────────────────────────────
+// --- Core statement runner ----------------------------------------------------
 
 /// Accumulates consumed capacity per table across one or more statements so
 /// `ConsumedCapacity` can be reported the way each PartiQL entry point expects
@@ -259,7 +259,7 @@ fn decode_row(stored: Value) -> Result<DynamoItem, AwsError> {
         .ok_or_else(|| AwsError::internal("DynamoDB stored attrs is not an object"))
 }
 
-// ─── SELECT ──────────────────────────────────────────────────────────────────
+// --- SELECT ------------------------------------------------------------------
 
 fn run_select(
     state: &DynamoState,
@@ -308,7 +308,7 @@ fn run_select(
     Ok(items)
 }
 
-// ─── INSERT ───────────────────────────────────────────────────────────────────
+// --- INSERT -------------------------------------------------------------------
 
 fn run_insert(
     state: &DynamoState,
@@ -393,7 +393,7 @@ fn run_insert(
     Ok(())
 }
 
-// ─── UPDATE ───────────────────────────────────────────────────────────────────
+// --- UPDATE -------------------------------------------------------------------
 
 fn run_update(
     state: &DynamoState,
@@ -490,7 +490,7 @@ fn run_update(
     Ok(())
 }
 
-// ─── DELETE ───────────────────────────────────────────────────────────────────
+// --- DELETE -------------------------------------------------------------------
 
 fn run_delete(
     state: &DynamoState,
@@ -554,7 +554,7 @@ fn run_delete(
     Ok(())
 }
 
-// ─── Parsing helpers ──────────────────────────────────────────────────────────
+// --- Parsing helpers ----------------------------------------------------------
 
 /// Parse the table name and optional WHERE clause from a statement.
 /// Returns (table_name, Option<key>, Option<ddb_attr_value>).

@@ -1,4 +1,4 @@
-//! `awsim seed --file seed.toml` — reads a TOML scenario config and
+//! `awsim seed --file seed.toml`. Reads a TOML scenario config and
 //! POSTs to /_awsim/seed/<service> in sequence so a CI run can
 //! reproduce a fixture.
 //!
@@ -7,7 +7,7 @@
 //! ```toml
 //! endpoint = "http://localhost:4566"   # optional, defaults below
 //!
-//! # Each section is optional — omit a service to skip it.
+//! # Each section is optional. Omit a service to skip it.
 //!
 //! [[cognito_users]]
 //! pool_id = "us-east-1_abcdef"
@@ -125,7 +125,7 @@ pub async fn run(file: &Path, cli_endpoint: Option<&str>) -> Result<()> {
     if let Some(q) = &cfg.sqs {
         post(&client, &endpoint, "sqs", q, "SQS").await?;
     }
-    println!("✓ Seed complete.");
+    println!("[ok] Seed complete.");
     Ok(())
 }
 
@@ -148,6 +148,6 @@ async fn post<B: Serialize>(
     if !status.is_success() {
         anyhow::bail!("{label} seed failed ({status}): {payload}");
     }
-    println!("✓ {label}: {payload}");
+    println!("[ok] {label}: {payload}");
     Ok(())
 }

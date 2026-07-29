@@ -44,10 +44,28 @@ fn spawn_server(port: u16) -> ServerGuard {
     ServerGuard(child)
 }
 
+/// Start a server on a port we can actually get.
+///
+/// `free_port` releases the port before the server claims it, so another
+/// process (including a sibling test) can win the race in between. Retry
+/// on a fresh port rather than leaving a flaky test behind.
+fn start_server() -> (u16, ServerGuard) {
+    let mut last_err = String::new();
+    for _ in 0..5 {
+        let port = free_port();
+        let mut guard = spawn_server(port);
+        match try_wait_for_listen(port, &mut guard) {
+            Ok(()) => return (port, guard),
+            Err(e) => last_err = e,
+        }
+    }
+    panic!("could not start a server on any port: {last_err}");
+}
+
 /// Wait for the port to accept a connection, without sending anything.
 /// The point of this test is that the *first* request is the one under
 /// test, so readiness must not consume it.
-fn wait_for_listen(port: u16, guard: &mut ServerGuard) {
+fn try_wait_for_listen(port: u16, guard: &mut ServerGuard) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(30);
     while Instant::now() < deadline {
         if let Ok(Some(status)) = guard.0.try_wait() {
@@ -55,21 +73,19 @@ fn wait_for_listen(port: u16, guard: &mut ServerGuard) {
             if let Some(stderr) = guard.0.stderr.as_mut() {
                 let _ = stderr.read_to_string(&mut err);
             }
-            panic!("server exited before listening: {status}\n{err}");
+            return Err(format!("server exited before listening: {status}\n{err}"));
         }
         if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            return;
+            return Ok(());
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    panic!("server did not start listening on port {port} within 30s");
+    Err(format!("server did not listen on port {port} within 30s"))
 }
 
 #[test]
 fn server_answers_its_very_first_request() {
-    let port = free_port();
-    let mut guard = spawn_server(port);
-    wait_for_listen(port, &mut guard);
+    let (port, _guard) = start_server();
 
     let body = "Action=GetCallerIdentity&Version=2011-06-15";
     let resp = ureq_post(port, body);
@@ -97,9 +113,7 @@ fn server_answers_its_very_first_request() {
 fn health_endpoint_answers_first() {
     // Testcontainers modules wait on this endpoint, so it specifically
     // must work on a cold server.
-    let port = free_port();
-    let mut guard = spawn_server(port);
-    wait_for_listen(port, &mut guard);
+    let (port, _guard) = start_server();
 
     let resp = ureq_get(port, "/_awsim/health");
     assert!(

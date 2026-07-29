@@ -62,7 +62,7 @@ pub fn create_user(
 
 /// Resolve the user name an operation should target when the caller
 /// omits `UserName`. AWS allows certain operations (GetUser,
-/// CreateAccessKey, ListAccessKeys, …) to default to the caller's own
+/// CreateAccessKey, ListAccessKeys, ...) to default to the caller's own
 /// IAM user when omitted. We map the SigV4-signed access key to its
 /// matching user when present, falling back to any existing user.
 fn resolve_target_user_name(
@@ -295,7 +295,7 @@ pub fn list_access_keys(
     }))
 }
 
-// ── Inline policy read/delete ────────────────────────────────────────────────
+// -- Inline policy read/delete ------------------------------------------------
 
 pub fn get_user_policy(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let user_name = require_str(input, "UserName")?;
@@ -355,7 +355,7 @@ pub fn list_user_policies(state: &IamState, input: &Value) -> Result<Value, AwsE
     }))
 }
 
-// ── ListGroupsForUser ────────────────────────────────────────────────────────
+// -- ListGroupsForUser --------------------------------------------------------
 
 pub fn list_groups_for_user(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let user_name = require_str(input, "UserName")?;
@@ -385,7 +385,7 @@ pub fn list_groups_for_user(state: &IamState, input: &Value) -> Result<Value, Aw
     }))
 }
 
-// ── Login Profile ─────────────────────────────────────────────────────────────
+// -- Login Profile -------------------------------------------------------------
 
 pub fn create_login_profile(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let user_name = require_str(input, "UserName")?;

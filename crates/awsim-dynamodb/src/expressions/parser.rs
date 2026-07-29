@@ -69,7 +69,7 @@ pub enum LogicalOp {
     Or,
 }
 
-// ─── Tokenizer ───────────────────────────────────────────────────────────────
+// --- Tokenizer ---------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
@@ -197,7 +197,7 @@ impl Lexer {
     }
 }
 
-// ─── Parser ──────────────────────────────────────────────────────────────────
+// --- Parser ------------------------------------------------------------------
 
 struct Parser {
     tokens: Vec<Token>,
@@ -475,7 +475,7 @@ impl Parser {
     }
 }
 
-// ─── Public parse functions ───────────────────────────────────────────────────
+// --- Public parse functions ---------------------------------------------------
 
 /// Parse a condition/filter expression string into a ConditionExpr AST.
 ///
@@ -541,7 +541,7 @@ fn check_reserved_in_condition(expr: &ConditionExpr) -> Result<(), AwsError> {
 }
 
 /// Parse a projection expression into a list of path strings.
-/// e.g. "#n, address.city" → ["#n", "address.city"]
+/// e.g. "#n, address.city" -> ["#n", "address.city"]
 ///
 /// Rejects reserved keywords used as bare attribute names.
 pub fn parse_projection(expr: &str) -> Result<Vec<String>, AwsError> {

@@ -1,4 +1,4 @@
-//! `awsim bill` — fetch the running instance's billing report and
+//! `awsim bill`. Fetch the running instance's billing report and
 //! pretty-print it (or emit raw JSON for piping into jq / scripts).
 
 use anyhow::{Context, Result, bail};
@@ -43,7 +43,7 @@ fn print_pretty(report: &BillingReport) {
     println!();
 
     if report.services.is_empty() {
-        println!("No metered usage yet — hit some AWS endpoints to see costs.");
+        println!("No metered usage yet. Hit some AWS endpoints to see costs.");
         return;
     }
 
@@ -71,7 +71,7 @@ fn print_pretty(report: &BillingReport) {
             detail_parts.push(format!("{} stored", fmt_bytes(svc.storage_bytes)));
         }
         if svc.compute_gb_seconds > 0.0 {
-            detail_parts.push(format!("{:.3} GB·s", svc.compute_gb_seconds));
+            detail_parts.push(format!("{:.3} GB*s", svc.compute_gb_seconds));
         }
         if svc.resource_count > 0 {
             detail_parts.push(format!("{} running", svc.resource_count));
@@ -82,7 +82,7 @@ fn print_pretty(report: &BillingReport) {
         let detail = if detail_parts.is_empty() {
             String::new()
         } else {
-            format!("  · {}", detail_parts.join(" · "))
+            format!("  * {}", detail_parts.join(" * "))
         };
         println!(
             "  {:<name_w$}  {:>cost_w$}{detail}",
@@ -102,7 +102,7 @@ fn fmt_usd(n: f64) -> String {
     } else if n >= 1.0 {
         format!("${n:.2}")
     } else {
-        // Sub-dollar — show enough digits to be informative.
+        // Sub-dollar. Show enough digits to be informative.
         format!("${n:.4}")
     }
 }

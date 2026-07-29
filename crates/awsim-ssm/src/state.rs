@@ -271,17 +271,17 @@ pub struct SsmResourcePolicy {
 /// Per-account/region SSM state.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct SsmState {
-    /// Parameter name → Parameter
+    /// Parameter name -> Parameter
     pub parameters: DashMap<String, Parameter>,
-    /// CommandId → Command
+    /// CommandId -> Command
     pub commands: DashMap<String, Command>,
-    /// Document name → SsmDocument
+    /// Document name -> SsmDocument
     pub documents: DashMap<String, SsmDocument>,
-    /// AssociationId → SsmAssociation
+    /// AssociationId -> SsmAssociation
     pub associations: DashMap<String, SsmAssociation>,
-    /// WindowId → SsmMaintenanceWindow
+    /// WindowId -> SsmMaintenanceWindow
     pub maintenance_windows: DashMap<String, SsmMaintenanceWindow>,
-    /// OpsItemId → SsmOpsItem
+    /// OpsItemId -> SsmOpsItem
     pub ops_items: DashMap<String, SsmOpsItem>,
     pub patch_baselines: DashMap<String, SsmPatchBaseline>,
     pub default_patch_baselines: DashMap<String, String>,

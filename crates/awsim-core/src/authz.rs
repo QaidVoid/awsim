@@ -64,8 +64,8 @@ pub trait ResourcePolicyLookup: Send + Sync {
     fn lookup(&self, resource_arn: &str) -> Option<PolicyDocument>;
 }
 
-/// Service-specific authorization side-channel. Used by KMS grants today —
-/// a grant is an out-of-band Allow that lets a principal perform listed
+/// Service-specific authorization side-channel. Used by KMS grants today.
+/// A grant is an out-of-band Allow that lets a principal perform listed
 /// operations on a resource even if the identity policy and key policy
 /// would otherwise deny. Returns `true` when at least one grant matches the
 /// principal + action + resource.
@@ -140,7 +140,7 @@ pub trait CloudMapRegistrar: Send + Sync {
 /// or an `AwsError` with code `ResourceNotFoundException` when the
 /// function ARN doesn't resolve / `LambdaInvocationError` when the
 /// runtime surfaced a `FunctionError`. The implementation is allowed
-/// to block — Secrets Manager rotation already runs on the
+/// to block. Secrets Manager rotation already runs on the
 /// `WorkerPool` so this is invoked off the request thread.
 pub trait LambdaInvoker: Send + Sync {
     fn invoke(
@@ -216,7 +216,7 @@ pub struct AuthzEngine {
     /// requests doesn't have correctness implications.
     enforced: AtomicBool,
     /// Access key that bypasses IAM enforcement and is treated as
-    /// root-equivalent. Models the AWS account root credential —
+    /// root-equivalent. Models the AWS account root credential.
     /// IAM only governs IAM users/roles, not the account itself.
     /// `None` means no bypass key is configured. The admin key is
     /// also not subject to `principal_lookup`, so it works even
@@ -247,7 +247,7 @@ impl AuthzEngine {
 
     /// Enable or disable IAM enforcement. Hot-reload-safe: in-flight
     /// requests already past the `enabled` check see the previous
-    /// value, which is fine — we don't make any policy decisions
+    /// value, which is fine. We don't make any policy decisions
     /// that depend on this being a stable view across an entire
     /// request.
     pub fn set_enabled(&self, enabled: bool) {
@@ -354,7 +354,7 @@ impl AuthzEngine {
             Decision::Allow => Ok(()),
             // Implicit deny is the natural outcome when neither the identity
             // policy nor the resource policy explicitly allows. KMS grants
-            // are an out-of-band Allow path — give them a chance before we
+            // are an out-of-band Allow path. Give them a chance before we
             // actually fail the request. Explicit deny still wins absolutely.
             Decision::ImplicitDeny => {
                 if let Some(lookup) = self.grant_lookups.get(&ctx.service)
@@ -419,10 +419,10 @@ impl AuthzEngine {
 /// AWS-standard variables that the policy evaluator consumes:
 ///
 /// * `aws:CurrentTime` (Date)
-/// * `aws:EpochTime` (Number) — same instant as seconds since 1970
+/// * `aws:EpochTime` (Number). Same instant as seconds since 1970
 /// * `aws:SourceIp` (Ip), when the request carried a recoverable client IP
 /// * `aws:SecureTransport` (Bool)
-/// * `aws:PrincipalArn` / `aws:PrincipalAccount` — already known to the
+/// * `aws:PrincipalArn` / `aws:PrincipalAccount`. Already known to the
 ///   evaluator's variable resolver but mirrored here so condition lookups
 ///   that reference them as keys (rare but legal) also see them.
 /// * `aws:PrincipalTag/<key>` (String) for every tag on the resolved

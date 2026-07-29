@@ -148,7 +148,7 @@ pub fn delete_backup_vault(
         )
     })?;
     if v.number_of_recovery_points > 0 {
-        // Restore and reject — real Backup blocks delete on a non-empty vault.
+        // Restore and reject. Real Backup blocks delete on a non-empty vault.
         state.vaults.insert(v.name.clone(), v);
         return Err(AwsError::bad_request(
             "InvalidRequestException",

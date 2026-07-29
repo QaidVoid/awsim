@@ -101,7 +101,7 @@ fn read_object_bytes(state: &S3State, bucket: &str, key: &str) -> Result<Vec<u8>
         .map_err(|e| AwsError::internal(format!("read object body: {e}")))
 }
 
-// ── Input parsing ─────────────────────────────────────────────────────────
+// -- Input parsing ---------------------------------------------------------
 
 fn parse_records(body: &[u8], input_ser: Option<&Value>) -> Result<Vec<Record>, AwsError> {
     let text = std::str::from_utf8(body)
@@ -236,7 +236,7 @@ fn record_from_json(value: Value) -> Record {
     Record { ordered, by_name }
 }
 
-// ── Query parsing ───────────────────────────────────────────────────────────
+// -- Query parsing -----------------------------------------------------------
 
 struct Query {
     projection: Projection,
@@ -425,7 +425,7 @@ fn parse_operand(text: &str) -> Result<Operand, AwsError> {
     Ok(Operand::Column(normalize_ref(text)))
 }
 
-// ── Evaluation ────────────────────────────────────────────────────────────
+// -- Evaluation ------------------------------------------------------------
 
 fn run_query(
     query: &Query,
@@ -560,7 +560,7 @@ fn invalid_sql(message: &str) -> AwsError {
     AwsError::bad_request("InvalidSqlExpression", message)
 }
 
-// ── Event-stream framing ────────────────────────────────────────────────────
+// -- Event-stream framing ----------------------------------------------------
 
 fn encode_event_stream(records: &[u8], bytes_scanned: u64, bytes_returned: u64) -> Vec<u8> {
     let mut out = Vec::new();

@@ -1,7 +1,7 @@
 //! EventBridge Pipes emulator.
 //!
 //! Implements the data-plane state for Pipes (Create/Describe/List/Update/
-//! Delete/Start/Stop) with RestJson1 routes. Actual source→target dispatch
+//! Delete/Start/Stop) with RestJson1 routes. Actual source->target dispatch
 //! is driven by a separate background runner spawned in the awsim binary.
 
 mod operations;

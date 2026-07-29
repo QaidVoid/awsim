@@ -19,7 +19,7 @@
 //!  - The `UNSIGNED-PAYLOAD` sentinel (S3 large uploads) is accepted
 //!    without payload-hash verification, matching AWS behaviour.
 //!  - `STREAMING-AWS4-HMAC-SHA256-PAYLOAD` (chunked S3 uploads) is
-//!    treated like UNSIGNED-PAYLOAD for now — chunk-level hashing
+//!    treated like UNSIGNED-PAYLOAD for now. Chunk-level hashing
 //!    can be a future addition once the workload demands it.
 //!  - Pre-signed URLs (signature in query string instead of header)
 //!    are not verified; the AWS SDKs use header signing for the
@@ -673,7 +673,7 @@ mod tests {
             "900",
             &[],
         );
-        // Substitute a different path — the signature was issued for
+        // Substitute a different path. The signature was issued for
         // /bucket/key, so verifying against /bucket/key2 must fail.
         let out = verify_presigned(
             "GET",

@@ -124,7 +124,7 @@ pub fn create_vault(
     let vault = require_str(input, "vaultName")?.to_string();
     if state.vaults.contains_key(&vault) {
         // Glacier returns 201 + Location header on either fresh or pre-existing
-        // vaults — emulator collapses to ok.
+        // vaults. Emulator collapses to ok.
         return Ok(json!({ "Location": format!("/-/vaults/{vault}") }));
     }
     let v = Vault {
@@ -300,7 +300,7 @@ pub fn initiate_job(
         .map(String::from);
     let job_id = uuid::Uuid::new_v4().simple().to_string();
     let now = iso_now();
-    // Emulator collapses queued/running — jobs land in Succeeded immediately.
+    // Emulator collapses queued/running. Jobs land in Succeeded immediately.
     let job = Job {
         vault_name: vault.clone(),
         job_id: job_id.clone(),

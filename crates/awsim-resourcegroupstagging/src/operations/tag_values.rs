@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 use crate::state::TaggingState;
 
-/// `GetTagValues` — return all values currently associated with `Key`.
+/// `GetTagValues`. Return all values currently associated with `Key`.
 ///
 /// `TagsPerPage` follows the same 100..=500 envelope AWS documents
 /// for `GetTagKeys`; values outside that range surface

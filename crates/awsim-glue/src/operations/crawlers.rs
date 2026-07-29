@@ -151,7 +151,7 @@ pub fn start_crawler(
             ));
         }
 
-        // Stub: transition READY → RUNNING → READY (immediately READY for metadata stub).
+        // Stub: transition READY -> RUNNING -> READY (immediately READY for metadata stub).
         crawler.state = "READY".to_string();
     }
 

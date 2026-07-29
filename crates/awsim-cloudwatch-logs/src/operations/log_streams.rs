@@ -121,7 +121,7 @@ pub fn describe_log_streams(
 
     // orderBy must be either LogStreamName or LastEventTime. AWS docs
     // also state that logStreamNamePrefix cannot be combined with
-    // orderBy=LastEventTime — the sort key isn't a prefix-friendly
+    // orderBy=LastEventTime. The sort key isn't a prefix-friendly
     // field, so both being set is rejected with InvalidParameterException.
     if !matches!(order_by, "LogStreamName" | "LastEventTime") {
         return Err(AwsError::bad_request(

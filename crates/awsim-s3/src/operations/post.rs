@@ -493,7 +493,7 @@ fn policy_violation(field: &str) -> AwsError {
     ))
 }
 
-// ── Byte-slice helpers ───────────────────────────────────────────────────
+// -- Byte-slice helpers ---------------------------------------------------
 
 /// Find the first index of `needle` within `haystack`.
 fn find_sub(haystack: &[u8], needle: &[u8]) -> Option<usize> {

@@ -1,7 +1,7 @@
 //! End-to-end coverage for STS-issued temp credentials under IAM
 //! enforcement. Before the session store landed, every request
-//! signed with `ASIA…` keys was denied because the IAM principal
-//! lookup couldn't resolve them — this exercise pins down the
+//! signed with `ASIA...` keys was denied because the IAM principal
+//! lookup couldn't resolve them. This exercise pins down the
 //! happy path so that regression can't return.
 
 use std::sync::Arc;
@@ -39,7 +39,7 @@ async fn assumed_role_temp_creds_resolve_under_enforcement() {
     let (srv, port) = start_server_unenforced(iam.clone()).await;
     let admin_cfg = make_sdk_config(port, "admin", "admin");
 
-    // Caller user — needs valid IAM creds for AssumeRole to resolve a
+    // Caller user. Needs valid IAM creds for AssumeRole to resolve a
     // principal once enforcement flips on.
     let (caller_ak, caller_sk) = bootstrap_user(&iam_client(&admin_cfg), "caller", &[]).await;
 
@@ -61,7 +61,7 @@ async fn assumed_role_temp_creds_resolve_under_enforcement() {
         .await
         .unwrap();
 
-    // Pre-create the table — also using admin creds since enforcement is off.
+    // Pre-create the table. Also using admin creds since enforcement is off.
     let ddb_admin = aws_sdk_dynamodb::Client::new(&admin_cfg);
     ddb_admin
         .create_table()
@@ -106,7 +106,7 @@ async fn assumed_role_temp_creds_resolve_under_enforcement() {
         creds.access_key_id
     );
 
-    // 2. DescribeTable signed with the temp creds — must succeed
+    // 2. DescribeTable signed with the temp creds. Must succeed
     //    because the role's policy allows it on the matching ARN.
     let temp_cfg = aws_config::SdkConfig::builder()
         .behavior_version(aws_config::BehaviorVersion::latest())
@@ -134,7 +134,7 @@ async fn assumed_role_temp_creds_resolve_under_enforcement() {
         Some("chat_sessions")
     );
 
-    // 3. DescribeTable on a *different* table — implicit deny since
+    // 3. DescribeTable on a *different* table. Implicit deny since
     //    the role's policy is scoped to one ARN. Confirms ARN
     //    matching actually runs against the assumed-role principal.
     let denied = ddb_caller
@@ -149,7 +149,7 @@ async fn assumed_role_temp_creds_resolve_under_enforcement() {
     );
 
     // 4. GetCallerIdentity reports the assumed-role ARN, not the
-    //    synthetic iam:user/ASIA… shape that older STS code emitted.
+    //    synthetic iam:user/ASIA... shape that older STS code emitted.
     let sts_caller = aws_sdk_sts::Client::new(&temp_cfg);
     let id = sts_caller.get_caller_identity().send().await.unwrap();
     assert_eq!(

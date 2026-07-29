@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 use crate::state::TaggingState;
 
-/// `GetTagKeys` — return the union of all tag keys currently in use.
+/// `GetTagKeys`. Return the union of all tag keys currently in use.
 ///
 /// AWS bounds `TagsPerPage` to 100..=500 inclusive when the caller
 /// supplies it; we reject values outside that range with

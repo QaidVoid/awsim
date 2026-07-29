@@ -72,7 +72,7 @@ use crate::model_map::{ModelEntry, ModelMap};
 pub struct BedrockSpec {
     /// Name of the `[backends.<name>]` entry to fall back to when an
     /// `[invoke]` / `[embed]` entry is just a bare backend tag.
-    /// Optional — without it, bare-tag entries don't route.
+    /// Optional. Without it, bare-tag entries don't route.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_backend: Option<String>,
     /// Named, reusable API-key credentials. A single credential can be
@@ -147,7 +147,7 @@ impl ModelPricing {
 pub struct BackendSpec {
     pub endpoint: String,
     /// Catalog key (e.g. "ollama", "openai", "groq", "custom") this
-    /// backend was wired from. Pure metadata — the runtime never
+    /// backend was wired from. Pure metadata. The runtime never
     /// branches on it; the UI uses it to render the right logo,
     /// notes, and curated model list. Absent on backends configured
     /// via the legacy CLI flags or hand-edited TOML.
@@ -199,7 +199,7 @@ pub enum BedrockConfigError {
         #[source]
         source: toml::de::Error,
     },
-    #[error("bedrock config backend '{backend}' uses both api_key and api_key_env — pick one")]
+    #[error("bedrock config backend '{backend}' uses both api_key and api_key_env. Pick one")]
     KeyConflict { backend: String },
     #[error("bedrock config backend '{backend}' references env var ${var} but it is unset")]
     MissingEnvVar { backend: String, var: String },
@@ -235,7 +235,7 @@ pub enum BedrockConfigError {
         index: usize,
         backend: String,
     },
-    #[error("bedrock config has no [backends.*] sections — at least one backend is required")]
+    #[error("bedrock config has no [backends.*] sections. At least one backend is required")]
     NoBackends,
 }
 
@@ -779,7 +779,7 @@ targets = [
         // in a default embed map. Keeps chat-mapped ids from
         // accidentally hijacking embedding requests. With a default
         // backend set, the embed call falls through to the built-in
-        // titan-embed → nomic-embed-text mapping rather than picking
+        // titan-embed -> nomic-embed-text mapping rather than picking
         // up the alias's WRONG tag.
         let toml_src = r#"
 default_backend = "ollama"

@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use crate::state::EventBridgeState;
 
 // ---------------------------------------------------------------------------
-// DescribeEventSource — stub
+// DescribeEventSource. Stub
 // ---------------------------------------------------------------------------
 
 pub fn describe_event_source(
@@ -27,7 +27,7 @@ pub fn describe_event_source(
 }
 
 // ---------------------------------------------------------------------------
-// ListEventSources — stub returning empty list
+// ListEventSources. Stub returning empty list
 // ---------------------------------------------------------------------------
 
 pub fn list_event_sources(
@@ -39,7 +39,7 @@ pub fn list_event_sources(
 }
 
 // ---------------------------------------------------------------------------
-// PutPartnerEventSource — stub
+// PutPartnerEventSource. Stub
 // ---------------------------------------------------------------------------
 
 pub fn put_partner_event_source(

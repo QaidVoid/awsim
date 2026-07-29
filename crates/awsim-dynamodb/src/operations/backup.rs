@@ -39,7 +39,7 @@ pub fn create_backup(
 
     // Snapshot every item via the same SqliteStore the CRUD path
     // uses. Cheap O(N) read; bounded by table size. We deliberately
-    // serialise rather than streaming to S3 — `--data-dir` snapshots
+    // serialise rather than streaming to S3. `--data-dir` snapshots
     // pick up the full backup record including these items.
     let mut items: Vec<BackupItem> = Vec::new();
     sqlite.scan_table(
@@ -258,10 +258,10 @@ pub fn restore_table_from_backup(
     let new_arn = arn::build(ctx, "dynamodb", format!("table/{target_name}"));
 
     // Schema preference order:
-    //   1. Schema snapshot captured at backup time — survives even
+    //   1. Schema snapshot captured at backup time. Survives even
     //      after the source table is deleted.
     //   2. Live source table (if backup pre-dates schema snapshots).
-    //   3. Empty stub (last-ditch — backup is malformed).
+    //   3. Empty stub (last-ditch. Backup is malformed).
     let new_table = if let Some(snap) = backup.schema_snapshot.as_ref() {
         let mut t = snap.clone();
         t.name = target_name.to_string();

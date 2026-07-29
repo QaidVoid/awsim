@@ -18,7 +18,7 @@ pub fn new_version_id() -> String {
     Uuid::new_v4().to_string()
 }
 
-/// Validate a `ClientRequestToken` per AWS rules: 32–64 characters, ASCII
+/// Validate a `ClientRequestToken` per AWS rules: 32-64 characters, ASCII
 /// letters/digits/`-`/`_`. Returns the token as `String` on success.
 pub fn validate_client_request_token(token: &str) -> Result<String, awsim_core::AwsError> {
     let len = token.chars().count();

@@ -47,7 +47,7 @@ pub struct RuntimeConfig {
 
 /// Tracing/logging filter directive. Same syntax as `RUST_LOG`:
 /// `info`, `debug,sqlx=warn`, `awsim=trace`, etc. Hot-reloaded via
-/// `tracing_subscriber::reload`, so flipping `info → debug` from
+/// `tracing_subscriber::reload`, so flipping `info -> debug` from
 /// the UI takes effect on the next emitted event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoggingSection {
@@ -124,7 +124,7 @@ pub enum RuntimeConfigError {
 
 /// A hook called after a successful config swap. Receives the new
 /// config so it can rebuild internal state (e.g. Bedrock backends).
-/// Errors are logged but don't roll back the swap — by the time
+/// Errors are logged but don't roll back the swap. By the time
 /// hooks run, the config has already been validated and persisted.
 pub type ReloadHook = Box<dyn Fn(&RuntimeConfig) + Send + Sync>;
 
@@ -158,7 +158,7 @@ impl RuntimeConfigStore {
         })
     }
 
-    /// Snapshot of the live config. Cheap — the inner `Arc` is
+    /// Snapshot of the live config. Cheap. The inner `Arc` is
     /// reference-counted, so reads don't allocate.
     pub fn current(&self) -> Arc<RuntimeConfig> {
         self.inner.load_full()
@@ -177,7 +177,7 @@ impl RuntimeConfigStore {
 
     /// Register a hook that fires after every successful config
     /// swap. Hooks see the new config; they're synchronous so
-    /// don't do heavy work — spawn a task if needed.
+    /// don't do heavy work. Spawn a task if needed.
     #[allow(dead_code)] // wired up in slice 2 (Bedrock hot-reload)
     pub fn on_change(&self, hook: ReloadHook) {
         self.hooks
@@ -250,7 +250,7 @@ fn write_to_disk(path: &Path, cfg: &RuntimeConfig) -> Result<(), RuntimeConfigEr
 fn validate(cfg: &RuntimeConfig) -> Result<(), RuntimeConfigError> {
     // Bedrock spec validation only runs when the user has actually
     // declared backends and flipped the switch on. Empty spec +
-    // disabled is a valid state — it means canned responses.
+    // disabled is a valid state. It means canned responses.
     if cfg.bedrock.enabled && !cfg.bedrock.spec.backends.is_empty() {
         // Re-validate using the bedrock loader. This catches missing
         // backends, env-var mismatches, etc. before we swap.
@@ -374,7 +374,7 @@ mod tests {
     fn invalid_bedrock_spec_does_not_swap() {
         let store = RuntimeConfigStore::load_or_seed(RuntimeConfig::default(), None).unwrap();
 
-        // Default backend names a missing block — should fail
+        // Default backend names a missing block. Should fail
         // validation before any swap happens.
         let mut backends = HashMap::new();
         backends.insert(

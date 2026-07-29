@@ -223,7 +223,7 @@ pub fn set_topic_attributes(
 
 /// Validate a `KmsMasterKeyId` value. Accepts:
 ///   * the AWS-managed key alias `alias/aws/sns` (no lookup needed),
-///   * any other key id / key ARN / alias / alias ARN — when a
+///   * any other key id / key ARN / alias / alias ARN. When a
 ///     [`KmsKeyLookup`] is wired, the reference must resolve in the
 ///     topic's account/region.
 ///

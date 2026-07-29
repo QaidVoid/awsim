@@ -4,8 +4,8 @@
 //! keys, so an `ASIA...` key issued by `AssumeRole` resolves to no
 //! principal and the request is denied before policies are
 //! evaluated. This wrapper checks the [`StsSessionStore`] first; if a
-//! session is present it materialises the assumed-role principal —
-//! ARN, account, and the role's identity policies — by delegating
+//! session is present it materialises the assumed-role principal.
+//! ARN, account, and the role's identity policies. By delegating
 //! the role-by-ARN resolution to the inner lookup. Misses fall
 //! through unchanged.
 
@@ -32,7 +32,7 @@ impl PrincipalLookup for StsAwarePrincipalLookup {
             // Resolve the underlying role to inherit its identity policies
             // and permissions boundary. If the role has been deleted since
             // the session was issued, the authz engine can't make a
-            // policy decision — fall through so the request is denied
+            // policy decision. Fall through so the request is denied
             // for "no such principal" rather than an Allow with empty
             // policies (which would silently behave like `Resource: *`
             // for anything explicitly matching elsewhere).
@@ -207,8 +207,8 @@ mod tests {
 
     #[test]
     fn session_with_deleted_role_does_not_silently_allow() {
-        // The session is recorded but the role no longer resolves —
-        // simulating role deletion mid-session. The wrapper should
+        // The session is recorded but the role no longer resolves.
+        // Simulating role deletion mid-session. The wrapper should
         // return None so the authz engine fails closed.
         let iam = Arc::new(FakeIam {
             role_by_arn: HashMap::new(),

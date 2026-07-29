@@ -12,7 +12,7 @@ use super::require_str;
 
 /// Percent-encode a key for `EncodingType=url` responses. AWS encodes
 /// every byte that isn't unreserved-per-RFC-3986 (alphanumeric and
-/// `-_.~`). The forward slash is encoded too — keys treated as paths
+/// `-_.~`). The forward slash is encoded too. Keys treated as paths
 /// don't change semantics for SDK clients that decode the value back
 /// before use.
 fn pct_encode(s: &str) -> String {
@@ -44,7 +44,7 @@ fn owner_entry(account_id: &str) -> Value {
     })
 }
 
-/// GET /{Bucket}?list-type=2 — list objects with prefix/delimiter/pagination.
+/// GET /{Bucket}?list-type=2. List objects with prefix/delimiter/pagination.
 pub fn list_objects_v2(
     state: &S3State,
     input: &Value,
@@ -192,7 +192,7 @@ pub fn list_objects_v2(
     Ok(result)
 }
 
-/// GET /{Bucket} — list objects (v1).
+/// GET /{Bucket}. List objects (v1).
 pub fn list_objects(
     state: &S3State,
     input: &Value,
@@ -290,7 +290,7 @@ pub fn list_objects(
     Ok(result)
 }
 
-/// GET /{Bucket}?versions — list object versions.
+/// GET /{Bucket}?versions. List object versions.
 pub fn list_object_versions(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
     let prefix = input.get("prefix").and_then(Value::as_str).unwrap_or("");
@@ -436,7 +436,7 @@ pub fn list_object_versions(state: &S3State, input: &Value) -> Result<Value, Aws
     Ok(result)
 }
 
-/// POST /{Bucket}?delete — batch delete objects, version-aware.
+/// POST /{Bucket}?delete. Batch delete objects, version-aware.
 pub fn delete_objects(
     state: &S3State,
     input: &Value,
@@ -584,7 +584,7 @@ mod tests {
         assert_eq!(resp["IsTruncated"], json!(true));
         assert_eq!(resp["KeyCount"], json!(2));
         let token = resp["NextContinuationToken"].as_str().unwrap();
-        // Token must be opaque (base64) — not a raw key.
+        // Token must be opaque (base64). Not a raw key.
         assert_ne!(token, "charlie", "token must not be raw key");
         assert_eq!(decode_token(token).unwrap(), "charlie");
     }

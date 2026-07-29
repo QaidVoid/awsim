@@ -10,7 +10,7 @@ use crate::state::{
     LoggingConfig, ProvisionedModel, now_iso,
 };
 
-// ── Foundation Models ─────────────────────────────────────────────────────────
+// -- Foundation Models ---------------------------------------------------------
 
 pub fn list_foundation_models(_state: &BedrockState, _input: &Value) -> Result<Value, AwsError> {
     let models: Vec<Value> = FOUNDATION_MODELS.iter().map(model_to_json).collect();
@@ -35,7 +35,7 @@ pub fn get_foundation_model(_state: &BedrockState, input: &Value) -> Result<Valu
     Ok(json!({ "modelDetails": model_to_json(model) }))
 }
 
-// ── Model Customization Jobs ───────────────────────────────────────────────────
+// -- Model Customization Jobs ---------------------------------------------------
 
 pub fn create_model_customization_job(
     state: &BedrockState,
@@ -89,7 +89,7 @@ pub fn list_model_customization_jobs(
     Ok(json!({ "modelCustomizationJobSummaries": jobs }))
 }
 
-// ── Guardrails ─────────────────────────────────────────────────────────────────
+// -- Guardrails -----------------------------------------------------------------
 
 pub fn create_guardrail(
     state: &BedrockState,
@@ -194,7 +194,7 @@ pub fn delete_guardrail(state: &BedrockState, input: &Value) -> Result<Value, Aw
     Ok(json!({}))
 }
 
-// ── Provisioned Model Throughputs ─────────────────────────────────────────────
+// -- Provisioned Model Throughputs ---------------------------------------------
 
 fn pmt_to_json(p: &ProvisionedModel) -> Value {
     json!({
@@ -305,7 +305,7 @@ pub fn list_provisioned_model_throughputs(
     Ok(json!({ "provisionedModelSummaries": summaries }))
 }
 
-// ── Model Invocation Jobs ─────────────────────────────────────────────────────
+// -- Model Invocation Jobs -----------------------------------------------------
 
 fn invocation_job_to_json(j: &InvocationJob) -> Value {
     json!({
@@ -406,7 +406,7 @@ pub fn stop_model_invocation_job(state: &BedrockState, input: &Value) -> Result<
     }
 }
 
-// ── Knowledge Bases ───────────────────────────────────────────────────────────
+// -- Knowledge Bases -----------------------------------------------------------
 
 fn kb_to_json(k: &KnowledgeBase) -> Value {
     json!({
@@ -501,7 +501,7 @@ pub fn delete_knowledge_base(state: &BedrockState, input: &Value) -> Result<Valu
     Ok(json!({ "knowledgeBaseId": id, "status": "DELETING" }))
 }
 
-// ── Model Invocation Logging ──────────────────────────────────────────────────
+// -- Model Invocation Logging --------------------------------------------------
 
 pub fn get_model_invocation_logging_configuration(
     state: &BedrockState,
@@ -558,7 +558,7 @@ pub fn put_model_invocation_logging_configuration(
     Ok(json!({}))
 }
 
-// ── Custom Models ─────────────────────────────────────────────────────────────
+// -- Custom Models -------------------------------------------------------------
 
 fn cm_to_json(c: &CustomModel) -> Value {
     json!({
@@ -687,7 +687,7 @@ pub fn stop_model_customization_job(
     }
 }
 
-// ── Resource Tags ─────────────────────────────────────────────────────────────
+// -- Resource Tags -------------------------------------------------------------
 
 pub fn tag_resource(state: &BedrockState, input: &Value) -> Result<Value, AwsError> {
     let resource_arn = input["resourceARN"]

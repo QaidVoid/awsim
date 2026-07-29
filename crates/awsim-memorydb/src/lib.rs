@@ -34,7 +34,7 @@ impl MemoryDbService {
         self.store.get(&ctx.account_id, &ctx.region)
     }
 
-    /// Count active MemoryDB nodes for a given account+region — used
+    /// Count active MemoryDB nodes for a given account+region. Used
     /// by the billing meter to charge node-hours. AWS bills per-node
     /// for active clusters; nodes-per-cluster equals number_of_shards
     /// (single-node-per-shard primary, no replica modeling here).

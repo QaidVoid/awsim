@@ -145,8 +145,8 @@ pub fn decode_zip(b64: &str) -> Result<(Vec<u8>, String, u64), awsim_core::AwsEr
 }
 
 /// Lambda managed runtimes accepted by CreateFunction / UpdateFunctionConfiguration
-/// as of 2026. Excludes deprecated runtimes that AWS has fully retired —
-/// callers passing those receive InvalidParameterValueException.
+/// as of 2026. Excludes deprecated runtimes that AWS has fully retired.
+/// Callers passing those receive InvalidParameterValueException.
 pub const VALID_RUNTIMES: &[&str] = &[
     // Node.js
     "nodejs18.x",
@@ -224,7 +224,7 @@ pub fn sha256_base64(data: &[u8]) -> String {
 /// or the `:Qualifier` suffix on a function ARN).
 ///
 /// AWS accepts three shapes:
-/// - `$LATEST` — the unpublished current revision.
+/// - `$LATEST`. The unpublished current revision.
 /// - A decimal version number (1..u64::MAX).
 /// - An alias name matching `[a-zA-Z][a-zA-Z0-9-_]*`, 1..=128 characters.
 ///

@@ -62,7 +62,7 @@ pub async fn test_kinesis(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         verbose
     ));
 
-    // GetShardIterator — need to know shard ID first
+    // GetShardIterator. Need to know shard ID first
     let describe_r = client
         .describe_stream()
         .stream_name("conformance-stream")
@@ -190,7 +190,7 @@ pub async fn test_kinesis(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         verbose
     ));
 
-    // MergeShards (requires 2 shards — will get service error = pass)
+    // MergeShards (requires 2 shards. Will get service error = pass)
     if let Some(ref sid) = shard_id {
         results.push(chk!(
             "MergeShards",

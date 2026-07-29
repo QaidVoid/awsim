@@ -36,7 +36,7 @@ struct Inner {
 pub struct KinesisRecordRow {
     pub seq: i64,
     pub partition_key: String,
-    /// Caller-supplied data — already base64 in the wire format.
+    /// Caller-supplied data. Already base64 in the wire format.
     pub data: String,
     pub timestamp_millis: i64,
 }
@@ -227,7 +227,7 @@ impl SqliteStore {
         Ok(n)
     }
 
-    /// Delete every record on a stream — wired into DeleteStream.
+    /// Delete every record on a stream. Wired into DeleteStream.
     pub fn delete_stream(
         &self,
         account: &str,

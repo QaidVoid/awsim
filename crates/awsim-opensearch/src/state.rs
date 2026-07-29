@@ -1,7 +1,7 @@
 //! Disk-backed OpenSearch storage.
 //!
 //! Documents live in a redb table keyed by `(index, doc_id)` so the
-//! working set is bounded by disk, not RAM — important for vector
+//! working set is bounded by disk, not RAM. Important for vector
 //! workloads where each embedding can be a few KB. Index metadata
 //! (mappings, settings) and aliases are small and access-heavy, so
 //! they're mirrored in `DashMap` for lock-free reads on the hot path
@@ -11,8 +11,8 @@
 //! restore: redb commits each transaction durably.
 
 // `redb::Error` is ~160 bytes; clippy would have us box it. Internal
-// storage code only — callers wrap into JSON 500s, never propagate
-// the raw `Err` up the stack — so the size doesn't actually matter.
+// storage code only. Callers wrap into JSON 500s, never propagate
+// the raw `Err` up the stack. So the size doesn't actually matter.
 #![allow(clippy::result_large_err)]
 
 use std::path::Path;
@@ -43,15 +43,15 @@ pub struct DocVersion {
     pub primary_term: u64,
 }
 
-/// `(index_name, doc_id)` → document JSON bytes.
+/// `(index_name, doc_id)` -> document JSON bytes.
 const DOCUMENTS: TableDefinition<(&str, &str), &[u8]> = TableDefinition::new("documents");
-/// `index_name` → `IndexMeta` JSON bytes. Persisted so we can rebuild
+/// `index_name` -> `IndexMeta` JSON bytes. Persisted so we can rebuild
 /// the in-memory cache on startup.
 const INDEX_META: TableDefinition<&str, &[u8]> = TableDefinition::new("index_meta");
-/// `alias_name` → JSON bytes of `Vec<String>` (member indices).
+/// `alias_name` -> JSON bytes of `Vec<String>` (member indices).
 const ALIASES: TableDefinition<&str, &[u8]> = TableDefinition::new("aliases");
 
-/// `(index_name, doc_id)` → `DocVersion` JSON bytes.
+/// `(index_name, doc_id)` -> `DocVersion` JSON bytes.
 const DOC_VERSIONS: TableDefinition<(&str, &str), &[u8]> = TableDefinition::new("doc_versions");
 
 /// Disk-backed OpenSearch state.

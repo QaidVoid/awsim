@@ -10,7 +10,7 @@ pub struct ServiceDiscoveryState {
     pub services: DashMap<String, ServiceEntry>,
     /// (service_id, instance_id) keyed.
     pub instances: DashMap<String, Instance>,
-    /// operation_id → tracked async operation; the emulator treats every
+    /// operation_id -> tracked async operation; the emulator treats every
     /// operation as immediately SUCCESS so callers can poll once and move on.
     pub operations: DashMap<String, Operation>,
     /// CreatorRequestId idempotency for `Create*` paths.

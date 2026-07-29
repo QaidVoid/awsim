@@ -56,7 +56,7 @@ fn password_policy_to_value(p: &AccountPasswordPolicy) -> Value {
     })
 }
 
-// ── Account Aliases ──────────────────────────────────────────────────────────
+// -- Account Aliases ----------------------------------------------------------
 
 pub fn create_account_alias(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let alias = require_str(input, "AccountAlias")?;
@@ -94,7 +94,7 @@ pub fn list_account_aliases(state: &IamState, _input: &Value) -> Result<Value, A
     }))
 }
 
-// ── Password Policy ──────────────────────────────────────────────────────────
+// -- Password Policy ----------------------------------------------------------
 
 pub fn get_account_password_policy(state: &IamState, _input: &Value) -> Result<Value, AwsError> {
     let guard = state.account_password_policy.lock().unwrap();
@@ -146,7 +146,7 @@ pub fn delete_account_password_policy(state: &IamState, _input: &Value) -> Resul
     Ok(json!({}))
 }
 
-// ── Account Summary ──────────────────────────────────────────────────────────
+// -- Account Summary ----------------------------------------------------------
 
 pub fn get_account_summary(state: &IamState, _input: &Value) -> Result<Value, AwsError> {
     let users = state.users.len() as u64;
@@ -196,7 +196,7 @@ pub fn get_account_summary(state: &IamState, _input: &Value) -> Result<Value, Aw
     }))
 }
 
-// ── Account Authorization Details ───────────────────────────────────────────
+// -- Account Authorization Details -------------------------------------------
 
 pub fn get_account_authorization_details(
     state: &IamState,

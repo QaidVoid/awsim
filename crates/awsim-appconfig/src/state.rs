@@ -14,7 +14,7 @@ pub struct AppConfigState {
     /// (app_id, env_id, deployment_number) keyed.
     pub deployments: DashMap<String, Deployment>,
     pub deployment_strategies: DashMap<String, DeploymentStrategy>,
-    /// session token → (app_id, env_id, profile_id).
+    /// session token -> (app_id, env_id, profile_id).
     pub sessions: DashMap<String, ConfigurationSession>,
 }
 
@@ -90,7 +90,7 @@ pub struct ConfigurationSession {
     pub application_identifier: String,
     pub environment_identifier: String,
     pub configuration_profile_identifier: String,
-    /// Last version the client received — used to gate "no change" responses.
+    /// Last version the client received. Used to gate "no change" responses.
     pub last_version_label: Option<String>,
 }
 

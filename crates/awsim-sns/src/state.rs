@@ -128,21 +128,21 @@ pub struct SandboxPhoneNumber {
 /// Per-account/region SNS state.
 #[derive(Debug, Default)]
 pub struct SnsState {
-    /// TopicArn → Topic
+    /// TopicArn -> Topic
     pub topics: DashMap<String, Topic>,
-    /// SubscriptionArn → Subscription
+    /// SubscriptionArn -> Subscription
     pub subscriptions: DashMap<String, Subscription>,
     /// SMS attributes (account-level), protected by an RwLock.
     pub sms_attributes: RwLock<HashMap<String, String>>,
-    /// PlatformApplicationArn → PlatformApplication
+    /// PlatformApplicationArn -> PlatformApplication
     pub platform_applications: DashMap<String, PlatformApplication>,
-    /// EndpointArn → PlatformEndpoint
+    /// EndpointArn -> PlatformEndpoint
     pub platform_endpoints: DashMap<String, PlatformEndpoint>,
     /// Opted-in phone numbers (account-level).
     pub opted_in_numbers: RwLock<Vec<String>>,
-    /// SMS sandbox phone numbers (PhoneNumber → SandboxPhoneNumber).
+    /// SMS sandbox phone numbers (PhoneNumber -> SandboxPhoneNumber).
     pub sandbox_numbers: DashMap<String, SandboxPhoneNumber>,
-    /// Topic ARN → JSON policy string for data protection.
+    /// Topic ARN -> JSON policy string for data protection.
     pub data_protection_policies: DashMap<String, String>,
     /// Recent FIFO dedup decisions. Key is `<topic_arn>|<dedup_value>`,
     /// value is `(message_id, unix_epoch_seconds_inserted)`. Entries

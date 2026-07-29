@@ -62,13 +62,13 @@ pub struct Activity {
 /// Per-account/region Step Functions state.
 #[derive(Debug, Default)]
 pub struct StepFunctionsState {
-    /// stateMachineArn → StateMachine
+    /// stateMachineArn -> StateMachine
     pub state_machines: DashMap<String, StateMachine>,
-    /// executionArn → Execution
+    /// executionArn -> Execution
     pub executions: DashMap<String, Execution>,
-    /// activityArn → Activity
+    /// activityArn -> Activity
     pub activities: DashMap<String, Activity>,
-    /// taskToken → suspended `.waitForTaskToken` Task awaiting
+    /// taskToken -> suspended `.waitForTaskToken` Task awaiting
     /// SendTaskSuccess / SendTaskFailure / SendTaskHeartbeat.
     pub pending_tokens: DashMap<String, PendingTask>,
 }

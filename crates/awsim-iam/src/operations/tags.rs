@@ -55,7 +55,7 @@ pub fn tags_to_value(tags: &HashMap<String, String>) -> Value {
     json!({ "member": members })
 }
 
-// ── User Tags ────────────────────────────────────────────────────────────────
+// -- User Tags ----------------------------------------------------------------
 
 pub fn tag_user(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let user_name = require_str(input, "UserName")?;
@@ -102,7 +102,7 @@ pub fn list_user_tags(state: &IamState, input: &Value) -> Result<Value, AwsError
     }))
 }
 
-// ── Role Tags ────────────────────────────────────────────────────────────────
+// -- Role Tags ----------------------------------------------------------------
 
 pub fn tag_role(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let role_name = require_str(input, "RoleName")?;
@@ -149,7 +149,7 @@ pub fn list_role_tags(state: &IamState, input: &Value) -> Result<Value, AwsError
     }))
 }
 
-// ── Instance Profile Tags ────────────────────────────────────────────────────
+// -- Instance Profile Tags ----------------------------------------------------
 
 pub fn tag_instance_profile(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let name = require_str(input, "InstanceProfileName")?;
@@ -196,7 +196,7 @@ pub fn list_instance_profile_tags(state: &IamState, input: &Value) -> Result<Val
     }))
 }
 
-// ── OIDC Provider Tags ───────────────────────────────────────────────────────
+// -- OIDC Provider Tags -------------------------------------------------------
 
 pub fn tag_open_id_connect_provider(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let arn = require_str(input, "OpenIDConnectProviderArn")?;
@@ -242,7 +242,7 @@ pub fn list_open_id_connect_provider_tags(
     }))
 }
 
-// ── SAML Provider Tags ───────────────────────────────────────────────────────
+// -- SAML Provider Tags -------------------------------------------------------
 
 pub fn tag_saml_provider(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let arn = require_str(input, "SAMLProviderArn")?;

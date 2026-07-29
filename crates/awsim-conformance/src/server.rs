@@ -85,7 +85,7 @@ pub async fn start_opensearch() -> String {
     serve(awsim_opensearch::router(state)).await
 }
 
-/// Register all services — mirrors the logic in the awsim binary.
+/// Register all services. Mirrors the logic in the awsim binary.
 fn register_services(
     state: &mut AppState,
     default_account_id: &str,

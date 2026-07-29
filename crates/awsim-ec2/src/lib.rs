@@ -28,8 +28,8 @@ impl Ec2Service {
         self.store.get(&ctx.account_id, &ctx.region)
     }
 
-    /// Count running instances for a given account+region pair —
-    /// used by the billing meter to charge instance-hours. Stopped /
+    /// Count running instances for a given account+region pair.
+    /// Used by the billing meter to charge instance-hours. Stopped /
     /// terminated / pending instances are excluded since AWS doesn't
     /// bill compute time for them.
     pub fn running_instance_count(&self, account_id: &str, region: &str) -> u64 {

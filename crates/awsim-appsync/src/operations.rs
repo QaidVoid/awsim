@@ -11,7 +11,7 @@ use crate::state::{
     SourceApiAssociation, now_iso,
 };
 
-// ── helpers ─────────────────────────────────────────────────────────────────
+// -- helpers -----------------------------------------------------------------
 
 fn api_to_json(api: &GraphqlApi) -> Value {
     json!({
@@ -74,7 +74,7 @@ fn function_to_json(f: &AppSyncFunction) -> Value {
     })
 }
 
-// ── GraphQL APIs ─────────────────────────────────────────────────────────────
+// -- GraphQL APIs -------------------------------------------------------------
 
 pub fn create_graphql_api(
     state: &AppSyncState,
@@ -182,7 +182,7 @@ pub fn update_graphql_api(state: &AppSyncState, input: &Value) -> Result<Value, 
     Ok(json!({ "graphqlApi": api_to_json(&api) }))
 }
 
-// ── Schema ────────────────────────────────────────────────────────────────────
+// -- Schema --------------------------------------------------------------------
 
 pub fn start_schema_creation(state: &AppSyncState, input: &Value) -> Result<Value, AwsError> {
     let api_id = input["apiId"]
@@ -221,7 +221,7 @@ pub fn get_schema_creation_status(state: &AppSyncState, input: &Value) -> Result
     Ok(json!({ "status": api.schema_status }))
 }
 
-// ── API Keys ──────────────────────────────────────────────────────────────────
+// -- API Keys ------------------------------------------------------------------
 
 pub fn create_api_key(state: &AppSyncState, input: &Value) -> Result<Value, AwsError> {
     let api_id = input["apiId"]
@@ -339,7 +339,7 @@ pub fn update_api_key(state: &AppSyncState, input: &Value) -> Result<Value, AwsE
     Ok(json!({ "apiKey": result }))
 }
 
-// ── Data Sources ──────────────────────────────────────────────────────────────
+// -- Data Sources --------------------------------------------------------------
 
 pub fn create_data_source(state: &AppSyncState, input: &Value) -> Result<Value, AwsError> {
     let api_id = input["apiId"]
@@ -414,7 +414,7 @@ pub fn delete_data_source(state: &AppSyncState, input: &Value) -> Result<Value, 
     Ok(json!({}))
 }
 
-// ── Resolvers ─────────────────────────────────────────────────────────────────
+// -- Resolvers -----------------------------------------------------------------
 
 pub fn create_resolver(state: &AppSyncState, input: &Value) -> Result<Value, AwsError> {
     let api_id = input["apiId"]
@@ -553,7 +553,7 @@ pub fn delete_resolver(state: &AppSyncState, input: &Value) -> Result<Value, Aws
     Ok(json!({}))
 }
 
-// ── GraphQL Types ─────────────────────────────────────────────────────────────
+// -- GraphQL Types -------------------------------------------------------------
 
 pub fn create_type(
     state: &AppSyncState,
@@ -666,7 +666,7 @@ pub fn delete_type(state: &AppSyncState, input: &Value) -> Result<Value, AwsErro
     Ok(json!({}))
 }
 
-// ── AppSync Functions ─────────────────────────────────────────────────────────
+// -- AppSync Functions ---------------------------------------------------------
 
 pub fn create_function(
     state: &AppSyncState,
@@ -840,7 +840,7 @@ pub fn update_function(state: &AppSyncState, input: &Value) -> Result<Value, Aws
     Ok(json!({ "functionConfiguration": result }))
 }
 
-// ── API Cache ─────────────────────────────────────────────────────────────────
+// -- API Cache -----------------------------------------------------------------
 
 pub fn flush_api_cache(state: &AppSyncState, input: &Value) -> Result<Value, AwsError> {
     let api_id = input["apiId"]
@@ -858,7 +858,7 @@ pub fn flush_api_cache(state: &AppSyncState, input: &Value) -> Result<Value, Aws
     Ok(json!({}))
 }
 
-// ── Data Source extras ────────────────────────────────────────────────────────
+// -- Data Source extras --------------------------------------------------------
 
 pub fn get_data_source(state: &AppSyncState, input: &Value) -> Result<Value, AwsError> {
     let api_id = input["apiId"]
@@ -926,7 +926,7 @@ pub fn update_data_source(state: &AppSyncState, input: &Value) -> Result<Value, 
     Ok(json!({ "dataSource": result }))
 }
 
-// ── Resolver extras ───────────────────────────────────────────────────────────
+// -- Resolver extras -----------------------------------------------------------
 
 pub fn get_resolver(state: &AppSyncState, input: &Value) -> Result<Value, AwsError> {
     let api_id = input["apiId"]
@@ -960,7 +960,7 @@ pub fn get_resolver(state: &AppSyncState, input: &Value) -> Result<Value, AwsErr
     Ok(json!({ "resolver": resolver_to_json(r) }))
 }
 
-// ── Type extras ───────────────────────────────────────────────────────────────
+// -- Type extras ---------------------------------------------------------------
 
 pub fn update_type(state: &AppSyncState, input: &Value) -> Result<Value, AwsError> {
     let api_id = input["apiId"]
@@ -996,7 +996,7 @@ pub fn update_type(state: &AppSyncState, input: &Value) -> Result<Value, AwsErro
     Ok(json!({ "type": result }))
 }
 
-// ── Schema introspection ──────────────────────────────────────────────────────
+// -- Schema introspection ------------------------------------------------------
 
 pub fn get_introspection_schema(state: &AppSyncState, input: &Value) -> Result<Value, AwsError> {
     let api_id = input["apiId"]
@@ -1025,7 +1025,7 @@ pub fn get_introspection_schema(state: &AppSyncState, input: &Value) -> Result<V
     Ok(json!({ "schema": bytes }))
 }
 
-// ── Tags ──────────────────────────────────────────────────────────────────────
+// -- Tags ----------------------------------------------------------------------
 
 pub fn tag_resource(state: &AppSyncState, input: &Value) -> Result<Value, AwsError> {
     let resource_arn = input["resourceArn"]
@@ -1085,7 +1085,7 @@ pub fn list_tags_for_resource(state: &AppSyncState, input: &Value) -> Result<Val
     Ok(json!({ "tags": Value::Object(tags) }))
 }
 
-// ── Source API Associations ───────────────────────────────────────────────────
+// -- Source API Associations ---------------------------------------------------
 
 fn association_to_json(a: &SourceApiAssociation) -> Value {
     json!({
@@ -1198,7 +1198,7 @@ pub fn disassociate_merged_graphql_api(
     Ok(json!({ "sourceApiAssociationStatus": "DELETION_SUCCESS" }))
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// -- Helpers -------------------------------------------------------------------
 
 /// Extract the type name from a GraphQL SDL definition like `type Foo { ... }`.
 fn extract_type_name(definition: &str) -> Option<String> {

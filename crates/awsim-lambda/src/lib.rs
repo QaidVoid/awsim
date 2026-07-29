@@ -393,7 +393,7 @@ impl ServiceHandler for LambdaService {
                 operation: "PutFunctionRecursionConfig",
                 required_query_param: None,
             },
-            // Provisioned concurrency — single config (Get/Put/Delete) keys
+            // Provisioned concurrency. Single config (Get/Put/Delete) keys
             // off the Qualifier query param; List omits it.
             RouteDefinition {
                 method: "PUT",

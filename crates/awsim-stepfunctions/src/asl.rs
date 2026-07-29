@@ -341,8 +341,8 @@ impl InterpreterContext {
         };
 
         // Retry: re-run the state body up to MaxAttempts when the failure
-        // matches an ErrorEquals entry. We don't sleep IntervalSeconds —
-        // tasks already run synchronously here.
+        // matches an ErrorEquals entry. We don't sleep IntervalSeconds.
+        // Tasks already run synchronously here.
         let max_attempts = max_retry_attempts(&state);
         let mut attempt: u32 = 0;
         let result = loop {
@@ -389,7 +389,7 @@ impl InterpreterContext {
 
         match result {
             Ok((raw_output, next)) => {
-                // ResultSelector → ResultPath → OutputPath is the AWS pipeline.
+                // ResultSelector -> ResultPath -> OutputPath is the AWS pipeline.
                 // Choice/Wait/Succeed don't carry a "result" so we skip
                 // ResultSelector/ResultPath for them and just apply OutputPath
                 // to whatever they returned (typically the input).
@@ -940,7 +940,7 @@ fn batch_items(items: Vec<Value>, batcher: &Value, input: &Value, context: &Valu
 /// values recurse; everything else is a literal.
 /// Transform a `Parameters` / `ResultSelector` / `ItemSelector`
 /// template against a source object and the AWS States context. The
-/// context object mirrors AWS's runtime context — `{ "Map": { "Item":
+/// context object mirrors AWS's runtime context. `{ "Map": { "Item":
 /// { "Index": 0, "Value": ... } } }` inside a Map iteration or
 /// `{ "Execution": { "BranchName": "Branch-0" } }` inside a Parallel
 /// branch.
@@ -982,7 +982,7 @@ fn apply_parameters_with_ctx(template: &Value, source: &Value, context: &Value) 
 /// to treating it as an opaque literal).
 ///
 /// Implements the documented AWS States intrinsics set. Each function
-/// matches the AWS shape — argument count and return type — closely
+/// matches the AWS shape. Argument count and return type. Closely
 /// enough to slot into existing Parameters / ResultSelector / Map
 /// ItemSelector blocks.
 fn evaluate_intrinsic(expr: &str, source: &Value) -> Option<Value> {
@@ -1205,7 +1205,7 @@ fn evaluate_intrinsic(expr: &str, source: &Value) -> Option<Value> {
         }
         "IsTimestamp" => {
             let raw = resolve_intrinsic_arg_str(args.first()?, source)?;
-            // Loose ISO-8601 with optional offset: YYYY-MM-DDTHH:MM:SS(.fff)?(Z|±HH:MM).
+            // Loose ISO-8601 with optional offset: YYYY-MM-DDTHH:MM:SS(.fff)?(Z|+/-HH:MM).
             // Compiled once and reused; recompiling on every call was the
             // only per-invocation regex build in the interpreter.
             static TS_REGEX: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
@@ -1282,9 +1282,9 @@ fn parse_intrinsic_args(s: &str) -> Vec<String> {
 }
 
 /// Resolve a single intrinsic argument:
-/// - `'literal string'` → `Value::String("literal string")`
-/// - `42`, `3.14`, `true`, `false`, `null` → corresponding scalar
-/// - `$.path...` → JSONPath lookup into `source`
+/// - `'literal string'` -> `Value::String("literal string")`
+/// - `42`, `3.14`, `true`, `false`, `null` -> corresponding scalar
+/// - `$.path...` -> JSONPath lookup into `source`
 fn resolve_intrinsic_arg(raw: &str, source: &Value) -> Option<Value> {
     let trimmed = raw.trim();
     if let Some(s) = trimmed
@@ -1325,7 +1325,7 @@ fn resolve_intrinsic_arg_str(raw: &str, source: &Value) -> Option<String> {
 }
 
 /// `States.Format`'s placeholder substitution stringifies values without
-/// JSON-escaping — i.e. a string argument lands in the output as its raw
+/// JSON-escaping. I.e. a string argument lands in the output as its raw
 /// content, not surrounded by quotes.
 fn intrinsic_arg_to_format_string(v: &Value) -> String {
     match v {
@@ -1341,7 +1341,7 @@ fn intrinsic_arg_to_format_string(v: &Value) -> String {
 
 /// Walk the state's `Retry` array and return the highest MaxAttempts seen
 /// (effectively `max(MaxAttempts)` across applicable entries). When no
-/// Retry block exists, the cap is 0 — the state runs once.
+/// Retry block exists, the cap is 0. The state runs once.
 fn max_retry_attempts(state: &Value) -> u32 {
     let Some(arr) = state.get("Retry").and_then(|v| v.as_array()) else {
         return 0;
@@ -1441,10 +1441,10 @@ fn apply_output_path(output: &Value, path: Option<&str>) -> Value {
 
 /// Apply ResultPath to merge the result into the input.
 ///
-/// - `None` → replace the entire effective input with the result
-/// - `"$"` → same as None
-/// - `"$.field"` → set `input.field = result`, return merged
-/// - `"null"` → discard result, return input unchanged
+/// - `None` -> replace the entire effective input with the result
+/// - `"$"` -> same as None
+/// - `"$.field"` -> set `input.field = result`, return merged
+/// - `"null"` -> discard result, return input unchanged
 fn apply_result_path(input: &Value, result: &Value, result_path: Option<&str>) -> Value {
     match result_path {
         None | Some("$") => result.clone(),
@@ -2055,7 +2055,7 @@ mod tests {
 
     #[test]
     fn catch_routes_failure_to_fallback_state() {
-        // Fail state's error matches the Catch entry → execution
+        // Fail state's error matches the Catch entry -> execution
         // succeeds, ending in the fallback state with the error info
         // attached at $.error.
         let def = r#"{
@@ -2193,7 +2193,7 @@ mod tests {
     #[test]
     fn result_path_merges_into_post_input_path_input() {
         // ResultPath should merge the (possibly Parameters/ResultSelector
-        // transformed) result back into the *raw* input — not the
+        // transformed) result back into the *raw* input. Not the
         // Parameters output.
         let def = r#"{
             "StartAt": "T",

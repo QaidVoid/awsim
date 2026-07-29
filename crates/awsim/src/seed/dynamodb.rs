@@ -1,5 +1,5 @@
 //! Bulk-seed DynamoDB tables + items via `DynamoDbService::seed`.
-//! Skips the SigV4 / gateway path so a 1k-table × 100-item seed
+//! Skips the SigV4 / gateway path so a 1k-table x 100-item seed
 //! completes in well under a second.
 
 use std::sync::Arc;
@@ -23,11 +23,11 @@ pub struct SeedDdbBody {
     /// Optional table-name prefix; default `seed`.
     #[serde(default)]
     pub prefix: Option<String>,
-    /// Account ID — defaults to the server's default account on
+    /// Account ID. Defaults to the server's default account on
     /// the awsim-side once the request reaches the seeder.
     #[serde(default)]
     pub account: Option<String>,
-    /// Region — same default rules as account.
+    /// Region. Same default rules as account.
     #[serde(default)]
     pub region: Option<String>,
 }
@@ -55,7 +55,7 @@ pub async fn seed(
             StatusCode::BAD_REQUEST,
             Json(json!({
                 "error": "ValidationException",
-                "message": format!("tables must be ≤ {MAX_TABLES}"),
+                "message": format!("tables must be <= {MAX_TABLES}"),
             })),
         )
             .into_response();
@@ -65,7 +65,7 @@ pub async fn seed(
             StatusCode::BAD_REQUEST,
             Json(json!({
                 "error": "ValidationException",
-                "message": format!("items_per_table must be ≤ {MAX_ITEMS_PER_TABLE}"),
+                "message": format!("items_per_table must be <= {MAX_ITEMS_PER_TABLE}"),
             })),
         )
             .into_response();

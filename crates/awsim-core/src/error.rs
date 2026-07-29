@@ -21,7 +21,7 @@ pub struct AwsError {
     /// Extra JSON fields merged into the serialized error body.
     ///
     /// Some AWS exceptions carry structured data alongside the standard
-    /// `__type` / `message` envelope — for example, DynamoDB's
+    /// `__type` / `message` envelope. For example, DynamoDB's
     /// `TransactionCanceledException` includes a `CancellationReasons` array,
     /// and `ConditionalCheckFailedException` may include the existing `Item`.
     /// Use [`Self::with_extras`] or [`Self::with_extra`] to attach them.
@@ -76,7 +76,7 @@ impl AwsError {
         }
     }
 
-    /// HTTP 416 Range Not Satisfiable — used by S3 when a `Range` header
+    /// HTTP 416 Range Not Satisfiable. Used by S3 when a `Range` header
     /// requests bytes outside the object's size.
     pub fn range_not_satisfiable(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
@@ -88,7 +88,7 @@ impl AwsError {
         }
     }
 
-    /// HTTP 412 Precondition Failed — used by S3 when an `If-Match` /
+    /// HTTP 412 Precondition Failed. Used by S3 when an `If-Match` /
     /// `If-Unmodified-Since` conditional request fails.
     pub fn precondition_failed(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
@@ -100,7 +100,7 @@ impl AwsError {
         }
     }
 
-    /// HTTP 429 Too Many Requests — used by services that throttle on
+    /// HTTP 429 Too Many Requests. Used by services that throttle on
     /// concurrency or rate. Lambda raises this with code
     /// `TooManyRequestsException`; DynamoDB uses
     /// `ProvisionedThroughputExceededException`.

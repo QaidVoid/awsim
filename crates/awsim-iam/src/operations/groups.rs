@@ -157,7 +157,7 @@ pub fn add_user_to_group(state: &IamState, input: &Value) -> Result<Value, AwsEr
     }
 
     // Check the per-user group cap before mutating either side. Skip the
-    // count when the user is already in the target group — re-issuing the
+    // count when the user is already in the target group. Re-issuing the
     // call must remain idempotent even at the cap.
     {
         let user = state.users.get(user_name).expect("user just verified");
@@ -220,7 +220,7 @@ pub fn remove_user_from_group(state: &IamState, input: &Value) -> Result<Value, 
     Ok(json!({}))
 }
 
-// ── Inline policy read/delete ────────────────────────────────────────────────
+// -- Inline policy read/delete ------------------------------------------------
 
 pub fn get_group_policy(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let group_name = require_str(input, "GroupName")?;

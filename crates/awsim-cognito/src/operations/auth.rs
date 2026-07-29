@@ -990,7 +990,7 @@ fn build_auth_result_inner(
         "TokenType": "Bearer"
     });
     // AWS Cognito only includes RefreshToken on the *initial* auth
-    // exchange (USER_PASSWORD_AUTH, USER_SRP_AUTH, etc.) — not on
+    // exchange (USER_PASSWORD_AUTH, USER_SRP_AUTH, etc.). Not on
     // subsequent REFRESH_TOKEN_AUTH calls, where the SPA keeps reusing
     // the refresh token it already has.
     if include_refresh && let Some(obj) = auth_result.as_object_mut() {
@@ -1194,7 +1194,7 @@ pub fn initiate_auth(
             };
             let username = username.as_str();
 
-            // Pre-Authentication trigger (fire-and-forget) — read pool with
+            // Pre-Authentication trigger (fire-and-forget). Read pool with
             // an immutable borrow first to fire the trigger, then drop so we
             // can take a mutable borrow for the lockout bookkeeping below.
             {
@@ -1579,7 +1579,7 @@ pub fn admin_initiate_auth(
             };
             let username = username.as_str();
 
-            // Pre-Authentication trigger (fire-and-forget) — separate
+            // Pre-Authentication trigger (fire-and-forget). Separate
             // immutable scope so we can take a mutable borrow below.
             {
                 let pool = state.user_pools.get(pool_id).ok_or_else(|| {

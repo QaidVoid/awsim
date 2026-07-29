@@ -88,7 +88,7 @@ pub fn import_key_material(
 
     // ImportKeyMaterial only applies to keys created with Origin=EXTERNAL.
     // Keys originally created as AWS_KMS / AWS_CLOUDHSM cannot accept
-    // imported material — AWS rejects with KMSInvalidStateException.
+    // imported material. AWS rejects with KMSInvalidStateException.
     if key.origin != "EXTERNAL" {
         return Err(error::kms_invalid_state(format!(
             "Key {resolved_id} was not created with Origin=EXTERNAL"

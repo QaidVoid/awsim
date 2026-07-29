@@ -91,7 +91,7 @@ pub fn put_mapping(state: &OpenSearchState, index_name: &str, body: &Value) -> (
     (200, json!({ "acknowledged": true }))
 }
 
-/// Refresh index — no-op in emulator (data is immediately visible).
+/// Refresh index. No-op in emulator (data is immediately visible).
 pub fn refresh(state: &OpenSearchState, index_name: &str) -> (u16, Value) {
     if !state.index_exists(index_name) {
         return (404, index_not_found(index_name));

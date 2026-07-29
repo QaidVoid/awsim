@@ -16,7 +16,7 @@ use md5::Digest;
 use super::bucket::no_such_bucket;
 use super::require_str;
 
-/// POST /{Bucket}/{Key+}?uploads — initiate a multipart upload.
+/// POST /{Bucket}/{Key+}?uploads. Initiate a multipart upload.
 pub fn create_multipart_upload(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
     let key = require_str(input, "Key")?;
@@ -68,7 +68,7 @@ pub fn create_multipart_upload(state: &S3State, input: &Value) -> Result<Value, 
     }))
 }
 
-/// PUT /{Bucket}/{Key+}?partNumber={n}&uploadId={id} — upload a single part.
+/// PUT /{Bucket}/{Key+}?partNumber={n}&uploadId={id}. Upload a single part.
 pub fn upload_part(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
     let _key = require_str(input, "Key")?;
@@ -158,7 +158,7 @@ pub fn upload_part(state: &S3State, input: &Value) -> Result<Value, AwsError> {
 }
 
 /// PUT /{Bucket}/{Key+}?partNumber={n}&uploadId={id} with `x-amz-copy-source`
-/// header — copy a slice of a source object directly into a multipart part.
+/// header. Copy a slice of a source object directly into a multipart part.
 ///
 /// Supports the optional `x-amz-copy-source-range: bytes=start-end` header for
 /// partial-range copies; absent, the whole source object becomes the part.
@@ -288,7 +288,7 @@ fn copy_source_range(data: &[u8], header: &str) -> Result<Vec<u8>, AwsError> {
     Ok(data[start..=end].to_vec())
 }
 
-/// POST /{Bucket}/{Key+}?uploadId={id} — complete a multipart upload.
+/// POST /{Bucket}/{Key+}?uploadId={id}. Complete a multipart upload.
 ///
 /// AWS' Complete is "validate everything, then consume." A failure during
 /// validation (missing part, ETag mismatch, minimum-size violation, bad
@@ -480,7 +480,7 @@ fn lax_multipart_size_enabled() -> bool {
     })
 }
 
-/// DELETE /{Bucket}/{Key+}?uploadId={id} — abort a multipart upload.
+/// DELETE /{Bucket}/{Key+}?uploadId={id}. Abort a multipart upload.
 pub fn abort_multipart_upload(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
     let _key = require_str(input, "Key")?;
@@ -504,7 +504,7 @@ pub fn abort_multipart_upload(state: &S3State, input: &Value) -> Result<Value, A
     Ok(json!({}))
 }
 
-/// GET /{Bucket}?uploads — list multipart uploads for a bucket.
+/// GET /{Bucket}?uploads. List multipart uploads for a bucket.
 pub fn list_multipart_uploads(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     let bucket_name = require_str(input, "Bucket")?;
 
@@ -534,7 +534,7 @@ pub fn list_multipart_uploads(state: &S3State, input: &Value) -> Result<Value, A
     }))
 }
 
-/// GET /{Bucket}/{Key+}?uploadId={id} — list parts for a multipart upload.
+/// GET /{Bucket}/{Key+}?uploadId={id}. List parts for a multipart upload.
 ///
 /// Supports the AWS-standard pagination knobs:
 /// - `MaxParts` (default 1000, max 1000) clamps the page size.
@@ -795,7 +795,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.code, "InvalidPart");
 
-        // Upload still exists — retry with the right ETag must succeed.
+        // Upload still exists. Retry with the right ETag must succeed.
         let bucket = state.buckets.get("dst").unwrap();
         assert!(bucket.multipart_uploads.contains_key(&upload_id));
     }

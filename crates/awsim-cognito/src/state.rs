@@ -317,7 +317,7 @@ pub struct UserPool {
     /// `preferred_username`).
     #[serde(default)]
     pub alias_attributes: Vec<String>,
-    pub lambda_config: HashMap<String, String>, // trigger_type → function_arn
+    pub lambda_config: HashMap<String, String>, // trigger_type -> function_arn
     pub schema: Vec<SchemaAttribute>,
     pub email_configuration: Option<EmailConfig>,
     pub domain: Option<String>,
@@ -604,15 +604,15 @@ pub struct SrpSession {
 /// Per-account/region Cognito state.
 #[derive(Debug, Default, Clone)]
 pub struct CognitoState {
-    /// PoolId → UserPool
+    /// PoolId -> UserPool
     pub user_pools: DashMap<String, UserPool>,
     /// Revoked tokens (GlobalSignOut).
     pub revoked_tokens: TokenRevocationStore,
-    /// Domain → PoolId mapping for domain lookups.
+    /// Domain -> PoolId mapping for domain lookups.
     pub domain_pool_map: DashMap<String, String>,
-    /// ResourceArn → Tags for tag management.
+    /// ResourceArn -> Tags for tag management.
     pub resource_tags: DashMap<String, HashMap<String, String>>,
-    /// In-flight MFA sessions: session_id → (pool_id, username).
+    /// In-flight MFA sessions: session_id -> (pool_id, username).
     pub mfa_sessions: DashMap<String, MfaSession>,
     /// Pending confirmation codes: "pool_id:username" -> code.
     pub confirmation_codes: DashMap<String, String>,
@@ -620,7 +620,7 @@ pub struct CognitoState {
     /// Treated the same way as `pending_verifications_issued` on the
     /// user record: missing entry == expired.
     pub confirmation_codes_issued: DashMap<String, u64>,
-    /// In-flight SRP exchanges: session_id → SrpSession.
+    /// In-flight SRP exchanges: session_id -> SrpSession.
     pub srp_sessions: DashMap<String, SrpSession>,
     /// In-flight CUSTOM_AUTH exchanges: session_id -> CustomAuthSession.
     pub custom_auth_sessions: DashMap<String, CustomAuthSession>,

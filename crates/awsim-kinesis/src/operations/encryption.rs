@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 
 use crate::state::KinesisState;
 
-/// StartStreamEncryption — enable KMS encryption on a stream.
+/// StartStreamEncryption. Enable KMS encryption on a stream.
 pub fn start_stream_encryption(
     state: &KinesisState,
     input: &Value,
@@ -32,7 +32,7 @@ pub fn start_stream_encryption(
     Ok(json!({}))
 }
 
-/// StopStreamEncryption — disable encryption on a stream.
+/// StopStreamEncryption. Disable encryption on a stream.
 pub fn stop_stream_encryption(
     state: &KinesisState,
     input: &Value,

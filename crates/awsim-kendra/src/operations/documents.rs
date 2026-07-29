@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 
 use crate::state::{IndexedDocument, KendraState};
 
-/// BatchPutDocument — add documents to a Kendra index.
+/// BatchPutDocument. Add documents to a Kendra index.
 pub fn batch_put_document(state: &KendraState, input: &Value) -> Result<Value, AwsError> {
     let index_id = input["IndexId"]
         .as_str()
@@ -69,7 +69,7 @@ pub fn batch_put_document(state: &KendraState, input: &Value) -> Result<Value, A
     }))
 }
 
-/// BatchDeleteDocument — remove documents from a Kendra index.
+/// BatchDeleteDocument. Remove documents from a Kendra index.
 pub fn batch_delete_document(state: &KendraState, input: &Value) -> Result<Value, AwsError> {
     let index_id = input["IndexId"]
         .as_str()

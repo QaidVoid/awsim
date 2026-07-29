@@ -135,9 +135,9 @@ mod tests {
 
     #[test]
     fn crc32_known_vectors() {
-        // AWS docs example: "abc" → 0x352441C2
+        // AWS docs example: "abc" -> 0x352441C2
         assert_eq!(crc32(b"abc"), 0x3524_41C2);
-        // Empty input → 0
+        // Empty input -> 0
         assert_eq!(crc32(b""), 0);
     }
 

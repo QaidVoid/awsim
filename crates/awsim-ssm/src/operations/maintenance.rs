@@ -116,7 +116,7 @@ pub(crate) fn validate_targets(targets: &[Value]) -> Result<(), AwsError> {
 
 /// Resolve a `Targets` list to the concrete set of instance IDs the
 /// maintenance window would dispatch to. Only the `InstanceIds` key
-/// resolves locally — `tag:*` and `resource-groups:*` resolutions
+/// resolves locally. `tag:*` and `resource-groups:*` resolutions
 /// require an EC2 / ResourceGroups lookup that AWSim does not yet
 /// thread into SSM, so those entries are skipped (returning the
 /// empty set for now matches the behaviour of a maintenance window
@@ -346,7 +346,7 @@ pub fn describe_maintenance_window_targets(
 /// Values=i-abc`) to the maintenance windows that would dispatch
 /// against any of those instances.
 ///
-/// Real AWS evaluates this lazily — the SDK / console uses it to
+/// Real AWS evaluates this lazily. The SDK / console uses it to
 /// preview "which windows would fire against my fleet?" without
 /// actually firing them. AWSim mirrors that: every registered
 /// target list is resolved through [`resolve_targets_to_instance_ids`],
@@ -773,8 +773,8 @@ pub fn update_maintenance_window_task(
 /// (SecurityUpdates / CriticalUpdates / ServicePacks / Updates), and
 /// a `Severity` (Critical / Important / Moderate / Low).
 ///
-/// Tests and SDK clients reading these don't need real CVE data —
-/// they need predictable shapes so dashboards and compliance
+/// Tests and SDK clients reading these don't need real CVE data.
+/// They need predictable shapes so dashboards and compliance
 /// reporting paths exercise correctly. The catalog is intentionally
 /// small so the per-instance state (assigned via a deterministic
 /// hash) is easy to reason about.
@@ -823,7 +823,7 @@ fn synthetic_patch_state(instance_id: &str, kb_id: &str) -> &'static str {
     kb_id.hash(&mut h);
     match h.finish() % 5 {
         // Bias toward "Installed" so reports look like a fleet that's
-        // mostly patched — easier for tests to assert "InstalledCount
+        // mostly patched. Easier for tests to assert "InstalledCount
         // > 0" without needing exact counts.
         0 => "Missing",
         1 => "NotApplicable",

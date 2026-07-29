@@ -56,7 +56,7 @@ pub async fn seed(
             StatusCode::BAD_REQUEST,
             Json(json!({
                 "error": "ValidationException",
-                "message": format!("queues must be ≤ {MAX_QUEUES}"),
+                "message": format!("queues must be <= {MAX_QUEUES}"),
             })),
         )
             .into_response();
@@ -66,7 +66,7 @@ pub async fn seed(
             StatusCode::BAD_REQUEST,
             Json(json!({
                 "error": "ValidationException",
-                "message": format!("messages_per_queue must be ≤ {MAX_MESSAGES_PER_QUEUE}"),
+                "message": format!("messages_per_queue must be <= {MAX_MESSAGES_PER_QUEUE}"),
             })),
         )
             .into_response();

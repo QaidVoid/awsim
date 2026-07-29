@@ -49,7 +49,7 @@ pub struct ErrorEffect {
     pub code: String,
     /// Human-readable error message.
     pub message: String,
-    /// Optional `Retry-After` seconds — set to encourage SDK retry.
+    /// Optional `Retry-After` seconds. Set to encourage SDK retry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_after_secs: Option<u64>,
 }
@@ -87,7 +87,7 @@ pub enum ChaosEffect {
 }
 
 /// Optional fixed window of unix-second timestamps. Either bound is
-/// optional — `start_ts: None` means "from forever", `end_ts: None`
+/// optional. `start_ts: None` means "from forever", `end_ts: None`
 /// means "until forever". A rule outside its window is treated as
 /// disabled even when `enabled = true`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -107,7 +107,7 @@ pub struct Flap {
     pub anchor_ts: u64,
 }
 
-/// Composable schedule — the rule fires only if every populated
+/// Composable schedule. The rule fires only if every populated
 /// component says it's active. `window` and `flap` are independent
 /// and combine with AND.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -148,7 +148,7 @@ impl ChaosSchedule {
     }
 }
 
-/// One chaos rule — a match predicate plus an effect to inject when
+/// One chaos rule. A match predicate plus an effect to inject when
 /// `probability` rolls true.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChaosRule {
@@ -174,7 +174,7 @@ pub struct ChaosRule {
     /// the engine; persisted across restarts.
     #[serde(default)]
     pub injection_count: u64,
-    /// Optional time-based gating — windows + flap cycles. Rules
+    /// Optional time-based gating. Windows + flap cycles. Rules
     /// without a schedule are always active when `enabled = true`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule: Option<ChaosSchedule>,
@@ -186,8 +186,8 @@ fn default_enabled() -> bool {
 
 impl ChaosRule {
     /// Returns `true` when the rule's match predicate matches and
-    /// the rule is enabled. Probability is *not* evaluated here —
-    /// the engine handles the dice roll.
+    /// the rule is enabled. Probability is *not* evaluated here.
+    /// The engine handles the dice roll.
     pub fn matches(&self, service: &str, operation: Option<&str>) -> bool {
         self.enabled && self.service.matches(service) && self.operation.matches(operation)
     }

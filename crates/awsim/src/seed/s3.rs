@@ -46,7 +46,7 @@ pub async fn seed(State(state): State<Arc<SeedS3State>>, Json(body): Json<SeedS3
             StatusCode::BAD_REQUEST,
             Json(json!({
                 "error": "ValidationException",
-                "message": format!("buckets must be ≤ {MAX_BUCKETS}"),
+                "message": format!("buckets must be <= {MAX_BUCKETS}"),
             })),
         )
             .into_response();
@@ -56,7 +56,7 @@ pub async fn seed(State(state): State<Arc<SeedS3State>>, Json(body): Json<SeedS3
             StatusCode::BAD_REQUEST,
             Json(json!({
                 "error": "ValidationException",
-                "message": format!("objects_per_bucket must be ≤ {MAX_OBJECTS_PER_BUCKET}"),
+                "message": format!("objects_per_bucket must be <= {MAX_OBJECTS_PER_BUCKET}"),
             })),
         )
             .into_response();

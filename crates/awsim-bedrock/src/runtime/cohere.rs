@@ -1,4 +1,4 @@
-//! Cohere Command format ↔ OpenAI chat.completions translator.
+//! Cohere Command format <-> OpenAI chat.completions translator.
 //!
 //! Cohere request body:
 //! ```text

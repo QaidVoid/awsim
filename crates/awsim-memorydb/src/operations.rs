@@ -1417,7 +1417,7 @@ pub fn describe_service_updates(
 
 /// Hardcoded parameter fixtures shared across all default parameter
 /// groups. Mirrors the columns AWS surfaces via DescribeParameters.
-/// Keyed by (family, name) → (description, value, allowed_values,
+/// Keyed by (family, name) -> (description, value, allowed_values,
 /// data_type, change_type).
 const DEFAULT_PARAMETERS: &[(&str, &str, &str, &str, &str, &str, &str)] = &[
     (

@@ -61,7 +61,7 @@ fn now_secs() -> u64 {
         .as_secs()
 }
 
-/// StartMessageMoveTask — begin a DLQ redrive task (stub).
+/// StartMessageMoveTask. Begin a DLQ redrive task (stub).
 pub fn start_message_move_task(
     state: &SqsState,
     input: &Value,
@@ -104,7 +104,7 @@ pub fn start_message_move_task(
     Ok(json!({ "TaskHandle": task_handle }))
 }
 
-/// CancelMessageMoveTask — cancel a running DLQ redrive task (stub).
+/// CancelMessageMoveTask. Cancel a running DLQ redrive task (stub).
 pub fn cancel_message_move_task(
     state: &SqsState,
     input: &Value,
@@ -137,7 +137,7 @@ pub fn cancel_message_move_task(
     Ok(json!({ "ApproximateNumberOfMessagesMoved": moved }))
 }
 
-/// ListMessageMoveTasks — list move tasks for a source ARN.
+/// ListMessageMoveTasks. List move tasks for a source ARN.
 pub fn list_message_move_tasks(
     state: &SqsState,
     input: &Value,
@@ -210,7 +210,7 @@ mod rate_limiter_tests {
     #[test]
     fn cap_is_one_second_of_refill_so_burst_does_not_grow() {
         let mut bucket = MessageMoveRateLimiter::new(5);
-        // Idle for an hour — bucket should be capped at 5, not 18000.
+        // Idle for an hour. Bucket should be capped at 5, not 18000.
         for _ in 0..5 {
             assert!(bucket.try_acquire(3600.0));
         }
@@ -230,7 +230,7 @@ mod rate_limiter_tests {
             now += 0.05;
         }
         // Allow initial-burst capacity (10) plus one second of refill
-        // (another 10) — total bounded near 20.
+        // (another 10). Total bounded near 20.
         assert!((10..=21).contains(&allowed), "allowed={allowed}");
     }
 }

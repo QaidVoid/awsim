@@ -1,4 +1,4 @@
-//! Anthropic Messages format ↔ OpenAI chat.completions translator.
+//! Anthropic Messages format <-> OpenAI chat.completions translator.
 //!
 //! The Bedrock SDK encodes Anthropic Claude requests as JSON in the
 //! shape of Anthropic's native Messages API:
@@ -21,7 +21,7 @@
 //!
 //! The response shape is the Messages-API response with `content`
 //! as a list of typed blocks (currently we emit a single
-//! `{"type":"text","text":"…"}`).
+//! `{"type":"text","text":"..."}`).
 
 use awsim_core::AwsError;
 use base64::Engine;
@@ -410,7 +410,7 @@ fn collapse_parts(parts: Vec<ContentPart>) -> MessageContent {
 /// Convert the OpenAI chat.completions response back into an
 /// Anthropic Messages response. The Bedrock SDK shape mirrors
 /// Anthropic's native API except that `model` carries the Bedrock
-/// id, not the underlying backend tag — so we restore it from the
+/// id, not the underlying backend tag. So we restore it from the
 /// caller's bedrock id.
 ///
 /// Pricing-free variant for unit tests and call sites that don't

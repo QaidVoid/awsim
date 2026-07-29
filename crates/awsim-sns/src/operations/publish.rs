@@ -54,7 +54,7 @@ pub fn publish(state: &SnsState, input: &Value, ctx: &RequestContext) -> Result<
     drop(topic);
 
     // When MessageStructure="json", the Message must parse as a JSON object
-    // with at least a "default" key — AWS rejects otherwise. We keep the
+    // with at least a "default" key. AWS rejects otherwise. We keep the
     // raw payload here and pick the per-protocol body during fan-out via
     // select_message_for_protocol().
     let message_structure = input["MessageStructure"].as_str();
@@ -204,7 +204,7 @@ fn fan_out_to_subscribers(
         })
         .collect();
 
-    // Lazily parse the message body — only when at least one subscription
+    // Lazily parse the message body. Only when at least one subscription
     // uses FilterPolicyScope=MessageBody, since most don't.
     let body_value: Option<Value> = if subs
         .iter()
@@ -234,7 +234,7 @@ fn fan_out_to_subscribers(
             let passes = match scope.as_str() {
                 "MessageBody" => match &body_value {
                     Some(body) => filter::matches_filter_body(&filter_val, body),
-                    None => false, // Body not parseable as JSON → can't match.
+                    None => false, // Body not parseable as JSON -> can't match.
                 },
                 _ => filter::matches_filter(&filter_val, &filter_attrs),
             };
@@ -587,7 +587,7 @@ fn parse_message_attributes(input: &Value) -> Result<HashMap<String, MessageAttr
 
 /// Compute the FIFO dedup key for a single batch entry. Returns `None`
 /// when neither an explicit `MessageDeduplicationId` nor
-/// content-based dedup applies — the caller should treat the entry as
+/// content-based dedup applies. The caller should treat the entry as
 /// non-deduplicating.
 fn fifo_dedup_key(entry: &Value, message: &str, cbd_enabled: bool) -> Option<String> {
     if let Some(id) = entry["MessageDeduplicationId"].as_str()

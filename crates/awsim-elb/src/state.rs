@@ -2,18 +2,18 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// ELB v2 state — per account+region.
+/// ELB v2 state. Per account+region.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ElbState {
     pub load_balancers: DashMap<String, LoadBalancer>,
     pub target_groups: DashMap<String, TargetGroup>,
     pub listeners: DashMap<String, Listener>,
     pub rules: DashMap<String, Rule>,
-    /// LB ARN → stored attributes (key-value pairs)
+    /// LB ARN -> stored attributes (key-value pairs)
     pub lb_attributes: DashMap<String, Vec<AttributeKeyValue>>,
-    /// Target group ARN → stored attributes
+    /// Target group ARN -> stored attributes
     pub tg_attributes: DashMap<String, Vec<AttributeKeyValue>>,
-    /// Listener ARN → certificates
+    /// Listener ARN -> certificates
     pub listener_certificates: DashMap<String, Vec<Certificate>>,
 }
 

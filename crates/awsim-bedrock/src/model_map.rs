@@ -1,14 +1,14 @@
-//! Bedrock model id → backend model tag mapping. Powers the
+//! Bedrock model id -> backend model tag mapping. Powers the
 //! `awsim-bedrock` proxy: every Bedrock-flavoured invocation is
 //! translated to an OpenAI-compatible request, but the model name
-//! the backend (Ollama, LM Studio, llama.cpp server, vLLM, …)
+//! the backend (Ollama, LM Studio, llama.cpp server, vLLM, ...)
 //! actually understands is different from the AWS-side
 //! `anthropic.claude-3-5-sonnet-20241022-v2:0`.
 //!
 //! Each entry can either be a bare backend tag (route through the
 //! default backend) or `{ backend, tag }` to pin a specific id to
-//! a specific named backend — useful for fan-out setups where
-//! e.g. Sonnet → Groq's hosted Llama, Haiku → local Ollama.
+//! a specific named backend. Useful for fan-out setups where
+//! e.g. Sonnet -> Groq's hosted Llama, Haiku -> local Ollama.
 //!
 //! The default map skews toward Ollama / Llama because that's the
 //! most common local-LLM setup. Users override anything they need
@@ -57,12 +57,12 @@ impl ModelEntry {
 
 #[derive(Debug, Deserialize, Default, Clone)]
 pub struct ModelMap {
-    /// `bedrock-id → entry` for chat / completion / Converse
+    /// `bedrock-id -> entry` for chat / completion / Converse
     /// dispatch. Used by `InvokeModel`, `InvokeModelWithResponseStream`,
     /// `Converse`, `ConverseStream`.
     #[serde(default)]
     pub invoke: HashMap<String, ModelEntry>,
-    /// `bedrock-id → entry` for `/v1/embeddings` dispatch.
+    /// `bedrock-id -> entry` for `/v1/embeddings` dispatch.
     /// Used by `InvokeModel` when the bedrock id is an embedding model
     /// (Titan Embed, Cohere Embed).
     #[serde(default)]
@@ -176,7 +176,7 @@ impl ModelMap {
     }
 
     /// Resolve a Bedrock id to a `ModelEntry`. Tries `embed` first
-    /// when `for_embedding` is true so an `amazon.titan-embed-…` id
+    /// when `for_embedding` is true so an `amazon.titan-embed-...` id
     /// doesn't accidentally fall through to a chat-tier mapping.
     pub fn lookup(&self, bedrock_id: &str, for_embedding: bool) -> Option<&ModelEntry> {
         if for_embedding {

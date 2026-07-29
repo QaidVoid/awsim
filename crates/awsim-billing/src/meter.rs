@@ -10,7 +10,7 @@ use crate::state::BillingStateStore;
 const SECONDS_PER_MONTH: f64 = 30.0 * 24.0 * 60.0 * 60.0;
 const BYTES_PER_GB: f64 = 1_073_741_824.0;
 
-/// Fallback Lambda function memory (128 MB) — AWS's lowest tier
+/// Fallback Lambda function memory (128 MB). AWS's lowest tier
 /// and the default for new functions. Used when the responding
 /// service didn't attach an `X-Awsim-Memory-MB` header (older
 /// services / non-Lambda compute paths).
@@ -135,7 +135,7 @@ impl BillingMeter {
 
     /// Apply a single request event to the relevant per-(account, region)
     /// bucket. Events without an operation name (raw / unparseable
-    /// requests) are skipped — they're useless for cost attribution.
+    /// requests) are skipped. They're useless for cost attribution.
     pub fn record(&self, event: &RequestEvent) {
         let Some(operation) = event.operation.as_deref() else {
             return;
@@ -174,7 +174,7 @@ impl BillingMeter {
             event.write_units,
         );
 
-        // Compute billing — Lambda's GB-second axis. We only accrue
+        // Compute billing. Lambda's GB-second axis. We only accrue
         // for compute-billed ops on services with a published rate.
         // Memory comes from the responder's X-Awsim-Memory-MB header
         // (Lambda populates this with the function's configured
@@ -202,7 +202,7 @@ impl Default for BillingMeter {
 
 /// Spawn the background task that drains `RequestEvent`s into the meter.
 ///
-/// The receiver is a tokio broadcast channel — if the meter falls behind
+/// The receiver is a tokio broadcast channel. If the meter falls behind
 /// (256-deep buffer per the gateway constructor) we'll see `Lagged`
 /// errors. We log + skip rather than block, so a slow billing path can
 /// never throttle the request gateway.

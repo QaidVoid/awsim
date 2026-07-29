@@ -41,10 +41,10 @@ pub struct ServiceCost {
     /// Sampled by a periodic poll loop; zero for services that don't
     /// track at-rest storage.
     pub storage_cost_usd: f64,
-    /// Most recent sampled storage size in bytes — surfaced for the
+    /// Most recent sampled storage size in bytes. Surfaced for the
     /// dashboard's "currently storing X" line.
     pub storage_bytes: u64,
-    /// Accumulated compute cost (Lambda GB-seconds × rate).
+    /// Accumulated compute cost (Lambda GB-seconds x rate).
     pub compute_cost_usd: f64,
     /// Total GB-seconds of compute consumed.
     pub compute_gb_seconds: f64,
@@ -73,7 +73,7 @@ pub struct DimensionCost {
 pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> BillingReport {
     // Aggregate (service -> (op -> counter)) across every (account,
     // region) bucket. Multi-account/region accumulation is fine for the
-    // dashboard total — attribution is a follow-up.
+    // dashboard total. Attribution is a follow-up.
     let mut aggregate: BTreeMap<String, BTreeMap<String, OpCounterSnapshot>> = BTreeMap::new();
     // Storage aggregation: sum cost (micros) + take the max sampled
     // bytes across buckets (so the displayed "currently storing X"
@@ -231,7 +231,7 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
         }
 
         // Only surface the "unmatched" bucket when something actually
-        // landed in it — otherwise it's distracting noise on a fresh
+        // landed in it. Otherwise it's distracting noise on a fresh
         // dashboard.
         if other.request_count > 0 {
             dim_buckets.push(other);
@@ -292,13 +292,13 @@ pub fn compute_report(store: &BillingStateStore, catalog: &PricingCatalog) -> Bi
         });
     }
 
-    // Storage- or compute-only services — anything left in storage_agg
+    // Storage- or compute-only services. Anything left in storage_agg
     // or compute_agg that didn't match a service in the request
     // aggregate. A bucket that's been sitting idle but storing data
     // still costs money; a Lambda that ran once a long time ago and
     // hasn't been invoked recently still has accumulated GB-seconds.
     //
-    // Skip services whose tracker is fully zero — the storage poll
+    // Skip services whose tracker is fully zero. The storage poll
     // creates an entry on first call even when bytes are 0 (e.g. an
     // empty ECR registry), which would otherwise surface as a
     // ghost row on the dashboard.

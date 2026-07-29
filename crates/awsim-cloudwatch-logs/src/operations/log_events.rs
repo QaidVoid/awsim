@@ -58,7 +58,7 @@ pub fn put_log_events(
     // AWS validates `sequenceToken` strictly when the caller supplies
     // one: a mismatch returns InvalidSequenceTokenException carrying
     // the expected token. Modern SDKs (>= 2021) omit the field and the
-    // server-side enforcement is skipped — match that behaviour by
+    // server-side enforcement is skipped. Match that behaviour by
     // only validating when the caller passed something non-empty.
     let supplied_token = input["sequenceToken"].as_str().filter(|s| !s.is_empty());
     if let Some(token) = supplied_token {
@@ -237,7 +237,7 @@ pub fn get_log_events(
         end_time,
     )?;
 
-    // Token format: "{f|b}/{offset}" — keep the legacy shape so SDK
+    // Token format: "{f|b}/{offset}". Keep the legacy shape so SDK
     // callers don't need to change. Offsets count from head when
     // ascending, from tail otherwise.
     let offset = parse_offset(next_token);

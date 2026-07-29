@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 use crate::state::{DocumentAttribute, DocumentAttributeValue, IndexedDocument, KendraState};
 
-/// Query — full-text search across indexed documents.
+/// Query. Full-text search across indexed documents.
 ///
 /// Does simple substring matching against document content and titles.
 /// Real Kendra uses ML-based semantic search; this is a functional stub.
@@ -228,7 +228,7 @@ fn match_attribute_value(attr: Option<&DocumentAttribute>, expected: &Value) -> 
     }
 }
 
-/// ContainsAll — all expected list values must be present in the attribute.
+/// ContainsAll. All expected list values must be present in the attribute.
 fn match_contains_all(attr: Option<&DocumentAttribute>, expected: &Value) -> bool {
     let Some(attr) = attr else {
         return false;
@@ -247,7 +247,7 @@ fn match_contains_all(attr: Option<&DocumentAttribute>, expected: &Value) -> boo
     }
 }
 
-/// ContainsAny — at least one expected value must be present in the attribute.
+/// ContainsAny. At least one expected value must be present in the attribute.
 fn match_contains_any(attr: Option<&DocumentAttribute>, expected: &Value) -> bool {
     let Some(attr) = attr else {
         return false;
@@ -282,7 +282,7 @@ fn attribute_sort_key(attr: Option<&DocumentAttribute>) -> String {
         .unwrap_or_else(|| "\u{FFFF}".to_string()) // sort missing values last
 }
 
-/// Retrieve — passage-level retrieval from indexed documents.
+/// Retrieve. Passage-level retrieval from indexed documents.
 ///
 /// Similar to Query but returns individual passages rather than full documents.
 pub fn retrieve(state: &KendraState, input: &Value) -> Result<Value, AwsError> {
@@ -333,9 +333,9 @@ pub fn retrieve(state: &KendraState, input: &Value) -> Result<Value, AwsError> {
     }))
 }
 
-/// SubmitFeedback — submit relevance feedback for a query result.
+/// SubmitFeedback. Submit relevance feedback for a query result.
 ///
-/// Stub — stores nothing but returns success.
+/// Stub. Stores nothing but returns success.
 pub fn submit_feedback(_state: &KendraState, input: &Value) -> Result<Value, AwsError> {
     let _index_id = input["IndexId"]
         .as_str()
@@ -344,7 +344,7 @@ pub fn submit_feedback(_state: &KendraState, input: &Value) -> Result<Value, Aws
         .as_str()
         .ok_or_else(|| AwsError::validation("QueryId is required"))?;
 
-    // Accept feedback silently — no ML model to update in dev emulator
+    // Accept feedback silently. No ML model to update in dev emulator
     Ok(json!({}))
 }
 

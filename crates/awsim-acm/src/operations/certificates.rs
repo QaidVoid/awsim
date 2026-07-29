@@ -546,7 +546,7 @@ pub fn import_certificate(
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     // Accept Certificate, PrivateKey, CertificateChain (all PEM/base64).
-    // We store them but don't validate the content — this is a dev emulator.
+    // We store them but don't validate the content. This is a dev emulator.
     let _certificate = input["Certificate"]
         .as_str()
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "Certificate is required"))?;
@@ -626,7 +626,7 @@ pub fn renew_certificate(
     })?;
 
     // Imported certs carry no private key on AWS's side, so ACM cannot
-    // renew them — the documented response is InvalidRequestException.
+    // renew them. The documented response is InvalidRequestException.
     if cert.certificate_type == "IMPORTED" {
         return Err(AwsError::bad_request(
             "InvalidRequestException",

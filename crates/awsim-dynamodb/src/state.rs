@@ -99,7 +99,7 @@ pub struct TtlSpecification {
 /// is the absence of customer-managed encryption rather than "no
 /// encryption at all"). When `enabled = true` the table reports
 /// `SSEDescription` to the client; we don't actually encrypt anything
-/// in awsim — it's metadata only so SDK code that round-trips it
+/// in awsim. It's metadata only so SDK code that round-trips it
 /// works.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SseSpecification {
@@ -112,7 +112,7 @@ pub struct SseSpecification {
     pub kms_master_key_arn: Option<String>,
 }
 
-/// A DynamoDB Table — schema + stream config only.
+/// A DynamoDB Table. Schema + stream config only.
 ///
 /// Items live in SQLite (see `SqliteStore`); this struct holds the
 /// metadata that operation handlers need to answer DescribeTable,
@@ -125,7 +125,7 @@ pub struct Table {
     pub attribute_definitions: Vec<AttributeDefinition>,
     pub billing_mode: String,
     pub status: String,
-    /// Unix epoch seconds — matches awsJson1.1 timestamp wire format.
+    /// Unix epoch seconds. Matches awsJson1.1 timestamp wire format.
     pub created_at: f64,
     pub gsi: Vec<GlobalSecondaryIndex>,
     pub lsi: Vec<LocalSecondaryIndex>,
@@ -147,22 +147,22 @@ pub struct Table {
     /// Time-to-Live specification.
     #[serde(default)]
     pub ttl: TtlSpecification,
-    /// Resource tags (key → value).
+    /// Resource tags (key -> value).
     #[serde(default)]
     pub tags: HashMap<String, String>,
-    /// When true, `DeleteTable` rejects the request — callers must
+    /// When true, `DeleteTable` rejects the request. Callers must
     /// flip this off via `UpdateTable` first. Mirrors the AWS
     /// `DeletionProtectionEnabled` table attribute.
     #[serde(default)]
     pub deletion_protection_enabled: bool,
-    /// Server-side encryption settings. Metadata only — awsim doesn't
+    /// Server-side encryption settings. Metadata only. Awsim doesn't
     /// actually encrypt items, but echoing the spec back keeps SDK
     /// code that reads `SSEDescription` happy.
     #[serde(default)]
     pub sse: SseSpecification,
     /// Provisioned read capacity units. Only meaningful when
     /// `billing_mode == "PROVISIONED"`; PAY_PER_REQUEST always
-    /// reports 0. Awsim doesn't actually rate-limit — the value
+    /// reports 0. Awsim doesn't actually rate-limit. The value
     /// round-trips through DescribeTable for SDK code that reads it.
     #[serde(default)]
     pub read_capacity_units: u64,
@@ -225,7 +225,7 @@ pub struct BackupRecord {
     /// `RestoreTableFromBackup` to rebuild the table.
     #[serde(default)]
     pub schema_snapshot: Option<Table>,
-    /// Captured items as raw `(pk, sk, attrs_json)` triples — same
+    /// Captured items as raw `(pk, sk, attrs_json)` triples. Same
     /// shape SqliteStore stores them. Restored verbatim. Empty when
     /// the backup pre-dates this field on disk.
     #[serde(default)]
@@ -236,7 +236,7 @@ pub struct BackupRecord {
 pub struct BackupItem {
     pub pk: String,
     pub sk: String,
-    /// JSON-encoded item attributes — DynamoDB wire shape.
+    /// JSON-encoded item attributes. DynamoDB wire shape.
     pub attrs: serde_json::Value,
 }
 
@@ -318,7 +318,7 @@ pub struct GlobalTableReplica {
     pub replica_status: String,
 }
 
-/// A DynamoDB Global Table — a logical group of regional replicas that share
+/// A DynamoDB Global Table. A logical group of regional replicas that share
 /// a single name. We don't actually replicate data; the Global Table object
 /// is just metadata that satisfies tooling (Terraform, CDK) which consults
 /// existence + replica list.
@@ -377,7 +377,7 @@ pub struct DynamoState {
     pub contributor_insights: DashMap<String, ContributorInsightsEntry>,
     pub resource_policies: DashMap<String, String>,
     /// Global tables keyed by GlobalTableName. The implementation models
-    /// the metadata only — there's no cross-region data replication.
+    /// the metadata only. There's no cross-region data replication.
     pub global_tables: DashMap<String, GlobalTable>,
     /// Idempotency cache for transactional writes, keyed by
     /// `{account}:{region}:{ClientRequestToken}`. Ephemeral (not snapshotted);

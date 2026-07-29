@@ -250,7 +250,7 @@ pub async fn replay_request(State(state): State<AppState>, Path(id): Path<String
     };
 
     // Reconstruct the header map from the captured pairs. Skip any header
-    // that fails to parse — practically the only realistic failure is a
+    // that fails to parse. Practically the only realistic failure is a
     // weird control character, and skipping is friendlier than 500ing.
     let mut headers = HeaderMap::new();
     for h in &detail.request_headers {
@@ -331,7 +331,7 @@ pub async fn chaos_presets_list() -> Json<Value> {
     Json(json!({ "presets": entries }))
 }
 
-/// POST /_awsim/chaos/presets/{name} — appends the preset's rules
+/// POST /_awsim/chaos/presets/{name}. Appends the preset's rules
 /// to the engine. Returns the new rule ids.
 pub async fn chaos_preset_apply(
     State(engine): State<Arc<ChaosEngine>>,
@@ -363,7 +363,7 @@ pub async fn chaos_list(State(engine): State<Arc<ChaosEngine>>) -> Json<Value> {
     }))
 }
 
-/// POST /_awsim/chaos/rules — accepts a `ChaosRule` body. The
+/// POST /_awsim/chaos/rules. Accepts a `ChaosRule` body. The
 /// caller can omit `id` / `created_at` / `injection_count` and we
 /// fill them in.
 pub async fn chaos_add(
@@ -448,13 +448,13 @@ pub async fn chaos_stats(State(engine): State<Arc<ChaosEngine>>) -> Json<Value> 
 }
 
 // ---------------------------------------------------------------------------
-// DynamoDB admin — VACUUM
+// DynamoDB admin. VACUUM
 // ---------------------------------------------------------------------------
 
 use awsim_dynamodb::DynamoDbService;
 
 // ---------------------------------------------------------------------------
-// SQLite-backed storage stats — row counts + db file sizes for the
+// SQLite-backed storage stats. Row counts + db file sizes for the
 // four high-volume services. Surfaces real numbers so users can see
 // where their memory / disk went.
 // ---------------------------------------------------------------------------
@@ -581,9 +581,9 @@ fn sqlite_store_for_ses(svc: &Arc<awsim_ses::SesService>) -> Option<Arc<awsim_se
 }
 
 // ---------------------------------------------------------------------------
-// Memory diagnostic — counts entries in every major in-memory store
+// Memory diagnostic. Counts entries in every major in-memory store
 // so users can diff snapshots and pinpoint what's growing without a
-// heap profiler. Bring up the page, hammer a workload, refresh — the
+// heap profiler. Bring up the page, hammer a workload, refresh. The
 // section that grew is your leak.
 // ---------------------------------------------------------------------------
 
@@ -728,7 +728,7 @@ fn sqlite_section(s: &SqliteStatsState) -> Value {
     })
 }
 
-/// GET /_awsim/debug/objects — counts everything that grows in
+/// GET /_awsim/debug/objects. Counts everything that grows in
 /// memory. Snapshot before + after a workload, diff client-side.
 pub async fn debug_objects(State(s): State<Arc<DebugObjectsState>>) -> Json<Value> {
     Json(json!({
@@ -745,12 +745,12 @@ pub async fn debug_objects(State(s): State<Arc<DebugObjectsState>>) -> Json<Valu
 }
 
 // ---------------------------------------------------------------------------
-// SES sent-email inspector — reads `SesService::list_sent_emails()` and
+// SES sent-email inspector. Reads `SesService::list_sent_emails()` and
 // surfaces every captured outbound message so users can verify what was
 // sent without parsing the SDK call.
 // ---------------------------------------------------------------------------
 
-/// GET /_awsim/ses/sent — list every captured outbound email,
+/// GET /_awsim/ses/sent. List every captured outbound email,
 /// newest-first, scoped optionally by `?account=` and `?region=`.
 pub async fn ses_sent(
     State(svc): State<Arc<awsim_ses::SesService>>,
@@ -790,7 +790,7 @@ pub async fn ses_sent(
     Json(json!({ "count": emails.len(), "emails": emails }))
 }
 
-/// GET /_awsim/runtime-config — return the live runtime config plus
+/// GET /_awsim/runtime-config. Return the live runtime config plus
 /// metadata indicating whether changes will persist across restarts.
 /// API keys round-trip through this endpoint as the literal config
 /// stores them, so be careful exposing the admin surface.
@@ -805,7 +805,7 @@ pub async fn runtime_config_get(
     }))
 }
 
-/// GET /_awsim/runtime-config/defaults — return the runtime config
+/// GET /_awsim/runtime-config/defaults. Return the runtime config
 /// you'd get on a clean install (no env-var seeds, no persisted
 /// file). The Settings page uses this to (a) flag fields the user
 /// has customised and (b) power "Reset section to defaults" buttons.
@@ -814,7 +814,7 @@ pub async fn runtime_config_defaults() -> Json<Value> {
     Json(serde_json::to_value(&cfg).expect("RuntimeConfig serialisation is infallible"))
 }
 
-/// PUT /_awsim/runtime-config — replace the live runtime config.
+/// PUT /_awsim/runtime-config. Replace the live runtime config.
 /// Validation runs before any state changes; a bad payload returns
 /// 400 without touching disk or running services. On success we
 /// persist (when disk-backed), swap the live config, and run hooks
@@ -848,7 +848,7 @@ pub async fn runtime_config_put(
     }
 }
 
-/// GET /_awsim/gateway/catalog — return the bundled LLM provider
+/// GET /_awsim/gateway/catalog. Return the bundled LLM provider
 /// catalog (providers + their well-known models) used by the Model
 /// Gateway UI to power the "Add backend" provider picker and the
 /// model dropdown in mapping rows. Static data; safe to cache
@@ -857,7 +857,7 @@ pub async fn gateway_catalog() -> Json<&'static awsim_bedrock::ProviderCatalog> 
     Json(awsim_bedrock::catalog())
 }
 
-/// POST /_awsim/gateway/test-prompt — fire one Converse call
+/// POST /_awsim/gateway/test-prompt. Fire one Converse call
 /// through the live gateway as if it came from the SDK, then
 /// hand the response (or error) back so the UI can show a
 /// per-row sanity test without leaving the Models & Aliases tab.
@@ -934,14 +934,14 @@ pub async fn gateway_test_prompt(
     }
 }
 
-/// GET /_awsim/gateway/metrics — per-mapping counters + latency
+/// GET /_awsim/gateway/metrics. Per-mapping counters + latency
 /// histogram (p50/p95). Resets on restart; cheap to read.
 /// Drives the call/p50/p95 chips on the Models & Aliases tab.
 pub async fn gateway_metrics(State(metrics): State<awsim_bedrock::MetricsRegistry>) -> Json<Value> {
     Json(metrics.snapshot_json())
 }
 
-/// GET /_awsim/gateway/recent — last ~200 outer-call records
+/// GET /_awsim/gateway/recent. Last ~200 outer-call records
 /// (one per InvokeModel / Converse / embed call, listing the
 /// candidates that were tried). Newest-first. Drives the
 /// Activity tab.
@@ -949,7 +949,7 @@ pub async fn gateway_recent(State(recent): State<awsim_bedrock::RecentInvocation
     Json(recent.snapshot_json())
 }
 
-/// GET /_awsim/gateway/health — snapshot of every backend's
+/// GET /_awsim/gateway/health. Snapshot of every backend's
 /// current health status (Healthy / Degraded / Down / Unknown),
 /// last latency, last error, plus a short history ring per
 /// backend. Drives the gateway Health tab + the inline status
@@ -959,7 +959,7 @@ pub async fn gateway_health(State(registry): State<awsim_bedrock::HealthRegistry
     Json(registry.snapshot_json())
 }
 
-/// POST /_awsim/gateway/health/{name}/check — force a one-off
+/// POST /_awsim/gateway/health/{name}/check. Force a one-off
 /// probe for the named backend (independent of the background
 /// poller's schedule). Returns the fresh check result and also
 /// folds it into the registry so the UI refreshes accordingly.
@@ -1004,10 +1004,10 @@ pub async fn gateway_health_check(
     .into_response()
 }
 
-/// GET /_awsim/bedrock/defaults — return the built-in Bedrock model
+/// GET /_awsim/bedrock/defaults. Return the built-in Bedrock model
 /// map (the mappings that ship out of the box). The Settings page
 /// shows these as read-only context so users can see what they'd
-/// get with no overrides — and which built-ins they're shadowing
+/// get with no overrides. And which built-ins they're shadowing
 /// when they add a custom mapping.
 pub async fn bedrock_defaults() -> Json<Value> {
     let m = awsim_bedrock::ModelMap::defaults();
@@ -1032,12 +1032,12 @@ pub async fn bedrock_defaults() -> Json<Value> {
     }))
 }
 
-/// GET /_awsim/bedrock/backends/{name}/check — ping a configured
+/// GET /_awsim/bedrock/backends/{name}/check. Ping a configured
 /// Bedrock proxy backend and report whether it's reachable.
 /// Calls the OpenAI-compatible `/models` endpoint, which both
 /// answers the "is the server up?" question and (for Ollama at
-/// least) lists which model tags are actually installed locally —
-/// useful for spotting "tag in mappings but not pulled" mismatches.
+/// least) lists which model tags are actually installed locally.
+/// Useful for spotting "tag in mappings but not pulled" mismatches.
 pub async fn bedrock_backend_check(
     State(backends): State<awsim_bedrock::BedrockBackendsSwap>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -1046,7 +1046,7 @@ pub async fn bedrock_backend_check(
     let Some(registry) = guard.as_ref().as_ref() else {
         return Json(json!({
             "ok": false,
-            "error": "Bedrock proxy is disabled — enable it in Settings before checking backends",
+            "error": "Bedrock proxy is disabled. Enable it in Settings before checking backends",
         }));
     };
     let Some(backend) = registry.get_backend(&name) else {
@@ -1110,9 +1110,9 @@ pub async fn bedrock_backend_check(
     }
 }
 
-/// GET /_awsim/bedrock/config — render the live Bedrock proxy
+/// GET /_awsim/bedrock/config. Render the live Bedrock proxy
 /// registry as JSON for the admin UI. API keys are reported as a
-/// boolean (`hasApiKey`) — never the secret itself. Returns
+/// boolean (`hasApiKey`). Never the secret itself. Returns
 /// `{ "enabled": false }` when no backend is configured (canned-
 /// response mode). Reads from the same hot-swappable handle the
 /// runtime service uses, so the view always reflects the live
@@ -1133,7 +1133,7 @@ pub async fn bedrock_config(
     }
 }
 
-/// POST /_awsim/admin/dynamodb/vacuum — reclaim disk space after
+/// POST /_awsim/admin/dynamodb/vacuum. Reclaim disk space after
 /// heavy DELETE / UPDATE churn. Runs SQLite VACUUM, which can take
 /// time on large databases, so it's exposed as an explicit admin
 /// op rather than running on every shutdown.

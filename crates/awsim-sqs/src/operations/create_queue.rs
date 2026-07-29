@@ -55,13 +55,13 @@ pub fn handle(state: &SqsState, input: &Value, ctx: &RequestContext) -> Result<V
     // match what is already stored: re-issuing the call with the same
     // queue name and identical attributes returns the existing URL,
     // while any conflicting attribute raises QueueAlreadyExists (the
-    // wire-level Smithy code, not "QueueNameExists" — that's the
+    // wire-level Smithy code, not "QueueNameExists". That's the
     // structure name).
     if let Some(existing) = state.queues.get(queue_name) {
         for (key, requested) in &attributes {
             // Compare only against the values the caller supplied;
             // attributes the caller omitted are not part of the contract.
-            // Read-only counters (ApproximateNumberOfMessages…) shouldn't
+            // Read-only counters (ApproximateNumberOfMessages...) shouldn't
             // appear in caller input, so a strict equality check is fine.
             let stored = existing.attributes.get(key).cloned().unwrap_or_default();
             if stored.as_str() != requested.as_str() {
@@ -172,7 +172,7 @@ mod tests {
 
     #[test]
     fn create_queue_omitted_attributes_remain_idempotent() {
-        // Caller doesn't re-supply the attributes — must still succeed.
+        // Caller doesn't re-supply the attributes. Must still succeed.
         let state = SqsState::default();
         handle(
             &state,

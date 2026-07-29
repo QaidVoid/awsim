@@ -209,7 +209,7 @@ fn resolve_code(input: &Value) -> Result<(Option<Vec<u8>>, String, u64), AwsErro
             return Ok((Some(bytes), hash, size));
         }
         if opt_str(code, "S3Bucket").is_some() {
-            // S3 source — we don't actually fetch it; return a placeholder
+            // S3 source. We don't actually fetch it; return a placeholder
             let placeholder = b"s3-placeholder";
             let hash = sha256_base64(placeholder);
             return Ok((None, hash, 0));
@@ -755,7 +755,7 @@ mod tests {
     #[test]
     fn create_function_omits_runtime_validation_when_runtime_absent() {
         // Container-image (PackageType=Image) functions don't carry a
-        // Runtime — must accept the absent case.
+        // Runtime. Must accept the absent case.
         let state = LambdaState::default();
         let resp = create_function(
             &state,

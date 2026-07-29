@@ -1,5 +1,5 @@
 //! Amazon Pinpoint emulator. Apps (projects), endpoints, segments, campaigns.
-//! No actual messaging is sent — campaigns "complete" immediately.
+//! No actual messaging is sent. Campaigns "complete" immediately.
 
 use std::collections::HashMap;
 use std::sync::Arc;

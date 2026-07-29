@@ -447,7 +447,7 @@ pub fn remove_targets(
             let before_len = rule.targets.len();
             rule.targets.retain(|t| t.id != id);
             if rule.targets.len() == before_len {
-                // Not found — AWS still succeeds, but records a failure entry
+                // Not found. AWS still succeeds, but records a failure entry
                 failed_count += 1;
                 failed_entries.push(json!({
                     "TargetId": id,
@@ -691,7 +691,7 @@ mod dlq_retry_tests {
     #[test]
     fn no_retry_policy_uses_aws_defaults_for_cap() {
         // AWS default: 185 attempts, 86 400 s. So one failure after
-        // a few seconds → still retry.
+        // a few seconds -> still retry.
         let target = target_with(None, None);
         assert_eq!(
             next_delivery_step(DeliveryOutcome::Failure, &target, 1, 60),

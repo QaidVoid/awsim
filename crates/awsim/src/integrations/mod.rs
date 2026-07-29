@@ -136,7 +136,7 @@ pub async fn poll_sqs_event_sources(
                         .map(|s| s.to_string())
                 });
 
-            // Filtered-out messages are considered consumed — delete them so the
+            // Filtered-out messages are considered consumed. Delete them so the
             // queue doesn't loop them forever. This matches real Lambda ESM behavior.
             for handle in &filtered_handles {
                 let _ = sqs
@@ -974,7 +974,7 @@ pub async fn handle_eventbridge_target(
             }
         }
     } else if target_arn.contains(":sqs:") {
-        // SQS target — ARN format: arn:aws:sqs:{region}:{account}:{queue_name}
+        // SQS target. ARN format: arn:aws:sqs:{region}:{account}:{queue_name}
         if let Some(sqs) = services.get("sqs") {
             let parts: Vec<&str> = target_arn.splitn(6, ':').collect();
             let queue_url = if parts.len() == 6 {
@@ -1022,7 +1022,7 @@ pub async fn handle_eventbridge_target(
             }
         }
     } else if target_arn.contains(":kinesis:") {
-        // Kinesis stream — arn:aws:kinesis:{region}:{account}:stream/{name}
+        // Kinesis stream. Arn:aws:kinesis:{region}:{account}:stream/{name}
         if let Some(kinesis) = services.get("kinesis") {
             let stream_name = target_arn
                 .rsplit_once("stream/")
@@ -1056,7 +1056,7 @@ pub async fn handle_eventbridge_target(
             }
         }
     } else if target_arn.contains(":states:") {
-        // Step Functions — arn:aws:states:{region}:{account}:stateMachine:{name}
+        // Step Functions. Arn:aws:states:{region}:{account}:stateMachine:{name}
         if let Some(sfn) = services.get("stepfunctions") {
             let input_str = serde_json::to_string(payload).unwrap_or_default();
             let input = serde_json::json!({
@@ -1074,7 +1074,7 @@ pub async fn handle_eventbridge_target(
             }
         }
     } else if target_arn.contains(":logs:") {
-        // CloudWatch Logs — arn:aws:logs:{region}:{account}:log-group:{name}[:*]
+        // CloudWatch Logs. Arn:aws:logs:{region}:{account}:log-group:{name}[:*]
         if let Some(logs) = services.get("logs") {
             // Strip optional :* suffix and the log-group: prefix.
             let log_group_name = target_arn
@@ -1570,7 +1570,7 @@ pub async fn handle_cf_create_resource(
             }
         }
         other => {
-            debug!(resource_type = %other, "Unsupported CloudFormation resource type — skipping");
+            debug!(resource_type = %other, "Unsupported CloudFormation resource type. Skipping");
         }
     }
 }
@@ -1725,7 +1725,7 @@ pub async fn handle_cf_delete_resource(
             }
         }
         other => {
-            debug!(resource_type = %other, "Unsupported CloudFormation resource type — skipping delete");
+            debug!(resource_type = %other, "Unsupported CloudFormation resource type. Skipping delete");
         }
     }
 }
@@ -1771,7 +1771,7 @@ pub async fn handle_cognito_trigger(
             function = %func_name,
             trigger = %trigger_source,
             error = %e.message,
-            "Cognito trigger → Lambda invocation failed"
+            "Cognito trigger -> Lambda invocation failed"
         ),
     }
 }

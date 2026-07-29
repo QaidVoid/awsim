@@ -41,14 +41,14 @@ pub struct IdentityPool {
     pub allow_unauthenticated: bool,
     pub cognito_identity_providers: Vec<CognitoProvider>,
     pub supported_login_providers: HashMap<String, String>,
-    /// "authenticated" → role ARN, "unauthenticated" → role ARN
+    /// "authenticated" -> role ARN, "unauthenticated" -> role ARN
     pub roles: HashMap<String, String>,
     pub role_mappings: HashMap<String, Value>,
     pub developer_provider_name: Option<String>,
     pub created_date: String,
     /// Resource tags for this identity pool.
     pub tags: HashMap<String, String>,
-    /// provider_name → PrincipalTagMapping
+    /// provider_name -> PrincipalTagMapping
     pub principal_tag_maps: HashMap<String, PrincipalTagMapping>,
     /// `AllowClassicFlow` (basic GetOpenIdToken + AssumeRoleWithWebIdentity).
     #[serde(default)]
@@ -68,7 +68,7 @@ pub struct Identity {
     pub pool_id: String,
     /// Provider names the identity has logged in with.
     pub logins: Vec<String>,
-    /// Provider name → token map (used by UnlinkIdentity).
+    /// Provider name -> token map (used by UnlinkIdentity).
     pub login_tokens: HashMap<String, String>,
     /// Epoch seconds; cognito-identity reports these as numbers.
     pub creation_date: f64,
@@ -79,9 +79,9 @@ pub struct Identity {
 
 #[derive(Debug, Default)]
 pub struct IdentityPoolState {
-    /// pool_id → IdentityPool
+    /// pool_id -> IdentityPool
     pub pools: DashMap<String, IdentityPool>,
-    /// identity_id → Identity
+    /// identity_id -> Identity
     pub identities: DashMap<String, Identity>,
 }
 
@@ -365,7 +365,7 @@ fn create_identity_pool(
         })
         .collect();
 
-    // Parse SupportedLoginProviders (map of provider → app id/key)
+    // Parse SupportedLoginProviders (map of provider -> app id/key)
     let supported_login_providers: HashMap<String, String> = input["SupportedLoginProviders"]
         .as_object()
         .map(|m| {
@@ -514,7 +514,7 @@ fn list_identity_pools(state: &IdentityPoolState, input: &Value) -> Result<Value
     Ok(resp)
 }
 
-/// GetId — get or create an identity for the caller.
+/// GetId. Get or create an identity for the caller.
 fn get_id(
     state: &IdentityPoolState,
     input: &Value,
@@ -713,7 +713,7 @@ fn determine_role(pool: &IdentityPool, identity: &Identity, input: &Value) -> Op
                 // one. Real AWS requires `Type: "Token"` to be set
                 // explicitly; we accept it implicitly because the
                 // common case in local dev is "I assigned a role to
-                // the group, why isn't it being used?" — and that
+                // the group, why isn't it being used?". And that
                 // intent is unambiguous when the only IdP is the
                 // user pool that minted the JWT in the first place.
                 if mapping.is_none() && provider.starts_with("cognito-idp.") {
@@ -775,7 +775,7 @@ fn determine_role(pool: &IdentityPool, identity: &Identity, input: &Value) -> Op
                             // governs the fallback: `Deny` means no
                             // creds (return None so the caller raises
                             // NotAuthorizedException), `AuthenticatedRole`
-                            // means use the pool default — same as the
+                            // means use the pool default. Same as the
                             // implicit fallback below, so just break.
                             let resolution = mapping_obj
                                 .get("AmbiguousRoleResolution")
@@ -856,7 +856,7 @@ fn determine_role(pool: &IdentityPool, identity: &Identity, input: &Value) -> Op
 /// the `RoleMappings` key as `<provider>:<client_id>` for Cognito
 /// User Pool federation, but the `Logins` map only carries the bare
 /// `<provider>`. Match exact-key first, then accept any
-/// `<provider>:CLIENT_ID` suffixed key — same intent, more forgiving.
+/// `<provider>:CLIENT_ID` suffixed key. Same intent, more forgiving.
 fn lookup_role_mapping<'a>(
     mappings: &'a HashMap<String, Value>,
     provider: &str,
@@ -884,7 +884,7 @@ fn decode_jwt_payload(token: &str) -> Option<Value> {
 
 /// Pull a JWT claim out as a string. Strings are returned verbatim;
 /// arrays of strings collapse to the first entry (matches how AWS
-/// describes Rules evaluation against multi-value claims —
+/// describes Rules evaluation against multi-value claims.
 /// `cognito:groups` and `cognito:roles` arrive as arrays). Other
 /// shapes return `None` so the rule simply doesn't fire.
 fn claim_string(claims: &Value, key: &str) -> Option<String> {
@@ -905,7 +905,7 @@ fn claim_string(claims: &Value, key: &str) -> Option<String> {
 /// Generate temporary credentials scoped to the given IAM role ARN.
 ///
 /// The credentials are structurally identical to what AWS returns from
-/// AssumeRoleWithWebIdentity — fake but realistic for local simulation.
+/// AssumeRoleWithWebIdentity. Fake but realistic for local simulation.
 /// The `role_arn` is embedded in the session token prefix so callers can
 /// correlate credentials back to the assumed role.
 fn generate_credentials_for_role(role_arn: &str, _identity_id: &str) -> Value {
@@ -1247,7 +1247,7 @@ fn delete_identities(state: &IdentityPoolState, input: &Value) -> Result<Value, 
     Ok(json!({ "UnprocessedIdentityIds": [] }))
 }
 
-/// MergeDeveloperIdentities — merge source into destination, delete source.
+/// MergeDeveloperIdentities. Merge source into destination, delete source.
 fn merge_developer_identities(
     state: &IdentityPoolState,
     input: &Value,
@@ -1352,7 +1352,7 @@ fn merge_developer_identities(
     Ok(json!({ "IdentityId": dest_identity_id }))
 }
 
-/// UnlinkDeveloperIdentity — remove a developer user identifier from an identity.
+/// UnlinkDeveloperIdentity. Remove a developer user identifier from an identity.
 fn unlink_developer_identity(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsError> {
     let identity_id = input["IdentityId"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "IdentityId is required")
@@ -1384,7 +1384,7 @@ fn unlink_developer_identity(state: &IdentityPoolState, input: &Value) -> Result
     Ok(json!({}))
 }
 
-/// UnlinkIdentity — remove federated logins from an identity.
+/// UnlinkIdentity. Remove federated logins from an identity.
 fn unlink_identity(state: &IdentityPoolState, input: &Value) -> Result<Value, AwsError> {
     let identity_id = input["IdentityId"].as_str().ok_or_else(|| {
         AwsError::bad_request("InvalidParameterException", "IdentityId is required")
@@ -1911,7 +1911,7 @@ mod tests {
         .unwrap();
         let pool_id = create_result["IdentityPoolId"].as_str().unwrap();
 
-        // No roles set — should fail with NotAuthorizedException
+        // No roles set. Should fail with NotAuthorizedException
         let id_result = get_id(&state, &json!({ "IdentityPoolId": pool_id }), &ctx).unwrap();
         let identity_id = id_result["IdentityId"].as_str().unwrap();
 
@@ -2053,7 +2053,7 @@ mod tests {
     }
 
     /// Build a fake but well-shaped JWT carrying the given JSON
-    /// payload. The signature is a placeholder — Identity Pool role
+    /// payload. The signature is a placeholder. Identity Pool role
     /// mapping consumes our own tokens locally and doesn't verify
     /// signatures in this simulator.
     fn fake_jwt(payload: &Value) -> String {
@@ -2231,7 +2231,7 @@ mod tests {
             &state,
             &json!({
                 "IdentityPoolId": pool_id,
-                // No RoleMappings — only a default authenticated role.
+                // No RoleMappings. Only a default authenticated role.
                 "Roles": { "authenticated": "arn:aws:iam::000000000000:role/Default" }
             }),
         )

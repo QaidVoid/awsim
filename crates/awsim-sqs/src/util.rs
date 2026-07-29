@@ -47,7 +47,7 @@ pub fn md5_of_message_attributes(attrs: &HashMap<String, MessageAttribute>) -> O
                 buf.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
                 buf.extend_from_slice(bytes);
             }
-            // String / Number / String.* / Number.* / unknown — treat as
+            // String / Number / String.* / Number.* / unknown. Treat as
             // String-encoded (transport byte 1).
             _ => {
                 buf.push(1);
@@ -147,7 +147,7 @@ mod tests {
         b.insert("A".to_string(), string_attr("a"));
         b.insert("Z".to_string(), string_attr("z"));
 
-        // Same attributes, different insertion order — must hash the same.
+        // Same attributes, different insertion order. Must hash the same.
         assert_eq!(md5_of_message_attributes(&a), md5_of_message_attributes(&b));
     }
 
@@ -191,7 +191,7 @@ mod tests {
         let got = md5_of_message_attributes(&attrs).expect("md5 present");
 
         // Same value with the bare "String" type would differ only in the
-        // data_type bytes — round-trip the byte-level shape.
+        // data_type bytes. Round-trip the byte-level shape.
         assert_eq!(got.len(), 32);
     }
 }

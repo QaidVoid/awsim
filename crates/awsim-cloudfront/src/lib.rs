@@ -25,7 +25,7 @@ impl CloudFrontService {
         }
     }
 
-    /// CloudFront state is global per account — region is not used.
+    /// CloudFront state is global per account. Region is not used.
     fn get_state(&self, ctx: &RequestContext) -> Arc<CloudFrontState> {
         self.store.get(&ctx.account_id, "global")
     }

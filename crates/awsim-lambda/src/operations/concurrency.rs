@@ -103,7 +103,7 @@ pub fn put_provisioned_concurrency_config(
         .get_mut(name)
         .ok_or_else(|| resource_not_found("function", name))?;
 
-    // Provisioned concurrency targets a published version or alias — never
+    // Provisioned concurrency targets a published version or alias. Never
     // $LATEST. Mirror the real validation so misconfigured callers see the
     // same error path locally as in production.
     if qualifier == "$LATEST" {
@@ -265,7 +265,7 @@ mod tests {
     #[test]
     fn put_get_delete_reserved_concurrency_round_trip() {
         let state = state_with_function("f");
-        // Initially absent — Get returns the empty shape (no field).
+        // Initially absent. Get returns the empty shape (no field).
         let got =
             get_function_concurrency(&state, &serde_json::json!({ "FunctionName": "f" }), &ctx())
                 .unwrap();

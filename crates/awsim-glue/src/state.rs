@@ -112,24 +112,24 @@ pub struct TableVersion {
 /// Per-account/region Glue state.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct GlueState {
-    /// Database name → GlueDatabase
+    /// Database name -> GlueDatabase
     pub databases: DashMap<String, GlueDatabase>,
-    /// "db_name.table_name" → GlueTable
+    /// "db_name.table_name" -> GlueTable
     pub tables: DashMap<String, GlueTable>,
-    /// Crawler name → Crawler
+    /// Crawler name -> Crawler
     pub crawlers: DashMap<String, Crawler>,
-    /// Job name → Job
+    /// Job name -> Job
     pub jobs: DashMap<String, Job>,
-    /// run_id → JobRun
+    /// run_id -> JobRun
     pub job_runs: DashMap<String, JobRun>,
-    /// connection_name → Connection
+    /// connection_name -> Connection
     pub connections: DashMap<String, Connection>,
-    /// resource_arn → tags
+    /// resource_arn -> tags
     pub tags: DashMap<String, HashMap<String, String>>,
-    /// trigger name → Trigger
+    /// trigger name -> Trigger
     pub triggers: DashMap<String, Trigger>,
-    /// workflow name → Workflow
+    /// workflow name -> Workflow
     pub workflows: DashMap<String, Workflow>,
-    /// "{db}.{table}.{version_id}" → TableVersion
+    /// "{db}.{table}.{version_id}" -> TableVersion
     pub table_versions: DashMap<String, TableVersion>,
 }

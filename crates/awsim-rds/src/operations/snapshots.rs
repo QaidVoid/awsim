@@ -39,7 +39,7 @@ fn snapshot_to_value(s: &DbSnapshot) -> Value {
     obj
 }
 
-/// CreateDBSnapshot — create a snapshot from an existing instance.
+/// CreateDBSnapshot. Create a snapshot from an existing instance.
 pub fn create_db_snapshot(
     state: &RdsState,
     input: &Value,
@@ -96,7 +96,7 @@ pub fn create_db_snapshot(
     Ok(json!({ "DBSnapshot": result }))
 }
 
-/// DeleteDBSnapshot — delete a snapshot.
+/// DeleteDBSnapshot. Delete a snapshot.
 pub fn delete_db_snapshot(
     state: &RdsState,
     input: &Value,
@@ -122,7 +122,7 @@ pub fn delete_db_snapshot(
     Ok(json!({ "DBSnapshot": result }))
 }
 
-/// DescribeDBSnapshots — list snapshots with optional filter.
+/// DescribeDBSnapshots. List snapshots with optional filter.
 pub fn describe_db_snapshots(
     state: &RdsState,
     input: &Value,
@@ -170,7 +170,7 @@ pub fn describe_db_snapshots(
     }))
 }
 
-/// CopyDBSnapshot — copy snapshot metadata (stub).
+/// CopyDBSnapshot. Copy snapshot metadata (stub).
 pub fn copy_db_snapshot(
     state: &RdsState,
     input: &Value,
@@ -227,7 +227,7 @@ pub fn copy_db_snapshot(
     Ok(json!({ "DBSnapshot": result }))
 }
 
-/// DescribeEventSubscriptions — stub returning empty list.
+/// DescribeEventSubscriptions. Stub returning empty list.
 pub fn describe_event_subscriptions(_input: &Value) -> Result<Value, AwsError> {
     Ok(json!({
         "EventSubscriptionsList": { "EventSubscription": [] },
@@ -235,7 +235,7 @@ pub fn describe_event_subscriptions(_input: &Value) -> Result<Value, AwsError> {
     }))
 }
 
-/// DescribeDBLogFiles — stub returning empty list.
+/// DescribeDBLogFiles. Stub returning empty list.
 pub fn describe_db_log_files(input: &Value) -> Result<Value, AwsError> {
     let _instance_id = require_str(input, "DBInstanceIdentifier")?;
     Ok(json!({

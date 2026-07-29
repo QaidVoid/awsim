@@ -20,7 +20,7 @@ pub fn opt_str<'a>(input: &'a Value, key: &str) -> Option<&'a str> {
     input.get(key).and_then(|v| v.as_str())
 }
 
-/// Extract strings from a dotted-member list (e.g. `Subnets.member.1`, `Subnets.member.2`, …)
+/// Extract strings from a dotted-member list (e.g. `Subnets.member.1`, `Subnets.member.2`, ...)
 /// or a plain array.
 pub fn extract_string_list(input: &Value, key: &str) -> Vec<String> {
     let mut out = Vec::new();

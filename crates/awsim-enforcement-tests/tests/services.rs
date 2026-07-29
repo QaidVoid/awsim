@@ -17,7 +17,7 @@ use awsim_enforcement_tests::{
     secretsmanager_client, sns_client, sqs_client, start_server_unenforced,
 };
 
-// ── DynamoDB ─────────────────────────────────────────────────────────────────
+// -- DynamoDB -----------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ddb_alice_can_put_get_only_her_table() {
@@ -104,7 +104,7 @@ async fn ddb_alice_can_put_get_only_her_table() {
     srv.shutdown().await;
 }
 
-// ── SQS ──────────────────────────────────────────────────────────────────────
+// -- SQS ----------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sqs_alice_send_only_work_queue() {
@@ -162,7 +162,7 @@ async fn sqs_alice_send_only_work_queue() {
     srv.shutdown().await;
 }
 
-// ── SNS ──────────────────────────────────────────────────────────────────────
+// -- SNS ----------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sns_alice_publish_only_alerts_topic() {
@@ -220,7 +220,7 @@ async fn sns_alice_publish_only_alerts_topic() {
     srv.shutdown().await;
 }
 
-// ── Lambda ───────────────────────────────────────────────────────────────────
+// -- Lambda -------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn lambda_alice_invoke_unauthorized_function_denied() {
@@ -257,7 +257,7 @@ async fn lambda_alice_invoke_unauthorized_function_denied() {
     srv.shutdown().await;
 }
 
-// ── Secrets Manager ──────────────────────────────────────────────────────────
+// -- Secrets Manager ----------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn secretsmanager_alice_can_create_and_read() {
@@ -333,7 +333,7 @@ async fn secretsmanager_no_policy_implicit_deny() {
     srv.shutdown().await;
 }
 
-// ── IAM as a target service ──────────────────────────────────────────────────
+// -- IAM as a target service --------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn iam_target_alice_readonly_can_list_but_not_create() {
@@ -372,7 +372,7 @@ async fn iam_target_alice_readonly_can_list_but_not_create() {
     srv.shutdown().await;
 }
 
-// ── S3 deeper coverage ───────────────────────────────────────────────────────
+// -- S3 deeper coverage -------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn s3_bucket_arn_does_not_grant_object_access() {
@@ -478,7 +478,7 @@ async fn s3_cross_bucket_access_denied() {
     srv.shutdown().await;
 }
 
-// ── SCP across services ──────────────────────────────────────────────────────
+// -- SCP across services ------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn scp_deny_all_iam_blocks_admin_in_target_account() {

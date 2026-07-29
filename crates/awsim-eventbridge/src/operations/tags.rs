@@ -90,7 +90,7 @@ pub fn list_tags_for_resource(
 }
 
 // ---------------------------------------------------------------------------
-// Helpers — find an event bus by its ARN
+// Helpers. Find an event bus by its ARN
 // ---------------------------------------------------------------------------
 
 fn find_bus_by_arn<'a>(

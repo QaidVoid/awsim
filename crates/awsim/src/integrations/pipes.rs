@@ -1,7 +1,7 @@
 //! Pipes runner: drives RUNNING pipes by polling their source and forwarding
 //! batches to the target. Currently supports SQS-as-source and Lambda /
-//! StepFunctions / SQS / SNS as targets — enough to cover the common
-//! "queue → processor" integration pattern.
+//! StepFunctions / SQS / SNS as targets. Enough to cover the common
+//! "queue -> processor" integration pattern.
 
 use std::collections::HashMap;
 use std::sync::Arc;

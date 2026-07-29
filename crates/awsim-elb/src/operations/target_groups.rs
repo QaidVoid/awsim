@@ -30,7 +30,7 @@ pub fn tg_to_value(tg: &TargetGroup) -> Value {
 }
 
 /// Validate `Matcher.GrpcCode`. AWS accepts a single code, a hyphenated
-/// range, or a comma-separated list — all values must fall in 0..=99.
+/// range, or a comma-separated list. All values must fall in 0..=99.
 fn validate_grpc_matcher(spec: &str) -> Result<(), AwsError> {
     if spec.is_empty() {
         return Err(AwsError::bad_request(

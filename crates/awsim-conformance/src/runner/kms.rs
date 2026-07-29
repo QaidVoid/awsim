@@ -99,7 +99,7 @@ pub async fn test_kms(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             verbose
         ));
 
-        // ReEncrypt — re-encrypt data from the same key to itself
+        // ReEncrypt. Re-encrypt data from the same key to itself
         if let Some(ct_for_reencrypt) = {
             client
                 .encrypt()
@@ -192,7 +192,7 @@ pub async fn test_kms(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         }
     }
 
-    // GenerateRandom — not tied to a key
+    // GenerateRandom. Not tied to a key
     results.push(chk!(
         "GenerateRandom",
         client.generate_random().number_of_bytes(32).send().await,
@@ -290,7 +290,7 @@ pub async fn test_kms(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         results.push(OpResult::Skipped("GetPublicKey".to_string()));
     }
 
-    // GenerateDataKeyPair / GenerateDataKeyPairWithoutPlaintext — needs a symmetric key
+    // GenerateDataKeyPair / GenerateDataKeyPairWithoutPlaintext. Needs a symmetric key
     let sym_r = client
         .create_key()
         .description("conformance symmetric key for data key pair")
@@ -393,7 +393,7 @@ pub async fn test_kms(endpoint: &str, verbose: bool) -> Vec<OpResult> {
             results.push(OpResult::Skipped("RevokeGrant".to_string()));
         }
 
-        // RetireGrant — create a second grant to retire
+        // RetireGrant. Create a second grant to retire
         let grant2_r = client
             .create_grant()
             .key_id(skid)

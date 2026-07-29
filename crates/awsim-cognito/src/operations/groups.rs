@@ -8,7 +8,7 @@ use crate::operations::users::user_to_value;
 use crate::state::{CognitoGroup, CognitoState};
 
 /// Warn if a role ARN doesn't match the expected format.
-/// Does NOT call IAM — just a format check to catch obvious mistakes.
+/// Does NOT call IAM. Just a format check to catch obvious mistakes.
 fn warn_if_invalid_role_arn(arn: &str) {
     // Expected format: arn:aws:iam::<account-id>:role/<role-name>
     if !arn.starts_with("arn:") || !arn.contains(":iam:") || !arn.contains(":role/") {

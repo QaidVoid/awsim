@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use crate::state::SqsState;
 use crate::util::queue_name_from_url;
 
-/// AddPermission — add a permission to the queue policy document.
+/// AddPermission. Add a permission to the queue policy document.
 /// Stored as a JSON policy under the queue's "QueuePolicy" attribute.
 pub fn add_permission(
     state: &SqsState,
@@ -63,7 +63,7 @@ pub fn add_permission(
     Ok(json!({}))
 }
 
-/// RemovePermission — remove a permission statement identified by Label.
+/// RemovePermission. Remove a permission statement identified by Label.
 pub fn remove_permission(
     state: &SqsState,
     input: &Value,

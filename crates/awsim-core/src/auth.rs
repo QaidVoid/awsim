@@ -22,7 +22,7 @@ pub fn parse_authorization(header: &str) -> Option<SigV4Credentials> {
     let mut signed_headers = None;
     let mut signature = None;
 
-    // Split on comma — handle both ", " and "," and ", " with extra whitespace
+    // Split on comma. Handle both ", " and "," and ", " with extra whitespace
     for part in header.split(',') {
         let part = part.trim();
         if let Some(val) = part.strip_prefix("Credential=") {

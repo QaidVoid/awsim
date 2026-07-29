@@ -1,4 +1,4 @@
-//! Cohere Embed format ↔ OpenAI /v1/embeddings translator.
+//! Cohere Embed format <-> OpenAI /v1/embeddings translator.
 //!
 //! Cohere Embed request body:
 //! ```text

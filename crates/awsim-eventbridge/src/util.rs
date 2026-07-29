@@ -13,7 +13,7 @@ pub fn now_epoch() -> u64 {
 
 /// Format the current UTC time as an ISO 8601 string suitable for the
 /// EventBridge timestamp fields (CreationTime, LastModifiedTime,
-/// ReplayStartTime, …). Example: `2026-05-04T09:00:00.000Z`.
+/// ReplayStartTime, ...). Example: `2026-05-04T09:00:00.000Z`.
 pub fn now_iso8601() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)

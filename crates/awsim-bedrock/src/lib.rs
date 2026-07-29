@@ -36,7 +36,7 @@ use tracing::debug;
 
 use state::BedrockState;
 
-// ── Management service (signing name: bedrock) ────────────────────────────────
+// -- Management service (signing name: bedrock) --------------------------------
 
 pub struct BedrockService {
     store: AccountRegionStore<BedrockState>,
@@ -322,7 +322,7 @@ impl ServiceHandler for BedrockService {
     }
 }
 
-// ── Runtime service (signing name: bedrock-runtime) ───────────────────────────
+// -- Runtime service (signing name: bedrock-runtime) ---------------------------
 
 /// Hot-swappable handle to a Bedrock proxy registry. Cloning the
 /// handle is cheap; the underlying `Option<BedrockBackends>` can be
@@ -340,8 +340,8 @@ pub fn backends_swap(backends: Option<BedrockBackends>) -> BedrockBackendsSwap {
     Arc::new(ArcSwap::from_pointee(backends))
 }
 
-/// Bedrock runtime handler. Holds a hot-swappable backends registry —
-/// invocations read the live registry on each call. When the swap
+/// Bedrock runtime handler. Holds a hot-swappable backends registry.
+/// Invocations read the live registry on each call. When the swap
 /// holds `None`, the service returns deterministic canned responses
 /// so SDK code that just wires up the calls keeps working in CI.
 pub struct BedrockRuntimeService {

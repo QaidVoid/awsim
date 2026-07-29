@@ -131,7 +131,7 @@ async fn add_user_to_group_idempotent_at_cap() {
         .await
         .unwrap();
     }
-    // Re-add an existing membership — must still succeed.
+    // Re-add an existing membership. Must still succeed.
     call(
         &svc,
         "AddUserToGroup",
@@ -232,7 +232,7 @@ async fn get_user_without_username_returns_caller_when_access_key_matches_user()
         .await
         .unwrap();
 
-    // Sign as alice — no UserName supplied. Must resolve to alice, not
+    // Sign as alice. No UserName supplied. Must resolve to alice, not
     // whichever user iterates first out of the dashmap.
     let mut self_ctx = ctx();
     self_ctx.access_key = Some("alice".to_string());
@@ -307,7 +307,7 @@ async fn attach_user_policy_accepts_aws_managed_arn() {
 #[tokio::test]
 async fn attach_role_policy_accepts_service_role_managed_path() {
     // arn:aws:iam::aws:policy/service-role/<name> (path-prefixed managed
-    // ARN) is also valid — used by Lambda execution roles, ECS tasks,
+    // ARN) is also valid. Used by Lambda execution roles, ECS tasks,
     // and many CDK/CFN templates.
     let svc = IamService::new();
     call(

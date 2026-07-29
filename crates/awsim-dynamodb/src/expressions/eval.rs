@@ -166,7 +166,7 @@ pub fn evaluate_condition(
     }
 }
 
-// ─── Helper functions ─────────────────────────────────────────────────────────
+// --- Helper functions ---------------------------------------------------------
 
 /// Resolve an Operand to a DynamoDB value reference.
 fn resolve_operand<'a>(
@@ -252,7 +252,7 @@ fn compare_values(left: &Value, op: &CompareOp, right: &Value) -> bool {
     // enough: comparing 9_999_999_999_999_999 to 10_000_000_000_000_000 as f64
     // would say they are equal. rust_decimal carries ~28-29 significant digits
     // exactly, which covers timestamps in nanos, IDs above 2^53, and money in
-    // millicents — every real DDB workload we have seen. Numbers that fail to
+    // millicents. Every real DDB workload we have seen. Numbers that fail to
     // parse (malformed wire input) compare as not-equal.
     if let (Some(ln), Some(rn)) = (
         left.get("N").and_then(|v| v.as_str()),
@@ -339,7 +339,7 @@ fn extract_string_from_dynamo(val: &Value) -> Option<String> {
 }
 
 /// Extract a DynamoDB number as i64. Used only by `size()` comparisons,
-/// where the right-hand side is a small whole-number byte count — losing
+/// where the right-hand side is a small whole-number byte count. Losing
 /// fractional precision is fine, and clipping to i64 range is safer than
 /// silently wrapping. Returns None when the value isn't numeric or doesn't
 /// fit in i64.
@@ -366,7 +366,7 @@ fn dynamo_size(val: &Value) -> usize {
         let pad = b.bytes().rev().take_while(|&c| c == b'=').count();
         let n = b.len();
         if n % 4 != 0 {
-            // Malformed base64 — fall back to actually decoding.
+            // Malformed base64. Fall back to actually decoding.
             use base64::Engine as _;
             return base64::engine::general_purpose::STANDARD
                 .decode(b)
@@ -456,26 +456,26 @@ mod tests {
 
     #[test]
     fn size_of_binary_returns_decoded_byte_count() {
-        // 4 raw bytes → "AAECAw==" (8 chars, 2 padding) → decoded length 4.
+        // 4 raw bytes -> "AAECAw==" (8 chars, 2 padding) -> decoded length 4.
         let b = BASE64.encode([0u8, 1, 2, 3]);
         assert_eq!(b.len(), 8);
         assert_eq!(dynamo_size(&json!({ "B": b })), 4);
 
-        // 5 raw bytes → "AAECAwQ=" (8 chars, 1 padding) → decoded length 5.
+        // 5 raw bytes -> "AAECAwQ=" (8 chars, 1 padding) -> decoded length 5.
         let b = BASE64.encode([0u8, 1, 2, 3, 4]);
         assert_eq!(dynamo_size(&json!({ "B": b })), 5);
 
-        // 6 raw bytes → "AAECAwQF" (8 chars, 0 padding) → decoded length 6.
+        // 6 raw bytes -> "AAECAwQF" (8 chars, 0 padding) -> decoded length 6.
         let b = BASE64.encode([0u8, 1, 2, 3, 4, 5]);
         assert_eq!(dynamo_size(&json!({ "B": b })), 6);
 
-        // Empty binary → "" → 0 bytes.
+        // Empty binary -> "" -> 0 bytes.
         assert_eq!(dynamo_size(&json!({ "B": "" })), 0);
     }
 
     #[test]
     fn size_of_malformed_binary_falls_back_to_decode() {
-        // Length not a multiple of 4 — decode-or-zero path.
+        // Length not a multiple of 4. Decode-or-zero path.
         assert_eq!(dynamo_size(&json!({ "B": "abc" })), 0);
     }
 
@@ -525,9 +525,9 @@ mod tests {
     fn get_nested_rejects_malformed_bracket_syntax() {
         let mut item = DynamoItem::new();
         item.insert("tags".into(), json!({ "L": [ {"S": "a"} ] }));
-        // No closing bracket → unparseable.
+        // No closing bracket -> unparseable.
         assert!(get_nested(&item, "tags[0").is_none());
-        // Non-numeric index → unparseable.
+        // Non-numeric index -> unparseable.
         assert!(get_nested(&item, "tags[a]").is_none());
     }
 }

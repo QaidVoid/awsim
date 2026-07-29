@@ -1,4 +1,4 @@
-//! `awsim snapshot` — list / save / load / delete named state
+//! `awsim snapshot`. List / save / load / delete named state
 //! snapshots on a running awsim instance.
 
 use anyhow::{Context, Result, bail};

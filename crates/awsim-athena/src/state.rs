@@ -98,17 +98,17 @@ pub struct PreparedStatement {
 /// Per-account/region Athena state.
 #[derive(Debug, Default)]
 pub struct AthenaState {
-    /// WorkGroup name → WorkGroup
+    /// WorkGroup name -> WorkGroup
     pub workgroups: DashMap<String, WorkGroup>,
-    /// QueryExecutionId → QueryExecution
+    /// QueryExecutionId -> QueryExecution
     pub query_executions: DashMap<String, QueryExecution>,
-    /// NamedQueryId → NamedQuery
+    /// NamedQueryId -> NamedQuery
     pub named_queries: DashMap<String, NamedQuery>,
-    /// CatalogName → DataCatalog
+    /// CatalogName -> DataCatalog
     pub data_catalogs: DashMap<String, DataCatalog>,
-    /// "{workgroup}/{statement_name}" → PreparedStatement
+    /// "{workgroup}/{statement_name}" -> PreparedStatement
     pub prepared_statements: DashMap<String, PreparedStatement>,
-    /// Resource ARN → tag key/value map
+    /// Resource ARN -> tag key/value map
     pub resource_tags: DashMap<String, HashMap<String, String>>,
     /// `StartQueryExecution.ClientRequestToken` cache. A replay with
     /// the same args returns the prior `QueryExecutionId` byte-for-byte;

@@ -4,7 +4,7 @@
 //! gateway detects them via Content-Type and routes through the Query
 //! parser before handing the JSON-shaped input to the SQS handler.
 //!
-//! This test exercises the same `parse_request` → `handle` →
+//! This test exercises the same `parse_request` -> `handle` ->
 //! `serialize_response` chain the gateway uses, so a regression in
 //! either the parser or the encoder shows up here without needing to
 //! spin up the full HTTP stack.

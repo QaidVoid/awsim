@@ -1,4 +1,4 @@
-//! Meta Llama format ↔ OpenAI chat.completions translator.
+//! Meta Llama format <-> OpenAI chat.completions translator.
 //!
 //! Llama request body:
 //! ```text

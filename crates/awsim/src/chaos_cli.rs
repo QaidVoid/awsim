@@ -1,4 +1,4 @@
-//! `awsim chaos` — manage rules on a running awsim instance.
+//! `awsim chaos`. Manage rules on a running awsim instance.
 
 use anyhow::{Context, Result, bail};
 use awsim_chaos::{
@@ -68,7 +68,7 @@ fn parse_effect(error: Option<&str>, latency: Option<&str>) -> Result<ChaosEffec
     }
 }
 
-/// `STATUS,CODE[,MESSAGE]` — e.g. `503,SlowDown,please retry`.
+/// `STATUS,CODE[,MESSAGE]`. E.g. `503,SlowDown,please retry`.
 fn parse_error(spec: &str) -> Result<ErrorEffect> {
     let mut parts = spec.splitn(3, ',');
     let status_str = parts
@@ -95,7 +95,7 @@ fn parse_error(spec: &str) -> Result<ErrorEffect> {
     })
 }
 
-/// `MIN-MAX` or `MS` — e.g. `100-500` for a range, `200` for fixed.
+/// `MIN-MAX` or `MS`. E.g. `100-500` for a range, `200` for fixed.
 fn parse_latency(spec: &str) -> Result<LatencyEffect> {
     if let Some((min, max)) = spec.split_once('-') {
         let min_ms: u64 = min
@@ -152,7 +152,7 @@ fn build_schedule(
     Ok(Some(ChaosSchedule { window, flap }))
 }
 
-/// `ACTIVE/PERIOD` in seconds — e.g. `30/60` = on 30s of every 60s.
+/// `ACTIVE/PERIOD` in seconds. E.g. `30/60` = on 30s of every 60s.
 fn parse_flap(spec: &str) -> Result<(u64, u64)> {
     let (active, period) = spec
         .split_once('/')
@@ -225,7 +225,7 @@ async fn list(client: &reqwest::Client, endpoint: &str, as_json: bool) -> Result
             OperationMatch::Exact(s) => s.clone(),
         };
         let effect_str = describe_effect(&r.effect);
-        let enabled = if r.enabled { " " } else { "✗" };
+        let enabled = if r.enabled { " " } else { "x" };
         println!(
             "  {enabled} {id}  {svc}/{op}  p={p:.2}  {effect_str}  fired={count}",
             id = &r.id[..r.id.len().min(8)],
@@ -233,18 +233,18 @@ async fn list(client: &reqwest::Client, endpoint: &str, as_json: bool) -> Result
             count = r.injection_count,
         );
         if let Some(label) = &r.label {
-            println!("       └ {label}");
+            println!("       - {label}");
         }
         if let Some(sched) = &r.schedule
             && let Some(desc) = describe_schedule(sched)
         {
-            println!("       ⏱ {desc}");
+            println!("       [t] {desc}");
         }
     }
     Ok(())
 }
 
-/// Human-readable schedule summary — relative to now, since absolute
+/// Human-readable schedule summary. Relative to now, since absolute
 /// timestamps are noise to a human running the CLI. Returns `None`
 /// when the schedule is empty (no window, no flap).
 fn describe_schedule(s: &ChaosSchedule) -> Option<String> {
@@ -258,7 +258,7 @@ fn describe_schedule(s: &ChaosSchedule) -> Option<String> {
             (Some(start), Some(end)) => {
                 let from = signed_delta(start, now);
                 let to = signed_delta(end, now);
-                parts.push(format!("window {from} → {to}"));
+                parts.push(format!("window {from} -> {to}"));
             }
             (Some(start), None) => {
                 parts.push(format!("starts {}", signed_delta(start, now)));

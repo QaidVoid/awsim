@@ -1,4 +1,4 @@
-//! Amazon Titan Embed format ↔ OpenAI /v1/embeddings translator.
+//! Amazon Titan Embed format <-> OpenAI /v1/embeddings translator.
 //!
 //! Titan Embed request body:
 //! ```text

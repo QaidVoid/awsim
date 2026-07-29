@@ -680,7 +680,7 @@ pub async fn test_s3(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         verbose
     ));
 
-    // PutBucketReplication (requires versioning enabled — already enabled above)
+    // PutBucketReplication (requires versioning enabled. Already enabled above)
     results.push(chk!(
         "PutBucketReplication",
         client

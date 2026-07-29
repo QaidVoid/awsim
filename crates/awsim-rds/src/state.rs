@@ -2,26 +2,26 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// RDS state — per account+region.
+/// RDS state. Per account+region.
 #[derive(Debug, Default)]
 pub struct RdsState {
     pub instances: DashMap<String, DbInstance>,
     pub clusters: DashMap<String, DbCluster>,
     pub subnet_groups: DashMap<String, DbSubnetGroup>,
     pub parameter_groups: DashMap<String, DbParameterGroup>,
-    /// cluster parameter group name → DbClusterParameterGroup
+    /// cluster parameter group name -> DbClusterParameterGroup
     pub cluster_parameter_groups: DashMap<String, DbClusterParameterGroup>,
-    /// ARN → tags
+    /// ARN -> tags
     pub tags: DashMap<String, HashMap<String, String>>,
-    /// snapshot identifier → DbSnapshot
+    /// snapshot identifier -> DbSnapshot
     pub snapshots: DashMap<String, DbSnapshot>,
-    /// cluster snapshot identifier → DbClusterSnapshot
+    /// cluster snapshot identifier -> DbClusterSnapshot
     pub cluster_snapshots: DashMap<String, DbClusterSnapshot>,
-    /// cluster identifier → Vec<DbClusterEndpoint>
+    /// cluster identifier -> Vec<DbClusterEndpoint>
     pub cluster_endpoints: DashMap<String, Vec<DbClusterEndpoint>>,
-    /// (engine, version) → DbCustomEngineVersion
+    /// (engine, version) -> DbCustomEngineVersion
     pub custom_engine_versions: DashMap<(String, String), DbCustomEngineVersion>,
-    /// `GlobalClusterIdentifier` → `DbGlobalCluster`. Aurora global
+    /// `GlobalClusterIdentifier` -> `DbGlobalCluster`. Aurora global
     /// clusters span regions, so the store lives in every region's
     /// state and the cluster's `members[]` carries each member's
     /// region. AWS clients always reach the global control plane
@@ -57,13 +57,13 @@ pub struct RdsStateSnapshot {
 pub struct DbGlobalClusterMember {
     pub db_cluster_arn: String,
     pub region: String,
-    /// `primary` or `secondary` — AWS exposes this via the
+    /// `primary` or `secondary`. AWS exposes this via the
     /// `IsWriter` boolean on `GlobalClusterMember.IsWriter`.
     pub role: String,
 }
 
 /// An Aurora global cluster. AWS exposes it as `arn:aws:rds::<acc>:
-/// global-cluster:<id>` (note the empty region segment — global
+/// global-cluster:<id>` (note the empty region segment. Global
 /// clusters are accountregion-scoped).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DbGlobalCluster {
@@ -129,7 +129,7 @@ pub struct DbInstance {
     /// Provisioned storage throughput in MiB/s. Only valid on `gp3`.
     #[serde(default)]
     pub storage_throughput: Option<u32>,
-    /// AWS license model — one of `general-public-license`,
+    /// AWS license model. One of `general-public-license`,
     /// `license-included`, `bring-your-own-license`. Allowed values
     /// depend on the engine.
     #[serde(default)]

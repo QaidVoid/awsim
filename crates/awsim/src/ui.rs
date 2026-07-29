@@ -10,7 +10,7 @@
 //! without us pre-enumerating every parameter.
 //!
 //! When the workspace is built without the UI compiled (`ui/build/` empty
-//! — common for cargo-only contributors), the embed has no `200.html` and
+//!. Common for cargo-only contributors), the embed has no `200.html` and
 //! every route returns a short "UI not built" hint with build instructions.
 
 use axum::body::Body;
@@ -86,7 +86,7 @@ fn has_aws_auth(headers: &HeaderMap) -> bool {
         && let Ok(s) = value.to_str()
     {
         // SigV4 starts with `AWS4-HMAC-SHA256`. Pre-signed URLs put the
-        // signature in the query string instead of a header — those
+        // signature in the query string instead of a header. Those
         // never carry an Authorization, so the query-string presence
         // is checked separately below.
         return s.starts_with("AWS4-");
@@ -113,7 +113,7 @@ async fn serve_index() -> Response {
 async fn serve_path(Path(path): Path<String>) -> Response {
     // Try the literal asset first (e.g. `_app/immutable/start.js`,
     // `seed/index.html`). If it's not present, fall back to the SPA
-    // shell so client-side routing can take over — same behavior as a
+    // shell so client-side routing can take over. Same behavior as a
     // typical SvelteKit static-host setup (Netlify, Cloudflare Pages).
     if let Some(file) = UiAssets::get(&path) {
         return file_response(&path, file);

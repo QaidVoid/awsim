@@ -345,7 +345,7 @@ pub fn list_exports(
     Ok(json!({ "ExportSummaries": summaries }))
 }
 
-// ─── Import ───────────────────────────────────────────────────────────────────
+// --- Import -------------------------------------------------------------------
 
 /// DescribeImport reports the stored import, including item counts and
 /// any failure recorded while reading from S3.

@@ -132,15 +132,15 @@ pub struct InsightsQuery {
 /// Per-account/region CloudWatch Logs state.
 #[derive(Debug, Default)]
 pub struct LogsState {
-    /// logGroupName → LogGroup
+    /// logGroupName -> LogGroup
     pub log_groups: DashMap<String, LogGroup>,
-    /// (logGroupName, filterName) → SubscriptionFilter
+    /// (logGroupName, filterName) -> SubscriptionFilter
     pub subscription_filters: DashMap<(String, String), SubscriptionFilter>,
-    /// (logGroupName, filterName) → MetricFilter
+    /// (logGroupName, filterName) -> MetricFilter
     pub metric_filters: DashMap<(String, String), MetricFilter>,
-    /// queryDefinitionId → QueryDefinition
+    /// queryDefinitionId -> QueryDefinition
     pub query_definitions: DashMap<String, QueryDefinition>,
-    /// queryId → InsightsQuery
+    /// queryId -> InsightsQuery
     pub insights_queries: DashMap<String, InsightsQuery>,
     pub body_store: OnceLock<Arc<BodyStore>>,
     /// Shared SQLite store backing all log events. Set by the

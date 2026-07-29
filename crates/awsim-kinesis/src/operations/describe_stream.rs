@@ -30,8 +30,8 @@ pub fn handle(
     // AWS caps Limit at 10_000 (default 100) and paginates by
     // ExclusiveStartShardId. Closed shards (those with an
     // EndingSequenceNumber set) are surfaced just like open shards,
-    // since DescribeStream is the legacy "give me everything" API —
-    // callers filter with ListShards.ShardFilter when they only want
+    // since DescribeStream is the legacy "give me everything" API.
+    // Callers filter with ListShards.ShardFilter when they only want
     // open shards.
     let limit = match input["Limit"].as_i64() {
         Some(n) if !(1..=10_000).contains(&n) => {
@@ -138,7 +138,7 @@ mod tests {
         let state = KinesisState::default();
         stream_with_shards(&state, "s", 5);
 
-        // First page: limit 2 → has_more=true, returns first 2 shards.
+        // First page: limit 2 -> has_more=true, returns first 2 shards.
         let resp = handle(&state, &json!({ "StreamName": "s", "Limit": 2 }), &ctx()).unwrap();
         assert_eq!(resp["StreamDescription"]["HasMoreShards"], json!(true));
         let shards = resp["StreamDescription"]["Shards"].as_array().unwrap();

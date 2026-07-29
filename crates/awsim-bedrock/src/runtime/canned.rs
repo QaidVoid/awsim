@@ -81,7 +81,7 @@ pub fn converse(input: &Value) -> Result<Value, AwsError> {
     }))
 }
 
-/// InvokeModelWithResponseStream — single-chunk mock wrapped in the
+/// InvokeModelWithResponseStream. Single-chunk mock wrapped in the
 /// AWS event-stream marker so the protocol layer emits proper binary
 /// frames. SDKs that decode the stream see exactly one `chunk` event
 /// containing the full mock response.
@@ -96,7 +96,7 @@ pub fn invoke_model_with_response_stream(input: &Value) -> Result<Value, AwsErro
     Ok(super::stream_envelope(vec![body]))
 }
 
-/// ConverseStream — mock streaming response wrapped in the AWS
+/// ConverseStream. Mock streaming response wrapped in the AWS
 /// event-stream marker. Emits the same sequence (`messageStart`,
 /// `contentBlockDelta`, `contentBlockStop`, `messageStop`,
 /// `metadata`) the live translator emits.

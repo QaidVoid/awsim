@@ -25,7 +25,7 @@ pub struct ItemKeys {
 
 /// Compute the storage key + every GSI key column for `item` against
 /// `table`'s key schema. Returns `None` when the hash key (or required
-/// range key) is missing or non-scalar — the caller should surface
+/// range key) is missing or non-scalar. The caller should surface
 /// that as a validation error to the SDK.
 pub fn extract_item_keys(table: &Table, item: &DynamoItem) -> Option<ItemKeys> {
     let pk = key_value(&table.key_schema, item, "HASH")?;
@@ -149,7 +149,7 @@ pub fn item_to_storage_value(item: &DynamoItem) -> Value {
     Value::Object(map)
 }
 
-/// Inverse of `item_to_storage_value` — turn a `serde_json::Value`
+/// Inverse of `item_to_storage_value`. Turn a `serde_json::Value`
 /// pulled out of `attrs_json` back into a `DynamoItem`.
 pub fn storage_value_to_item(val: Value) -> Option<DynamoItem> {
     let Value::Object(map) = val else { return None };

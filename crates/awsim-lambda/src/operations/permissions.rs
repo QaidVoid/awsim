@@ -24,7 +24,7 @@ pub fn get_policy(
         .ok_or_else(|| resource_not_found("function", name))?;
 
     if func.policy_statements.is_empty() {
-        // No policy — real Lambda returns 404 here; we do too.
+        // No policy. Real Lambda returns 404 here; we do too.
         return Err(AwsError::not_found(
             "ResourceNotFoundException",
             format!("No policy is associated with function: {name}"),
@@ -84,10 +84,10 @@ pub fn add_permission(
     }
 
     // Principal shape mirrors AWS conventions:
-    //   * "*"                              → "Principal": "*"          (any caller)
-    //   * 12-digit account                 → "Principal": { "AWS": "arn:aws:iam::{acct}:root" }
-    //   * arn:aws:iam::*                   → "Principal": { "AWS": "<arn>" }
-    //   * everything else (e.g.            → "Principal": { "Service": "<value>" }
+    //   * "*"                              -> "Principal": "*"          (any caller)
+    //   * 12-digit account                 -> "Principal": { "AWS": "arn:aws:iam::{acct}:root" }
+    //   * arn:aws:iam::*                   -> "Principal": { "AWS": "<arn>" }
+    //   * everything else (e.g.            -> "Principal": { "Service": "<value>" }
     //     "lambda.amazonaws.com")
     // Wrapping every value as {Service:...} as we did before produced
     // policy documents that real IAM evaluation logic rejects for cross-

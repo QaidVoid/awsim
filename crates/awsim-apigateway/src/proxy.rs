@@ -1,4 +1,4 @@
-//! API Gateway proxy routing — matches incoming HTTP requests to Lambda integrations.
+//! API Gateway proxy routing. Matches incoming HTTP requests to Lambda integrations.
 //!
 //! When a request arrives at `/restapis/{api_id}/{stage}/{*path}`, this module:
 //! 1. Looks up the API by api_id.
@@ -258,7 +258,7 @@ fn extract_integration_id(target: &str) -> Option<String> {
 }
 
 /// Simple path pattern matching supporting `{param}` placeholders.
-/// Does NOT support greedy `{param+}` — add if needed.
+/// Does NOT support greedy `{param+}`. Add if needed.
 fn path_matches(pattern: &str, path: &str) -> bool {
     let pattern_parts: Vec<&str> = pattern.split('/').collect();
     let path_parts: Vec<&str> = path.split('/').collect();
@@ -269,7 +269,7 @@ fn path_matches(pattern: &str, path: &str) -> bool {
 
     for (pat, actual) in pattern_parts.iter().zip(path_parts.iter()) {
         if pat.starts_with('{') && pat.ends_with('}') {
-            // Path parameter — always matches
+            // Path parameter. Always matches
             continue;
         }
         if !pat.eq_ignore_ascii_case(actual) {

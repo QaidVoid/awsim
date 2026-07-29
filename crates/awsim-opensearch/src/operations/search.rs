@@ -19,7 +19,7 @@ use crate::state::OpenSearchState;
 /// - `ids` queries
 /// - `query_string` queries
 /// - `knn` queries (brute-force cosine similarity over a numeric
-///   vector field — no ANN index, but correct enough for emulator
+///   vector field. No ANN index, but correct enough for emulator
 ///   workloads up to a few thousand vectors)
 pub fn search(state: &OpenSearchState, index_pattern: &str, body: &Value) -> (u16, Value) {
     let size = body["size"].as_u64().unwrap_or(10) as usize;
@@ -1023,8 +1023,8 @@ mod tests {
         assert_eq!(hits[0]["_id"], "a");
         assert_eq!(hits[1]["_id"], "b");
         assert_eq!(hits[2]["_id"], "c");
-        // Identical vector → cosine = 1.0 → score = 1.0
+        // Identical vector -> cosine = 1.0 -> score = 1.0
         let top = hits[0]["_score"].as_f64().unwrap();
-        assert!((top - 1.0).abs() < 1e-9, "top score {} ≠ 1.0", top);
+        assert!((top - 1.0).abs() < 1e-9, "top score {} != 1.0", top);
     }
 }

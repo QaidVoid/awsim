@@ -75,7 +75,7 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
         .unwrap_or_else(|| queue.visibility_timeout_secs());
 
     // Determine which attributes the caller wants. Per the SQS spec, omitting
-    // AttributeNames / MessageAttributeNames returns no attributes — only an
+    // AttributeNames / MessageAttributeNames returns no attributes. Only an
     // explicit ["All"] expands to every attribute.
     //
     // The 2019 API revision deprecated AttributeNames in favor of
@@ -111,7 +111,7 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
             continue;
         }
 
-        // Check if this message has exceeded maxReceiveCount — route to DLQ
+        // Check if this message has exceeded maxReceiveCount. Route to DLQ
         if let Some(ref rp) = redrive_policy
             && msg.receive_count >= rp.max_receive_count
         {
@@ -152,8 +152,8 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
 
             // Update derived system attributes BEFORE collecting them for
             // the response so the caller sees the post-receive values:
-            //   ApproximateReceiveCount — incremented every receive
-            //   ApproximateFirstReceiveTimestamp — set once on first receive
+            //   ApproximateReceiveCount. Incremented every receive
+            //   ApproximateFirstReceiveTimestamp. Set once on first receive
             msg.attributes.insert(
                 "ApproximateReceiveCount".to_string(),
                 msg.receive_count.to_string(),
@@ -205,7 +205,7 @@ pub fn handle(state: &SqsState, input: &Value, _ctx: &RequestContext) -> Result<
             });
 
             // Always derive MD5OfMessageAttributes from the full attribute
-            // set on the stored message — AWS sends it whenever the message
+            // set on the stored message. AWS sends it whenever the message
             // has any attributes, regardless of whether the caller asked
             // for them with MessageAttributeNames.
             if let Some(attr_md5) = md5_of_message_attributes(&msg.message_attributes) {

@@ -30,7 +30,7 @@ impl PersistenceManager {
         let tmp_path = dir.join(format!("{service_name}.json.tmp"));
         // Write to temp file first
         std::fs::write(&tmp_path, data)?;
-        // Atomic rename — either the old file remains or the new one replaces it
+        // Atomic rename. Either the old file remains or the new one replaces it
         std::fs::rename(&tmp_path, &path)?;
         info!(service = service_name, path = %path.display(), "Saved snapshot");
         Ok(())

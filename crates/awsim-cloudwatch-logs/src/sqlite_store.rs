@@ -1,6 +1,6 @@
 //! SQLite-backed log-event storage. The previous in-memory `Vec<LogEvent>`
 //! per stream had no retention enforcement and triggered an O(n log n)
-//! sort on every `PutLogEvents` — fine for a smoke test, deadly under
+//! sort on every `PutLogEvents`. Fine for a smoke test, deadly under
 //! any sustained logging workload.
 //!
 //! Layout: a single `log_events` table partitioned by (account, region,
@@ -26,8 +26,8 @@ const WAL_AUTOCHECKPOINT_PAGES: i64 = 256;
 type Pool = r2d2::Pool<SqliteConnectionManager>;
 type Conn = PooledConnection<SqliteConnectionManager>;
 
-/// SQLite-backed store for CloudWatch Logs events. Cheap to clone —
-/// internals are an Arc'd r2d2 pool.
+/// SQLite-backed store for CloudWatch Logs events. Cheap to clone.
+/// Internals are an Arc'd r2d2 pool.
 #[derive(Clone, Debug)]
 pub struct SqliteStore {
     inner: Arc<Inner>,
@@ -119,7 +119,7 @@ impl SqliteStore {
     }
 
     /// Range-query log events for a single stream. `start` / `end` in ms.
-    /// Pagination via (timestamp, rowid) tuple → caller passes the
+    /// Pagination via (timestamp, rowid) tuple -> caller passes the
     /// last-seen rowid as `after_rowid` to resume.
     #[allow(clippy::too_many_arguments)]
     pub fn get_events(
@@ -172,7 +172,7 @@ impl SqliteStore {
         out.map_err(sqlite_err)
     }
 
-    /// Total event count for a single stream — used to compute
+    /// Total event count for a single stream. Used to compute
     /// pagination tokens that mirror the legacy index-based ones.
     pub fn count_events(
         &self,
@@ -277,7 +277,7 @@ impl SqliteStore {
         out.map_err(sqlite_err)
     }
 
-    /// First / last event timestamps for a stream — used to populate
+    /// First / last event timestamps for a stream. Used to populate
     /// the `firstEventTimestamp` / `lastEventTimestamp` fields on
     /// DescribeLogStreams. Returns `(None, None)` when the stream is
     /// empty.
@@ -323,7 +323,7 @@ impl SqliteStore {
         Ok(n)
     }
 
-    /// Delete every event for a stream — used when DeleteLogStream
+    /// Delete every event for a stream. Used when DeleteLogStream
     /// fires. Cheap: indexed lookup + bulk delete.
     pub fn delete_stream(
         &self,
@@ -343,7 +343,7 @@ impl SqliteStore {
         Ok(n)
     }
 
-    /// Delete every event for a log group — used by DeleteLogGroup.
+    /// Delete every event for a log group. Used by DeleteLogGroup.
     pub fn delete_group(
         &self,
         account: &str,
@@ -404,7 +404,7 @@ fn apply_pragmas(conn: &mut rusqlite::Connection) -> Result<(), rusqlite::Error>
     Ok(())
 }
 
-/// Naïve quoted literal for substring matching. Wraps the user
+/// Naive quoted literal for substring matching. Wraps the user
 /// string in single quotes and escapes embedded quotes. We can't
 /// bind the LIKE pattern as a parameter directly because we want
 /// to control the wildcards.

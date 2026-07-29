@@ -928,7 +928,7 @@ mod tests {
             let pick = pick_weighted_target_group(&cfg, i).unwrap();
             *counts.entry(pick).or_insert(0u64) += 1;
         }
-        // 4:1 split over 16 picks → tg-a=4, tg-b=12
+        // 4:1 split over 16 picks -> tg-a=4, tg-b=12
         assert_eq!(counts["tg-a"], 4);
         assert_eq!(counts["tg-b"], 12);
     }

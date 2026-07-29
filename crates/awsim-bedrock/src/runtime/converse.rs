@@ -1,4 +1,4 @@
-//! Bedrock Converse / ConverseStream — the unified cross-model
+//! Bedrock Converse / ConverseStream. The unified cross-model
 //! API. Same request / response shape for every vendor, so there's
 //! a single translator that maps to OpenAI chat.completions.
 //!
@@ -16,7 +16,7 @@
 //!                            "content":[{"text":"..."}] } },
 //!   "stopReason": "end_turn"|"max_tokens"|"stop_sequence"|"tool_use",
 //!   "usage": { "inputTokens":N, "outputTokens":M, "totalTokens":NM },
-//!   "metrics": { "latencyMs":… } }
+//!   "metrics": { "latencyMs":... } }
 //! ```
 
 use awsim_core::AwsError;

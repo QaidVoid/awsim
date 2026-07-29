@@ -1,7 +1,7 @@
 //! Velocity Template Language (VTL) renderer for API Gateway request and
 //! response template mapping.
 //!
-//! Scope is intentionally tight — handles the interpolation patterns that
+//! Scope is intentionally tight. Handles the interpolation patterns that
 //! actually appear in real AWS templates, not full VTL semantics. Specifically:
 //!
 //!   * `$input.body`, `$input.json('$.path')`, `$input.path('$.path')`,
@@ -15,7 +15,7 @@
 //! start with `#` (after optional whitespace) are dropped.
 //!
 //! JSONPath support is limited to dot-accessed object fields and bracket
-//! indices — `$`, `$.a.b`, `$.a[0].b`. Filter expressions are not supported.
+//! indices. `$`, `$.a.b`, `$.a[0].b`. Filter expressions are not supported.
 
 use std::collections::HashMap;
 

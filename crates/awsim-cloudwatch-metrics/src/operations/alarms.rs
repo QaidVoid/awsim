@@ -338,7 +338,7 @@ fn dimensions_match(alarm_dims: &[Dimension], datum_dims: &[Dimension]) -> bool 
     })
 }
 
-/// `datums` is `&[&(value, dimensions, timestamp_string)]` — the
+/// `datums` is `&[&(value, dimensions, timestamp_string)]`. The
 /// shape returned by `metrics::datapoints_for_alarm`.
 fn aggregate(statistic: &str, datums: &[&(f64, Vec<Dimension>, String)]) -> f64 {
     if datums.is_empty() {
@@ -350,7 +350,7 @@ fn aggregate(statistic: &str, datums: &[&(f64, Vec<Dimension>, String)]) -> f64 
         "Minimum" => values.fold(f64::INFINITY, f64::min),
         "Maximum" => values.fold(f64::NEG_INFINITY, f64::max),
         "SampleCount" => datums.len() as f64,
-        // Average — and the sensible default when an unknown statistic
+        // Average, and the sensible default when an unknown statistic
         // arrives. Real CloudWatch validates the field at PutMetricAlarm
         // but we accept anything for simulator ergonomics.
         _ => values.sum::<f64>() / datums.len() as f64,
@@ -411,7 +411,7 @@ mod tests {
             &ctx(),
         )
         .unwrap();
-        // No data yet — INSUFFICIENT_DATA.
+        // No data yet. INSUFFICIENT_DATA.
         assert_eq!(alarm_state(&state, "high-cpu"), "INSUFFICIENT_DATA");
 
         // Drive a high value through PutMetricData; the on-write evaluator
@@ -427,7 +427,7 @@ mod tests {
         .unwrap();
         assert_eq!(alarm_state(&state, "high-cpu"), "ALARM");
 
-        // Two low samples — Average drops below threshold and the alarm
+        // Two low samples. Average drops below threshold and the alarm
         // recovers to OK.
         crate::operations::metrics::put_metric_data(
             &state,
@@ -441,7 +441,7 @@ mod tests {
             &ctx(),
         )
         .unwrap();
-        // Three points total: 92.5, 5.0, 8.0 — avg ~35, below 50.
+        // Three points total: 92.5, 5.0, 8.0. Avg ~35, below 50.
         assert_eq!(alarm_state(&state, "high-cpu"), "OK");
     }
 

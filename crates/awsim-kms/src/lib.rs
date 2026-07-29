@@ -506,7 +506,7 @@ mod tests {
         ))
         .unwrap();
 
-        // Alias ARN form — must resolve through resolve_key_id even though
+        // Alias ARN form. Must resolve through resolve_key_id even though
         // the prefix `arn:aws:kms:` is shared with key ARNs.
         let alias_arn = "arn:aws:kms:us-east-1:000000000000:alias/my-key";
         let resp = block_on(svc.handle(
@@ -583,7 +583,7 @@ mod tests {
         .unwrap();
         let ciphertext = encrypted["CiphertextBlob"].as_str().unwrap();
 
-        // Same context → succeeds.
+        // Same context -> succeeds.
         let ok = block_on(svc.handle(
             "Decrypt",
             json!({ "CiphertextBlob": ciphertext, "EncryptionContext": ec }),
@@ -593,7 +593,7 @@ mod tests {
         let pt = BASE64.decode(ok["Plaintext"].as_str().unwrap()).unwrap();
         assert_eq!(pt, b"context-bound");
 
-        // Different context → InvalidCiphertextException via auth tag failure.
+        // Different context -> InvalidCiphertextException via auth tag failure.
         let err = block_on(svc.handle(
             "Decrypt",
             json!({
@@ -752,7 +752,7 @@ mod tests {
     fn test_generate_mac_rejects_non_mac_key_usage() {
         let svc = KmsService::new();
         let ctx = ctx();
-        // Default CreateKey uses ENCRYPT_DECRYPT — wrong for MAC.
+        // Default CreateKey uses ENCRYPT_DECRYPT. Wrong for MAC.
         let created = block_on(svc.handle("CreateKey", json!({}), &ctx)).unwrap();
         let key_id = created["KeyMetadata"]["KeyId"].as_str().unwrap();
         let err = block_on(svc.handle(
@@ -958,7 +958,7 @@ mod tests {
     fn test_delete_imported_key_material_without_import_returns_kms_invalid_state() {
         let svc = KmsService::new();
         let ctx = ctx();
-        // Default origin is AWS_KMS — there is no imported material to delete.
+        // Default origin is AWS_KMS. There is no imported material to delete.
         let created = block_on(svc.handle("CreateKey", json!({}), &ctx)).unwrap();
         let key_id = created["KeyMetadata"]["KeyId"].as_str().unwrap();
 
@@ -988,7 +988,7 @@ mod tests {
     fn test_import_key_material_rejects_aws_kms_origin_key() {
         let svc = KmsService::new();
         let ctx = ctx();
-        // Default Origin=AWS_KMS — must reject ImportKeyMaterial.
+        // Default Origin=AWS_KMS. Must reject ImportKeyMaterial.
         let created = block_on(svc.handle("CreateKey", json!({}), &ctx)).unwrap();
         let key_id = created["KeyMetadata"]["KeyId"].as_str().unwrap();
         let err = block_on(svc.handle(

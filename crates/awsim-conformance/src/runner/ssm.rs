@@ -158,7 +158,7 @@ pub async fn test_ssm(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         verbose
     ));
 
-    // GetCommandInvocation (expect service error — command on non-existent instance)
+    // GetCommandInvocation (expect service error. Command on non-existent instance)
     if let Some(ref cid) = command_id {
         results.push(chk!(
             "GetCommandInvocation",
@@ -497,7 +497,7 @@ pub async fn test_ssm(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         verbose
     ));
 
-    // DeleteParameter (may already be deleted by DeleteParameters — will get service error = pass)
+    // DeleteParameter (may already be deleted by DeleteParameters. Will get service error = pass)
     results.push(chk!(
         "DeleteParameter",
         client

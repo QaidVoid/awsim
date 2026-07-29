@@ -820,7 +820,7 @@ fn cluster_identifier_from_arn(arn: &str) -> Option<String> {
     let suffix = arn.strip_prefix("arn:")?;
     let parts: Vec<&str> = suffix.split(':').collect();
     if parts.len() < 6 {
-        // Allow bare identifiers too — Aurora APIs accept either form.
+        // Allow bare identifiers too. Aurora APIs accept either form.
         return Some(arn.to_string());
     }
     if parts[4] != "cluster" {
@@ -973,7 +973,7 @@ pub fn delete_global_cluster(
 
 /// Detach a member cluster from the global cluster. The primary
 /// member can be removed but only if it is the last member (matches
-/// AWS — removing the writer while secondaries exist leaves an
+/// AWS. Removing the writer while secondaries exist leaves an
 /// orphaned read-only fleet).
 pub fn remove_from_global_cluster(
     state: &RdsState,

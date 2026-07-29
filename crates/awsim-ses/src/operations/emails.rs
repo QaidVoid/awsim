@@ -79,8 +79,8 @@ pub(crate) fn emit_send_events(
     }
 }
 
-/// Returns an error when the recipient is opted out — either globally
-/// via `UnsubscribeAll`, or for the named topic via a `TopicPreferences`
+/// Returns an error when the recipient is opted out, either globally
+/// via `UnsubscribeAll` or for the named topic via a `TopicPreferences`
 /// entry whose `SubscriptionStatus` is `OPT_OUT`. Recipients with no
 /// contact record default to opted-in.
 fn check_topic_subscription(
@@ -151,7 +151,7 @@ fn value_to_plain(v: &Value) -> String {
     }
 }
 
-/// SendTemplatedEmail (SES v1) — render a stored template against
+/// SendTemplatedEmail (SES v1). Render a stored template against
 /// TemplateData and send to the recipients. Honors Cc/Bcc/ReplyTo +
 /// ConfigurationSetName + Tags so the persisted row carries the same
 /// metadata as SendEmail. Accepts v1 (`Source`) and v2
@@ -232,7 +232,7 @@ pub fn send_templated_email(
     Ok(json!({ "MessageId": message_id }))
 }
 
-/// SendBulkTemplatedEmail (SES v1) — render a single template to many
+/// SendBulkTemplatedEmail (SES v1). Render a single template to many
 /// destinations. Each `Destinations[]` entry can carry its own
 /// `ReplacementTemplateData` that overrides the request-level
 /// `DefaultTemplateData`. The response surfaces a per-destination
@@ -363,7 +363,7 @@ fn merge_template_data(default: &Value, replacement: &Value) -> Value {
     Value::Object(out)
 }
 
-/// SendRawEmail (SES v1) — accept an RFC 2822 message and route it.
+/// SendRawEmail (SES v1). Accept an RFC 2822 message and route it.
 /// Parses the raw MIME headers to pull out subject + recipients when
 /// the caller doesn't supply Destinations explicitly, and persists
 /// ConfigurationSetName / Tags from the request. `Source` falls back to
@@ -388,7 +388,7 @@ pub fn send_raw_email(
         .map(str::to_string)
         .or_else(|| {
             // Strip the optional display-name wrapper when pulling From
-            // from the parsed message ("Alice <alice@example.com>" →
+            // from the parsed message ("Alice <alice@example.com>" ->
             // "alice@example.com").
             headers
                 .get("from")
@@ -776,7 +776,7 @@ pub fn send_email(
 
     enforce_configuration_set(state, configuration_set_name.as_deref(), input)?;
 
-    // Content — Simple, Raw, or Templated. The Templated branch loads
+    // Content. Simple, Raw, or Templated. The Templated branch loads
     // the named template, parses the TemplateData JSON string, and
     // expands `{{var}}` placeholders within each part. AWS SES is
     // Handlebars-compatible; we cover the common substitution case.

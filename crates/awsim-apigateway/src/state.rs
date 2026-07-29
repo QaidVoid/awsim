@@ -2,7 +2,7 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Top-level API Gateway state — shared across all accounts/regions
+/// Top-level API Gateway state. Shared across all accounts/regions
 /// (API Gateway v2 uses a single global namespace per region in real AWS,
 /// but we store it in the AccountRegionStore pattern for consistency).
 #[derive(Debug, Default, Serialize, Deserialize)]

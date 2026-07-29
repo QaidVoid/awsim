@@ -10,7 +10,7 @@
 //!     bucket priced at the service's default request rate (or zero if none).
 //!   * Storage / GB-month dimensions aren't sampled in the request stream;
 //!     they need a separate poll over service state and aren't yet wired.
-//!   * Region is locked to us-east-1 — AWSim doesn't model multi-region
+//!   * Region is locked to us-east-1. AWSim doesn't model multi-region
 //!     billing.
 
 pub mod meter;

@@ -28,9 +28,9 @@ fn aws_managed_policy_name(arn: &str) -> Option<&str> {
 /// Lazily materialize an AWS-managed policy stub when first referenced.
 ///
 /// Real AWS pre-populates the entire AWS-managed catalog
-/// (AdministratorAccess, AmazonS3FullAccess, …); awsim doesn't ship the
+/// (AdministratorAccess, AmazonS3FullAccess, ...); awsim doesn't ship the
 /// catalog, but Attach* shouldn't fail just because we haven't seen the
-/// ARN before — the caller is referencing a known AWS resource. We
+/// ARN before. The caller is referencing a known AWS resource. We
 /// synthesize a placeholder policy carrying the supplied ARN so
 /// downstream Get/List/Detach all succeed.
 ///
@@ -96,7 +96,7 @@ fn build_policy_arn(partition: &str, account_id: &str, path: &str, policy_name: 
     format!("arn:{partition}:iam::{account_id}:policy{path}{policy_name}")
 }
 
-// ── Managed policy CRUD ─────────────────────────────────────────────────────
+// -- Managed policy CRUD -----------------------------------------------------
 
 pub fn create_policy(
     state: &IamState,
@@ -187,7 +187,7 @@ pub fn list_policies(state: &IamState, input: &Value) -> Result<Value, AwsError>
     use awsim_core::pagination::{cap_max_results, paginate};
 
     let path_prefix = opt_str(input, "PathPrefix").unwrap_or("/");
-    // Scope: "All", "Local", "AWS" — we only have local policies.
+    // Scope: "All", "Local", "AWS". We only have local policies.
     let _scope = opt_str(input, "Scope").unwrap_or("Local");
 
     let mut all_policies: Vec<Policy> = state
@@ -196,7 +196,7 @@ pub fn list_policies(state: &IamState, input: &Value) -> Result<Value, AwsError>
         .filter(|p| p.path.starts_with(path_prefix))
         .map(|p| p.value().clone())
         .collect();
-    // Sort by ARN — the marker key needs to be globally unique so a
+    // Sort by ARN. The marker key needs to be globally unique so a
     // duplicate policy_name (rare but possible across paths) doesn't
     // confuse pagination.
     all_policies.sort_by(|a, b| a.arn.cmp(&b.arn));
@@ -217,7 +217,7 @@ pub fn list_policies(state: &IamState, input: &Value) -> Result<Value, AwsError>
     Ok(result)
 }
 
-// ── Attach / detach managed policies ────────────────────────────────────────
+// -- Attach / detach managed policies ----------------------------------------
 
 pub fn attach_user_policy(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let user_name = require_str(input, "UserName")?;
@@ -387,7 +387,7 @@ pub fn detach_group_policy(state: &IamState, input: &Value) -> Result<Value, Aws
     Ok(json!({}))
 }
 
-// ── Policy versions ──────────────────────────────────────────────────────────
+// -- Policy versions ----------------------------------------------------------
 
 fn version_to_value(v: &PolicyVersion) -> Value {
     json!({
@@ -560,7 +560,7 @@ pub fn set_default_policy_version(state: &IamState, input: &Value) -> Result<Val
     Ok(json!({}))
 }
 
-// ── List attached policies ────────────────────────────────────────────────────
+// -- List attached policies ----------------------------------------------------
 
 pub fn list_attached_user_policies(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let user_name = require_str(input, "UserName")?;
@@ -649,7 +649,7 @@ pub fn list_attached_group_policies(state: &IamState, input: &Value) -> Result<V
     }))
 }
 
-// ── ListEntitiesForPolicy ────────────────────────────────────────────────────
+// -- ListEntitiesForPolicy ----------------------------------------------------
 
 pub fn list_entities_for_policy(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let policy_arn = require_str(input, "PolicyArn")?;
@@ -712,7 +712,7 @@ pub fn list_entities_for_policy(state: &IamState, input: &Value) -> Result<Value
     }))
 }
 
-// ── Policy tags ──────────────────────────────────────────────────────────────
+// -- Policy tags --------------------------------------------------------------
 
 pub fn tag_policy(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let policy_arn = require_str(input, "PolicyArn")?;
@@ -790,7 +790,7 @@ pub fn list_policy_tags(state: &IamState, input: &Value) -> Result<Value, AwsErr
     }))
 }
 
-// ── Inline policies ──────────────────────────────────────────────────────────
+// -- Inline policies ----------------------------------------------------------
 
 const USER_POLICY_SIZE_LIMIT: usize = 2048;
 const ROLE_POLICY_SIZE_LIMIT: usize = 10240;

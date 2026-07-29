@@ -8,7 +8,7 @@
 //! opaque SKU. For each (productFamily, usagetype) we model, we look up
 //! the matching SKU, pull its OnDemand $/USD rate and AWS-supplied
 //! description, and emit a slim file pairing those with our operation
-//! → dimension map (the one piece AWS doesn't publish: AWS describes
+//! -> dimension map (the one piece AWS doesn't publish: AWS describes
 //! "Tier1" as English text "PUT/COPY/POST/LIST requests", not as a
 //! machine-readable list of operation names).
 //!
@@ -34,7 +34,7 @@ struct ServiceConfig {
     /// CloudFront and friends bill by edge region rather than
     /// customer region, so their per-region offer files only carry
     /// origin-shield SKUs. Set this to fetch the bulk file with no
-    /// region segment instead — the matchers then need to match the
+    /// region segment instead. The matchers then need to match the
     /// region-prefixed usagetypes (US-Requests-Tier2-HTTPS, etc.).
     use_global_file: bool,
     /// Fallback per-request rate for ops not matched by any dimension.
@@ -62,7 +62,7 @@ struct ServiceConfig {
 }
 
 struct DimensionConfig {
-    /// Operations that fall under this dimension. Project knowledge —
+    /// Operations that fall under this dimension. Project knowledge.
     /// AWS doesn't publish this map.
     operations: &'static [&'static str],
     /// How to find the AWS SKU for this dimension's rate. `None` means
@@ -278,7 +278,7 @@ const SERVICES: &[ServiceConfig] = &[
         default_request_rate: 0.0,
         ingest_matcher: None,
         // DDB Standard table storage at $0.25/GB-Mo (free first 25 GB
-        // is the org-wide free tier — extract_dimension's
+        // is the org-wide free tier. Extract_dimension's
         // prefer-paid-tier logic picks the right one).
         storage_matcher: Some(DimensionMatcher {
             product_family: "Database Storage",
@@ -694,8 +694,8 @@ const SERVICES: &[ServiceConfig] = &[
             // is the headline $3.50/M rate.
             DimensionConfig {
                 // We can't tell REST from HTTP from the request event
-                // alone — both go through the gateway proxy without a
-                // protocol tag — so we charge everything at the REST
+                // alone. Both go through the gateway proxy without a
+                // protocol tag. So we charge everything at the REST
                 // rate. Slight overbill vs HTTP API, but defensible
                 // given AWSim doesn't model HTTP-vs-REST distinctly.
                 operations: &["ApiGatewayRequest", "Invoke", "ApiInvoke"],
@@ -776,7 +776,7 @@ const SERVICES: &[ServiceConfig] = &[
         dimensions: &[
             // AWS bills per state transition, not per execution. We
             // can only see StartExecution from the request event, so
-            // we charge one transition per execution — a deliberate
+            // we charge one transition per execution. A deliberate
             // underbill. Real workflows average 5-10 transitions per
             // run; future work will need to tap into the SFN engine's
             // transition events for accurate metering.
@@ -892,7 +892,7 @@ const SERVICES: &[ServiceConfig] = &[
         provisioned_wcu_matcher: None,
         dimensions: &[
             // AWS bills CloudWatch API requests at $0.01 per 1,000.
-            // PutMetricData is in the same bucket — its per-metric
+            // PutMetricData is in the same bucket. Its per-metric
             // monthly cost is point-in-time and not yet metered here.
             DimensionConfig {
                 operations: &[
@@ -1002,7 +1002,7 @@ const SERVICES: &[ServiceConfig] = &[
         provisioned_wcu_matcher: None,
         dimensions: &[
             // Provisioned-mode put-payload-units is what AWS actually
-            // bills against — one unit per 25KB rounded up. We charge
+            // bills against. One unit per 25KB rounded up. We charge
             // one unit per Put* call, which underbills records >25KB.
             DimensionConfig {
                 operations: &["PutRecord", "PutRecords"],
@@ -1052,7 +1052,7 @@ const SERVICES: &[ServiceConfig] = &[
         service: "cloudfront",
         aws_code: "AmazonCloudFront",
         // CloudFront's per-region offer file only contains origin-shield
-        // SKUs — the headline request rates are in the global bulk file
+        // SKUs. The headline request rates are in the global bulk file
         // keyed by edge-region prefix (US-, EU-, AP-, etc.).
         use_global_file: true,
         default_request_rate: 0.0,
@@ -1107,7 +1107,7 @@ const SERVICES: &[ServiceConfig] = &[
         aws_code: "AmazonKinesisFirehose",
         use_global_file: false,
         default_request_rate: 0.0,
-        // Firehose bills by GB ingested — pulled into
+        // Firehose bills by GB ingested. Pulled into
         // `data_ingest_per_gb` and applied against bytes_in.
         ingest_matcher: Some(DimensionMatcher {
             product_family: "Kinesis Firehose",
@@ -1121,8 +1121,8 @@ const SERVICES: &[ServiceConfig] = &[
         provisioned_rcu_matcher: None,
         provisioned_wcu_matcher: None,
         dimensions: &[
-            // Per-request rate is $0 — Firehose bills purely on
-            // ingested bytes — but listing PutRecord/PutRecordBatch
+            // Per-request rate is $0. Firehose bills purely on
+            // ingested bytes. But listing PutRecord/PutRecordBatch
             // here ensures the row count shows up in the dashboard.
             DimensionConfig {
                 operations: &["PutRecord", "PutRecordBatch"],
@@ -1169,7 +1169,7 @@ const SERVICES: &[ServiceConfig] = &[
             ],
         }),
         // Archived log retention: $0.03/GB-Mo. Sampled by the same
-        // poll loop as S3/Lambda — the BodyStore for the "logs"
+        // poll loop as S3/Lambda. The BodyStore for the "logs"
         // group gives current bytes.
         storage_matcher: Some(DimensionMatcher {
             product_family: "Storage Snapshot",
@@ -1234,7 +1234,7 @@ const SERVICES: &[ServiceConfig] = &[
         aws_code: "AmazonCognito",
         use_global_file: false,
         // AWS bills Cognito User Pools per active user (MAU), not per
-        // API call — and AWSim doesn't track unique principals over
+        // API call. And AWSim doesn't track unique principals over
         // time, so the MAU cost stays at zero. The API itself is free
         // at the request level. This config exists to (a) show
         // Cognito as a recognised service in the dashboard when it
@@ -1297,7 +1297,7 @@ const SERVICES: &[ServiceConfig] = &[
                     "ListTagsForResource",
                 ],
                 matcher: None,
-                fixed_description: "API requests (free — billed via MAU)",
+                fixed_description: "API requests (free. Billed via MAU)",
                 fixed_rate: 0.0,
                 metered_units: None,
             },
@@ -1373,7 +1373,7 @@ const SERVICES: &[ServiceConfig] = &[
         provisioned_rcu_matcher: None,
         provisioned_wcu_matcher: None,
         dimensions: &[
-            // Per-request rate is $0 for the ECR API — billing is
+            // Per-request rate is $0 for the ECR API. Billing is
             // entirely on stored bytes + cross-region transfer.
             DimensionConfig {
                 operations: &[
@@ -1533,7 +1533,7 @@ fn extract_dimension(doc: &PricingDoc, m: &DimensionMatcher) -> Option<(f64, Str
 
 /// AWS Outbound transfer to Internet has tiered pricing (first 100GB
 /// free, then $0.09/GB up to 10TB, etc.). AWSim shows a flat rate; we
-/// pull the lowest *paid* tier — i.e. the smallest beginRange whose
+/// pull the lowest *paid* tier. I.e. the smallest beginRange whose
 /// USD rate is > 0. Fallback $0.09/GB if no SKU matches.
 ///
 /// HashMap iteration order is non-deterministic, so we have to sort
@@ -1604,7 +1604,7 @@ async fn build_service(
         let (rate, description) = match &dim.matcher {
             Some(m) => extract_dimension(&doc, m).unwrap_or_else(|| {
                 eprintln!(
-                    "  WARN: no SKU for {}/{:?} — emitting rate 0",
+                    "  WARN: no SKU for {}/{:?}. Emitting rate 0",
                     m.product_family, m.attributes
                 );
                 (0.0, dim.fixed_description.to_string())
@@ -1628,7 +1628,7 @@ async fn build_service(
                 Some((rate, _desc)) => Some(rate),
                 None => {
                     eprintln!(
-                        "  WARN: no ingest SKU for {}/{:?} — leaving null",
+                        "  WARN: no ingest SKU for {}/{:?}. Leaving null",
                         m.product_family, m.attributes
                     );
                     None
@@ -1643,7 +1643,7 @@ async fn build_service(
                 Some((rate, _desc)) => Some(rate),
                 None => {
                     eprintln!(
-                        "  WARN: no storage SKU for {}/{:?} — leaving null",
+                        "  WARN: no storage SKU for {}/{:?}. Leaving null",
                         m.product_family, m.attributes
                     );
                     None
@@ -1658,7 +1658,7 @@ async fn build_service(
             Some((rate, _desc)) => Some(rate),
             None => {
                 eprintln!(
-                    "  WARN: no compute SKU for {}/{:?} — leaving null",
+                    "  WARN: no compute SKU for {}/{:?}. Leaving null",
                     m.product_family, m.attributes
                 );
                 None
@@ -1734,7 +1734,7 @@ async fn main() -> anyhow::Result<()> {
         let pretty = serde_json::to_string_pretty(&serde_json::to_value(&slim)?)?;
         std::fs::write(&path, format!("{pretty}\n"))?;
         eprintln!(
-            "  wrote {} — {} dimensions, ${dt_rate}/GB transfer\n",
+            "  wrote {}. {} dimensions, ${dt_rate}/GB transfer\n",
             path.file_name().unwrap().to_string_lossy(),
             slim.request_dimensions.len()
         );

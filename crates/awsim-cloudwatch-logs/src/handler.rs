@@ -27,7 +27,7 @@ impl CloudWatchLogsService {
     pub const GROUPS: &'static [&'static str] = &[];
 
     /// Ephemeral in-process store. Useful for tests and `awsim` runs
-    /// without `--data-dir` — files live in a `TempDir` cleaned up
+    /// without `--data-dir`. Files live in a `TempDir` cleaned up
     /// on shutdown.
     pub fn new() -> Self {
         let dir = tempfile::Builder::new()
@@ -70,7 +70,7 @@ impl CloudWatchLogsService {
         }
     }
 
-    /// Legacy shim — `--max-blob-bytes` used to size the body store
+    /// Legacy shim. `--max-blob-bytes` used to size the body store
     /// that backed log events. Now that events live in SQLite the
     /// flag is a no-op for CloudWatch Logs; kept on the type so the
     /// `awsim` binary's wiring doesn't have to special-case it.
@@ -88,7 +88,7 @@ impl CloudWatchLogsService {
         self._tempdir.as_ref().map(|d| d.path())
     }
 
-    /// Internal Arc to the sqlite store — exposed so the awsim
+    /// Internal Arc to the sqlite store. Exposed so the awsim
     /// binary's `/_awsim/storage/sqlite` endpoint can surface row
     /// counts + file size.
     pub fn sqlite_store_handle(&self) -> Option<Arc<SqliteStore>> {

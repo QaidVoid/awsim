@@ -31,7 +31,7 @@ mod ui;
 #[derive(Parser)]
 #[command(
     name = "awsim",
-    about = "AWSim — fully offline, free AWS development environment"
+    about = "AWSim. Fully offline, free AWS development environment"
 )]
 struct Cli {
     /// Port to listen on
@@ -125,7 +125,7 @@ struct Cli {
 
     /// Maximum concurrent in-flight HTTP requests. Requests above this cap
     /// are immediately rejected with 503 Service Unavailable instead of
-    /// queuing — so a misbehaving client (e.g. one leaking connections
+    /// queuing. So a misbehaving client (e.g. one leaking connections
     /// during a bulk import) can't accumulate work that eventually
     /// exhausts file descriptors or memory.
     #[arg(long, env = "AWSIM_MAX_CONCURRENT_REQUESTS", default_value_t = 5_000)]
@@ -199,7 +199,7 @@ struct Cli {
     bedrock_api_key: Option<String>,
 
     /// Path to a TOML file overriding the built-in Bedrock model
-    /// map. Keys are AWS-style ids (`anthropic.claude-3-5-sonnet-…`)
+    /// map. Keys are AWS-style ids (`anthropic.claude-3-5-sonnet-...`)
     /// and values are backend-side model tags (`llama3.1:8b`).
     /// User overrides merge on top of the defaults; see the
     /// Bedrock guide for the file shape.
@@ -258,7 +258,7 @@ enum Command {
         command: SnapshotCommand,
     },
     /// Reclaim disk space in the DynamoDB SQLite store. Run after
-    /// heavy DELETE / UPDATE churn — the file shrinks back to live
+    /// heavy DELETE / UPDATE churn. The file shrinks back to live
     /// data size.
     Vacuum {
         #[arg(long, default_value = "http://localhost:4566", env = "AWSIM_ENDPOINT")]
@@ -288,7 +288,7 @@ enum SnapshotCommand {
     Save {
         #[arg(long, default_value = "http://localhost:4566", env = "AWSIM_ENDPOINT")]
         endpoint: String,
-        /// Snapshot name — ASCII alnum + `-` + `_`, max 64 chars.
+        /// Snapshot name. ASCII alnum + `-` + `_`, max 64 chars.
         name: String,
     },
     /// Restore state from NAME. Existing live state is overwritten
@@ -366,7 +366,7 @@ enum ChaosCommand {
         #[arg(long, default_value = "http://localhost:4566", env = "AWSIM_ENDPOINT")]
         endpoint: String,
     },
-    /// Built-in chaos presets — list or apply common failure scenarios.
+    /// Built-in chaos presets. List or apply common failure scenarios.
     Preset {
         #[command(subcommand)]
         command: ChaosPresetCommand,
@@ -394,9 +394,9 @@ enum ChaosPresetCommand {
 fn main() -> Result<()> {
     // Peek at the CLI just to size the runtime. Full parse happens
     // inside `async_main`. The tokio default of 512 blocking threads
-    // × 2 MiB stack ≈ 1 GiB ceiling for `spawn_blocking` is easy to
+    // x 2 MiB stack ~= 1 GiB ceiling for `spawn_blocking` is easy to
     // hit during a bulk DDB import that fans out across many sync
-    // SQLite calls — keep it tight by default and let users override.
+    // SQLite calls. Keep it tight by default and let users override.
     let max_blocking = Cli::try_parse()
         .map(|c| c.max_blocking_threads)
         .unwrap_or(32);
@@ -439,7 +439,7 @@ async fn async_main() -> Result<()> {
     let initial_filter =
         tracing_subscriber::EnvFilter::try_new(&cli.log_level).unwrap_or_else(|e| {
             eprintln!(
-                "Invalid log filter {:?}: {e} — falling back to 'info'",
+                "Invalid log filter {:?}: {e}. Falling back to 'info'",
                 cli.log_level
             );
             tracing_subscriber::EnvFilter::new("info")
@@ -470,7 +470,7 @@ async fn async_main() -> Result<()> {
         .filter(|s| !s.is_empty());
     state.listen_authority = Some(format!("localhost:{}", cli.port));
 
-    // Runtime config store — disk-backed when --data-dir is set, in
+    // Runtime config store. Disk-backed when --data-dir is set, in
     // memory only otherwise. CLI flags seed initial values; persisted
     // file overlays them on subsequent runs.
     let runtime_config_store = build_runtime_config_store(&cli)?;
@@ -490,7 +490,7 @@ async fn async_main() -> Result<()> {
 
     // Hot-swappable Bedrock backends handle. Built once from the
     // initial runtime config and swapped in-place whenever the
-    // runtime config changes — request-path readers see the new
+    // runtime config changes. Request-path readers see the new
     // value without restarting the service.
     let initial_bedrock = build_bedrock_backend_from_config(
         &runtime_config_store.current(),
@@ -630,7 +630,7 @@ async fn async_main() -> Result<()> {
             body_store: Arc::clone(bs),
         });
     }
-    // CloudWatch Logs no longer uses a body store — events are in
+    // CloudWatch Logs no longer uses a body store. Events are in
     // its own SQLite file.
     state.body_stores = Arc::new(body_stores);
     if let Some(ref dir) = cli.data_dir {
@@ -702,8 +702,8 @@ async fn async_main() -> Result<()> {
 
     // Now that the authz engine is fully built (lookups + SCP + grants),
     // hand a clone to the IAM service so its policy simulator can
-    // evaluate against the same lookups the live request path uses —
-    // identity policies *plus* resource policies, SCPs, KMS grants.
+    // evaluate against the same lookups the live request path uses.
+    // Identity policies *plus* resource policies, SCPs, KMS grants.
     iam_service.set_authz(Arc::clone(&state.authz));
 
     // Apply the runtime-config IAM enforce flag, then register a hook
@@ -758,7 +758,7 @@ async fn async_main() -> Result<()> {
 
     // Always-on signal handler that removes the DynamoDB tempdir
     // before exit. The richer save-snapshots-on-shutdown handler
-    // below is gated on `--data-dir` and supersedes this one — it
+    // below is gated on `--data-dir` and supersedes this one. It
     // takes care of the same tempdir cleanup in its exit path.
     if cli.data_dir.is_none() {
         let dynamodb_for_cleanup = Arc::clone(&dynamodb_service);
@@ -791,7 +791,7 @@ async fn async_main() -> Result<()> {
         });
     }
 
-    // STS session expiry sweep — drops expired entries from the
+    // STS session expiry sweep. Drops expired entries from the
     // session store every 5 minutes so a long-running server doesn't
     // accumulate dead temp creds. `lookup` already filters expired
     // entries on the request path; this just keeps the map size
@@ -808,7 +808,7 @@ async fn async_main() -> Result<()> {
         });
     }
 
-    // SES outbox retention sweep — drops emails older than
+    // SES outbox retention sweep. Drops emails older than
     // `ses.retention_hours` once per hour. The retention value is
     // read from the runtime config on every tick, so flipping it
     // from the UI takes effect on the next sweep without a restart.
@@ -848,7 +848,7 @@ async fn async_main() -> Result<()> {
     // Persistence: restore snapshots if --data-dir was provided.
     if let Some(ref data_dir) = cli.data_dir {
         let pm = PersistenceManager::new(data_dir);
-        info!(data_dir = %data_dir, "Persistence enabled — restoring snapshots");
+        info!(data_dir = %data_dir, "Persistence enabled. Restoring snapshots");
         pm.restore_all(&state.services);
 
         // Billing counters are persisted as a regular snapshot file but
@@ -982,10 +982,10 @@ async fn async_main() -> Result<()> {
             }
         });
 
-        // Periodic point-in-time sampling task — drives both at-rest
-        // storage metering (BodyStore/SQLite bytes × $/GB-mo) and
-        // resource-hour metering (running EC2/RDS instances × $/hr).
-        // Only runs in persistent mode — in-memory mode has no
+        // Periodic point-in-time sampling task. Drives both at-rest
+        // storage metering (BodyStore/SQLite bytes x $/GB-mo) and
+        // resource-hour metering (running EC2/RDS instances x $/hr).
+        // Only runs in persistent mode. In-memory mode has no
         // on-disk size to query, but instance counts work either way
         // so we sample those regardless.
         let body_stores_for_storage = Arc::clone(&state.body_stores);
@@ -1091,7 +1091,7 @@ async fn async_main() -> Result<()> {
 
     let service_count = state.services.len();
 
-    // Spawn background event router — handles cross-service fan-out.
+    // Spawn background event router. Handles cross-service fan-out.
     spawn_event_router(&state);
 
     // Spawn the per-service tick loop. Each ServiceHandler::tick is
@@ -1335,7 +1335,7 @@ async fn async_main() -> Result<()> {
     //
     // Storage is redb-backed (per-doc key-value), so the working set
     // is bounded by disk rather than RAM and writes are durable on
-    // commit — no snapshot save/restore loop needed. With `--data-dir`
+    // commit. No snapshot save/restore loop needed. With `--data-dir`
     // we put the database alongside other service snapshots; without
     // it we fall back to a tempdir for ephemeral runs.
     let opensearch_state = match cli.data_dir.as_deref() {
@@ -1357,13 +1357,13 @@ async fn async_main() -> Result<()> {
     let ecr_router = awsim_ecr::router(ecr_service);
 
     // Billing sub-router. Carries its own state (Arc<BillingMeter>) so it
-    // doesn't have to be plumbed through AppState — keeps awsim-core free
+    // doesn't have to be plumbed through AppState. Keeps awsim-core free
     // of billing concerns.
     let billing_router: axum::Router<()> = axum::Router::new()
         .route("/_awsim/billing", axum::routing::get(admin::billing))
         .with_state(Arc::clone(&billing_meter));
 
-    // Chaos sub-router. Same pattern as billing — its own typed
+    // Chaos sub-router. Same pattern as billing. Its own typed
     // state so the admin handlers can mutate the engine without
     // routing everything through AppState.
     let chaos_router: axum::Router<()> = axum::Router::new()
@@ -1435,8 +1435,8 @@ async fn async_main() -> Result<()> {
         sqlite: Arc::clone(&sqlite_stats_state),
     });
     // Bulk-seed router. Each /_awsim/seed/<service> writes directly
-    // to the service's internal state — no SigV4, no per-request
-    // overhead — so a 10k-row seed lands in well under a second.
+    // to the service's internal state. No SigV4, no per-request
+    // overhead. So a 10k-row seed lands in well under a second.
     let seed_ddb_state = Arc::new(seed::dynamodb::SeedDdbState {
         service: Arc::clone(&dynamodb_service),
         default_account: cli.account_id.clone(),
@@ -1645,8 +1645,8 @@ async fn async_main() -> Result<()> {
         .layer(axum::extract::DefaultBodyLimit::max(cli.max_body_bytes))
         // Bounded in-flight requests with shed-on-overload. A misbehaving
         // client (leaking sockets during a bulk import, hammering with
-        // unbounded parallelism) can't accumulate work past the cap —
-        // excess requests get an immediate 503 instead of queueing
+        // unbounded parallelism) can't accumulate work past the cap.
+        // Excess requests get an immediate 503 instead of queueing
         // indefinitely and starving the runtime / exhausting fds.
         .layer(
             ServiceBuilder::new()
@@ -1960,11 +1960,11 @@ fn bind_dual_stack_std(port: u16) -> Result<std::net::TcpListener> {
 /// performs cross-service fan-out deliveries.
 ///
 /// Handles:
-///   sns:Publish                    → sqs  — enqueues the SNS message body into the target queue
-///   sns:Publish                    → lambda — (future) invokes the target Lambda function
+///   sns:Publish                    -> sqs. Enqueues the SNS message body into the target queue
+///   sns:Publish                    -> lambda. (future) invokes the target Lambda function
 /// Map tower errors to HTTP responses. The only error we expect from the
 /// LoadShed + ConcurrencyLimit stack is `tower::load_shed::error::Overloaded`
-/// — convert it to a friendly 503 with a hint. Anything else is unexpected
+///. Convert it to a friendly 503 with a hint. Anything else is unexpected
 /// and surfaces as 500.
 /// `process::exit` skips Drop, so any service that owns a tempdir
 /// (no `--data-dir` case) wouldn't get its files cleaned up
@@ -1981,7 +1981,7 @@ fn cleanup_tempdir(label: &str, path: Option<&std::path::Path>) {
     }
 }
 
-/// One-shot client for `awsim vacuum` — calls the admin endpoint
+/// One-shot client for `awsim vacuum`. Calls the admin endpoint
 /// on a running awsim instance.
 async fn run_vacuum(endpoint: &str) -> Result<()> {
     let client = reqwest::Client::builder()
@@ -2003,7 +2003,7 @@ async fn run_vacuum(endpoint: &str) -> Result<()> {
 
 async fn handle_overload_error(err: BoxError) -> impl IntoResponse {
     if err.is::<tower::load_shed::error::Overloaded>() {
-        warn!("Request rejected — concurrency limit reached");
+        warn!("Request rejected. Concurrency limit reached");
         (
             StatusCode::SERVICE_UNAVAILABLE,
             "AWSim is at the configured concurrent-request cap. \
@@ -2037,7 +2037,7 @@ fn spawn_fd_pressure_watcher() {
     let pid = std::process::id();
     let fd_dir = std::path::PathBuf::from(format!("/proc/{pid}/fd"));
     if !fd_dir.exists() {
-        debug!("/proc/<pid>/fd not available — skipping fd-pressure watcher");
+        debug!("/proc/<pid>/fd not available. Skipping fd-pressure watcher");
         return;
     }
     let (_, hard) = match rlimit::getrlimit(rlimit::Resource::NOFILE) {
@@ -2052,7 +2052,7 @@ fn spawn_fd_pressure_watcher() {
             interval.tick().await;
             let count = match std::fs::read_dir(&fd_dir) {
                 Ok(d) => d.count() as u64,
-                Err(_) => break, // fs went away (proc unmounted? rare) — stop watching
+                Err(_) => break, // fs went away (proc unmounted? rare). Stop watching
             };
             if count >= crit_at {
                 FD_SHED.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -2060,7 +2060,7 @@ fn spawn_fd_pressure_watcher() {
                     open_fds = count,
                     hard_limit = hard,
                     threshold_pct = 80,
-                    "fd usage critical — shedding new connections until it recovers"
+                    "fd usage critical. Shedding new connections until it recovers"
                 );
             } else if count >= warn_at {
                 // Between the warn and critical marks: leave any active
@@ -2070,7 +2070,7 @@ fn spawn_fd_pressure_watcher() {
                     open_fds = count,
                     hard_limit = hard,
                     threshold_pct = 50,
-                    "fd usage elevated — check for client connection leaks"
+                    "fd usage elevated. Check for client connection leaks"
                 );
             } else {
                 FD_SHED.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -2083,8 +2083,8 @@ fn spawn_fd_pressure_watcher() {
 /// Bump the open-files soft limit toward the hard limit (capped at 65,536).
 ///
 /// Default Linux distros ship a 1024 soft limit, which a heavy bulk-import
-/// workload (millions of rows × parallel connections × per-row writes)
-/// blows through in seconds — leaving axum logging "Too many open files"
+/// workload (millions of rows x parallel connections x per-row writes)
+/// blows through in seconds. Leaving axum logging "Too many open files"
 /// on every accept. Raising the soft limit at startup means users don't
 /// have to remember to `ulimit -n` before launching the binary.
 ///
@@ -2137,8 +2137,8 @@ fn spawn_fd_pressure_watcher() {}
 #[cfg(not(unix))]
 fn raise_nofile_limit() {}
 
-///   cloudformation:CreateResource  — provisions the resource in the target service
-///   cloudformation:DeleteResource  — deprovisions the resource from the target service
+///   cloudformation:CreateResource. Provisions the resource in the target service
+///   cloudformation:DeleteResource. Deprovisions the resource from the target service
 /// Emit an `AWS/SNS` delivery metric (`NumberOfNotificationsDelivered`
 /// / `NumberOfNotificationsFailed`) into CloudWatch for a topic that has
 /// the matching delivery-status feedback role configured. Best-effort:
@@ -2275,7 +2275,7 @@ fn spawn_event_router(state: &AppState) {
                                     // Wrap the SNS message in the SNS notification envelope that
                                     // real AWS delivers to SQS subscribers. The fixture
                                     // signature/cert URL/timestamp are stable per-message but not
-                                    // cryptographically real — clients that verify the signature
+                                    // cryptographically real. Clients that verify the signature
                                     // (rare in test environments) will fail; clients that just
                                     // read the metadata (the common case) round-trip cleanly.
                                     let timestamp = iso8601_now();
@@ -2499,7 +2499,7 @@ fn spawn_event_router(state: &AppState) {
                             integrations::handle_s3_event(&services, &event).await;
                         }
                         _ => {
-                            // Unknown or unhandled event type — ignore.
+                            // Unknown or unhandled event type. Ignore.
                         }
                     }
                 }
@@ -2510,7 +2510,7 @@ fn spawn_event_router(state: &AppState) {
                     );
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    // Sender dropped — bus is shut down, exit the task.
+                    // Sender dropped. Bus is shut down, exit the task.
                     break;
                 }
             }
@@ -2668,7 +2668,7 @@ fn arn_to_sqs_url(arn: &str, default_region: &str, default_account: &str) -> Str
         let queue = parts[5];
         format!("http://sqs.{region}.localhost:4566/{account}/{queue}")
     } else {
-        // ARN parse failed — try to use the last segment as a queue name.
+        // ARN parse failed. Try to use the last segment as a queue name.
         let queue = arn.rsplit(':').next().unwrap_or(arn);
         format!("http://sqs.{default_region}.localhost:4566/{default_account}/{queue}")
     }
@@ -2859,7 +2859,7 @@ fn register_services(
 
     // Shared STS session store: STS records every assumed-role
     // credential it issues (and Cognito Identity does the same below)
-    // so the principal-lookup chain can resolve `ASIA…` keys back to
+    // so the principal-lookup chain can resolve `ASIA...` keys back to
     // the assumed role on follow-up signed requests.
     let sts_sessions = Arc::new(awsim_sts::StsSessionStore::new());
     let sts = Arc::new(awsim_sts::StsService::with_session_store(Arc::clone(
@@ -2901,11 +2901,11 @@ fn register_services(
         Some(dir) => awsim_dynamodb::DynamoDbService::with_data_dir(dir),
         None => awsim_dynamodb::DynamoDbService::new(),
     });
-    // Background TTL sweeper — deletes items past their TTL once per
+    // Background TTL sweeper. Deletes items past their TTL once per
     // minute. Real DynamoDB allows up to ~48h slack; we're aggressive
     // since this is a dev tool and the sweep is cheap.
     dynamodb.spawn_ttl_sweeper(60, ddb_ttl_grace_secs);
-    // Background WAL checkpointer — the inline PASSIVE autocheckpoint
+    // Background WAL checkpointer. The inline PASSIVE autocheckpoint
     // starves under a sustained write firehose (bulk imports), so the
     // `-wal` file and its mapped index grow unbounded. A periodic
     // TRUNCATE checkpoint is the hard backstop. 0 opts out.
@@ -3031,7 +3031,7 @@ fn register_services(
     };
     state.register(Arc::clone(&ses_service) as _, ses_routes);
 
-    // Cognito — keep an Arc so we can share its state with the OAuth router.
+    // Cognito. Keep an Arc so we can share its state with the OAuth router.
     let cognito =
         Arc::new(awsim_cognito::CognitoService::new().with_lambda_invoker(lambda_invoker.clone()));
     let cognito_arc_state = cognito.state_for(default_account_id, default_region);
@@ -3308,7 +3308,7 @@ fn register_services(
     let identitystore = Arc::new(awsim_identitystore::IdentityStoreService::new());
     state.register(identitystore, vec![]);
 
-    // API Gateway — register both the v2 (HTTP APIs, signs as `execute-api`)
+    // API Gateway. Register both the v2 (HTTP APIs, signs as `execute-api`)
     // and v1 (REST APIs, signs as `apigateway`) handlers.
     let apigateway = Arc::new(awsim_apigateway::ApiGatewayService::new());
     let apigw_routes = {

@@ -1,4 +1,4 @@
-//! Mistral format ↔ OpenAI chat.completions translator.
+//! Mistral format <-> OpenAI chat.completions translator.
 //!
 //! Mistral request body:
 //! ```text

@@ -152,7 +152,7 @@ pub async fn test_eventbridge(endpoint: &str, verbose: bool) -> Vec<OpResult> {
         verbose
     ));
 
-    // TagResource (EventBridge) — tag the event bus ARN
+    // TagResource (EventBridge). Tag the event bus ARN
     results.push(chk!(
         "TagResource",
         client

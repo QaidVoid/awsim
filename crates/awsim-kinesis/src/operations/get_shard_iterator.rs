@@ -43,7 +43,7 @@ pub fn handle(
         .sqlite()
         .ok_or_else(|| AwsError::internal("Kinesis sqlite store not initialised"))?;
 
-    // Iterator semantics — `position` is the exclusive lower bound;
+    // Iterator semantics. `position` is the exclusive lower bound;
     // `GetRecords` returns rows with `seq > position`.
     //
     // Sequence numbers are 1-based, so `position = 0` means
@@ -61,7 +61,7 @@ pub fn handle(
                     "StartingSequenceNumber is required for AT_SEQUENCE_NUMBER",
                 )
             })?;
-            // `AT` means inclusive — set the cursor one before the
+            // `AT` means inclusive. Set the cursor one before the
             // requested seq so the requested record is the next read.
             let seq: u64 = seq_str.parse().unwrap_or(0);
             seq.saturating_sub(1)

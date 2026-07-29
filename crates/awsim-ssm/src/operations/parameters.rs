@@ -34,9 +34,9 @@ fn build_arn(ctx: &RequestContext, name: &str) -> String {
 
 /// AWS ParameterPolicy schema is a JSON array of `{Type,Version,Attributes}`
 /// objects. Allowed Types and their attribute shape are:
-/// - `Expiration` — Attributes.Timestamp (ISO-8601 instant)
-/// - `ExpirationNotification` — Attributes.Before + Unit=`Days`
-/// - `NoChangeNotification` — Attributes.After + Unit=`Days`
+/// - `Expiration`. Attributes.Timestamp (ISO-8601 instant)
+/// - `ExpirationNotification`. Attributes.Before + Unit=`Days`
+/// - `NoChangeNotification`. Attributes.After + Unit=`Days`
 ///
 /// AWS rejects malformed JSON or unknown Types with ValidationException.
 fn parse_parameter_policies(raw: &str) -> Result<Vec<Value>, AwsError> {
@@ -829,7 +829,7 @@ pub fn label_parameter_version(
     };
 
     // AWS allows a label to live on exactly one version of a parameter
-    // — calling LabelParameterVersion with the same label moves it from
+    //. Calling LabelParameterVersion with the same label moves it from
     // wherever it was before to the requested version. Strip the labels
     // from every other version (current + history) before we add them
     // to the target.

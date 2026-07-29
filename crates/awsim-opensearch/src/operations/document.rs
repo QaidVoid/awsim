@@ -187,8 +187,8 @@ fn deep_merge(target: &mut Value, partial: &Value) {
 /// Update documents matching a query using a simple script.
 ///
 /// Supported script patterns:
-/// - `ctx._source.remove('fieldName')` — remove a field
-/// - `ctx._source.fieldName = params.value` — set a field from params
+/// - `ctx._source.remove('fieldName')`. Remove a field
+/// - `ctx._source.fieldName = params.value`. Set a field from params
 pub fn update_by_query(state: &OpenSearchState, index_name: &str, body: &Value) -> (u16, Value) {
     let query = body
         .get("query")

@@ -1,4 +1,4 @@
-//! Named state snapshots — point-in-time bundles of every
+//! Named state snapshots. Point-in-time bundles of every
 //! ServiceHandler's JSON snapshot plus billing + chaos. Lives at
 //! `{data_dir}/named-snapshots/{name}/` and is independent of the
 //! shutdown-time `{data_dir}/snapshots/` directory.
@@ -30,7 +30,7 @@ const MANIFEST_FILE: &str = "manifest.json";
 const BILLING_FILE: &str = "_billing.json";
 const CHAOS_FILE: &str = "_chaos.json";
 
-/// Composite state for the snapshot router — needs the live AppState
+/// Composite state for the snapshot router. Needs the live AppState
 /// (services + chaos + data_dir) plus the billing meter.
 pub struct SnapshotState {
     pub app: AppState,

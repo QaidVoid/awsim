@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 
 use crate::state::KinesisState;
 
-/// EnableEnhancedMonitoring — add shard-level metrics to the stream.
+/// EnableEnhancedMonitoring. Add shard-level metrics to the stream.
 pub fn enable_enhanced_monitoring(
     state: &KinesisState,
     input: &Value,
@@ -51,7 +51,7 @@ pub fn enable_enhanced_monitoring(
     }))
 }
 
-/// DisableEnhancedMonitoring — remove shard-level metrics from the stream.
+/// DisableEnhancedMonitoring. Remove shard-level metrics from the stream.
 pub fn disable_enhanced_monitoring(
     state: &KinesisState,
     input: &Value,

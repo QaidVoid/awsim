@@ -11,7 +11,7 @@ use crate::util::divide_hash_space;
 /// `ACTIVE` (collapsed to zero under `AWSIM_LIFECYCLE_FAST=1`).
 const UPDATE_DELAY: Duration = Duration::from_secs(30);
 
-/// UpdateShardCount — change a stream's shard count. The stream flips
+/// UpdateShardCount. Change a stream's shard count. The stream flips
 /// to `UPDATING`, stages the replacement shard set, and promotes back
 /// to `ACTIVE` once the transition deadline elapses (observed in the
 /// `Describe*` read paths and the tick loop).

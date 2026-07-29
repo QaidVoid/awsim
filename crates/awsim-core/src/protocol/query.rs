@@ -72,7 +72,7 @@ fn set_nested_recursive(map: &mut serde_json::Map<String, Value>, parts: &[&str]
             .entry(key.to_string())
             .or_insert_with(|| Value::Array(Vec::new()));
         if let Value::Array(arr) = entry {
-            let idx: usize = next.parse::<usize>().unwrap() - 1; // 1-based → 0-based
+            let idx: usize = next.parse::<usize>().unwrap() - 1; // 1-based -> 0-based
             while arr.len() <= idx {
                 arr.push(Value::Object(serde_json::Map::new()));
             }
@@ -225,7 +225,7 @@ pub fn json_to_xml_fields(value: &Value) -> String {
 /// Render a single `<key>...</key>` element. Pretty-prints structured
 /// content (Object) onto its own lines so nested elements stay readable,
 /// but writes scalars (String/Number/Bool) inline so we don't inject
-/// whitespace into the value — some clients string-compare list members
+/// whitespace into the value. Some clients string-compare list members
 /// and a leading newline shows up as part of the data.
 fn render_element(key: &str, value: &Value) -> String {
     match value {
@@ -262,9 +262,9 @@ mod tests {
     #[test]
     fn scalar_array_items_render_inline() {
         // Regression: previously the array branch wrapped every item with
-        // `<member>\n…</member>`, leaving a literal newline inside the
+        // `<member>\n...</member>`, leaving a literal newline inside the
         // string element when the item was a scalar. Clients that
-        // round-trip ListRolePolicies → GetRolePolicy ended up with
+        // round-trip ListRolePolicies -> GetRolePolicy ended up with
         // names like "\nInline1".
         let value = serde_json::json!({
             "PolicyNames": { "member": ["Inline1", "Inline2"] },

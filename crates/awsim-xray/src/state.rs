@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 #[derive(Debug, Default)]
 pub struct XrayState {
-    /// trace_id → segments (raw JSON segment documents)
+    /// trace_id -> segments (raw JSON segment documents)
     pub traces: DashMap<String, Trace>,
     /// Per-rule sampling state for GetSamplingRules.
     pub sampling_rules: DashMap<String, serde_json::Value>,

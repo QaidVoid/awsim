@@ -29,7 +29,7 @@ pub struct MetricAlarm {
     /// Updated each time the evaluator transitions the alarm.
     #[serde(default)]
     pub state_updated_at: Option<String>,
-    /// Dimension filter — only metric data points carrying these dimensions
+    /// Dimension filter. Only metric data points carrying these dimensions
     /// participate in evaluation. When empty the alarm matches any datum
     /// for the (Namespace, MetricName) pair.
     #[serde(default)]
@@ -48,9 +48,9 @@ pub struct Dashboard {
 /// stay in DashMap because they are small and read often.
 #[derive(Debug, Default)]
 pub struct CloudWatchState {
-    /// alarm name → alarm
+    /// alarm name -> alarm
     pub alarms: DashMap<String, MetricAlarm>,
-    /// dashboard name → dashboard
+    /// dashboard name -> dashboard
     pub dashboards: DashMap<String, Dashboard>,
     /// Shared SQLite store for datapoints. Populated by the service
     /// on first `get_state` call.

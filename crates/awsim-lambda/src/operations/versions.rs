@@ -49,7 +49,7 @@ pub fn publish_version(
 
     // Allocate the next version number from the running maximum. Using
     // `len() + 1` would re-issue a previously-deleted version number,
-    // which AWS never does — once a version exists, its identity is
+    // which AWS never does. Once a version exists, its identity is
     // permanent even after deletion.
     let next_version: u64 = f
         .versions

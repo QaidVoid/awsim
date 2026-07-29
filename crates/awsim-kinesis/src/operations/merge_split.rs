@@ -8,7 +8,7 @@ pub fn handle_merge(
     _input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    // MergeShards is a stub — resharding is complex and not required for local dev
+    // MergeShards is a stub. Resharding is complex and not required for local dev
     Ok(json!({}))
 }
 

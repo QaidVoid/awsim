@@ -183,7 +183,7 @@ fn collect_operations(
 }
 
 /// Extract the local name from a fully-qualified Smithy shape ID.
-/// e.g. "com.amazonaws.dynamodb#CreateTable" → "CreateTable"
+/// e.g. "com.amazonaws.dynamodb#CreateTable" -> "CreateTable"
 fn local_name(shape_id: &str) -> String {
     shape_id.rsplit('#').next().unwrap_or(shape_id).to_string()
 }

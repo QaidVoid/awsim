@@ -687,7 +687,7 @@ pub fn modify_db_instance(
         .get_mut(identifier)
         .ok_or_else(|| db_instance_not_found(identifier))?;
 
-    // PreferredMaintenanceWindow applies immediately on real AWS — it
+    // PreferredMaintenanceWindow applies immediately on real AWS. It
     // controls *when* future changes flush, so staging it under
     // PendingModifiedValues would be self-defeating. Validate shape
     // up-front so a bad string surfaces InvalidParameterValue rather

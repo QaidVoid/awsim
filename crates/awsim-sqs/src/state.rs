@@ -60,7 +60,7 @@ pub struct Message {
     pub md5_of_body: String,
     pub attributes: HashMap<String, String>,
     pub message_attributes: HashMap<String, MessageAttribute>,
-    /// Wall-clock timestamp (seconds since Unix epoch) — replaces `Instant`.
+    /// Wall-clock timestamp (seconds since Unix epoch). Replaces `Instant`.
     pub sent_at_secs: u64,
     /// Epoch seconds when the message becomes visible; `None` = immediately.
     pub delay_until_secs: Option<u64>,
@@ -97,7 +97,7 @@ impl Message {
             if due > now_epoch {
                 now_instant + Duration::from_secs(due - now_epoch)
             } else {
-                // Already past — make it immediately visible
+                // Already past. Make it immediately visible
                 now_instant
             }
         });
@@ -105,7 +105,7 @@ impl Message {
 }
 
 /// A message that has been received and is now invisible ("inflight").
-/// Inflight messages are intentionally not persisted — on restore they are
+/// Inflight messages are intentionally not persisted. On restore they are
 /// treated as if their visibility timeout expired (i.e., returned to the queue).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InflightMessage {
@@ -154,9 +154,9 @@ pub struct MessageMoveTask {
 /// Per-account/region SQS state.
 #[derive(Debug, Default)]
 pub struct SqsState {
-    /// Queue name → Queue (DashMap for concurrent access)
+    /// Queue name -> Queue (DashMap for concurrent access)
     pub queues: DashMap<String, Queue>,
-    /// Task handle → MessageMoveTask
+    /// Task handle -> MessageMoveTask
     pub move_tasks: DashMap<String, MessageMoveTask>,
     pub body_store: OnceLock<Arc<BodyStore>>,
 }
@@ -325,7 +325,7 @@ pub struct QueueSnapshot {
     pub inflight: Vec<InflightMessage>,
     pub is_fifo: bool,
     pub created_at: String,
-    /// FIFO dedup cache: dedup_id → (expiry epoch secs, message_id)
+    /// FIFO dedup cache: dedup_id -> (expiry epoch secs, message_id)
     pub dedup_cache: HashMap<String, (u64, String)>,
     #[serde(default)]
     pub redrive_policy: Option<RedrivePolicy>,
@@ -340,13 +340,13 @@ pub struct Queue {
     pub attributes: HashMap<String, String>,
     pub tags: HashMap<String, String>,
     pub messages: VecDeque<Message>,
-    /// receipt_handle → inflight message
+    /// receipt_handle -> inflight message
     pub inflight: HashMap<String, InflightMessage>,
     pub is_fifo: bool,
     pub created_at: String,
-    /// FIFO dedup cache: dedup_id → (expiry Instant, message_id)
+    /// FIFO dedup cache: dedup_id -> (expiry Instant, message_id)
     pub dedup_cache: HashMap<String, (Instant, String)>,
-    /// FIFO ReceiveRequestAttemptId cache: attempt_id → (expiry Instant,
+    /// FIFO ReceiveRequestAttemptId cache: attempt_id -> (expiry Instant,
     /// JSON response body to replay). AWS keeps 5 minutes of receive
     /// idempotency so a network retry returns the same batch without
     /// re-incrementing receive counts or releasing new messages.
@@ -418,7 +418,7 @@ impl Queue {
 
         for rh in expired {
             if let Some(im) = self.inflight.remove(&rh) {
-                // Check retention — drop if expired
+                // Check retention. Drop if expired
                 if now_epoch.saturating_sub(im.message.sent_at_secs) >= retention_secs {
                     continue;
                 }

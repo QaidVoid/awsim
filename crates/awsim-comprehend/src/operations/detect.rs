@@ -1,14 +1,14 @@
 use awsim_core::AwsError;
 use serde_json::{Value, json};
 
-/// DetectEntities — extract named entities from text.
+/// DetectEntities. Extract named entities from text.
 ///
 /// Real Comprehend uses ML models. We do simple heuristic detection:
-/// - Capitalized multi-word sequences → PERSON or ORGANIZATION
-/// - Words starting with uppercase after sentence start → OTHER
-/// - Numbers/amounts → QUANTITY
-/// - Email-like patterns → OTHER
-/// - Date-like patterns → DATE
+/// - Capitalized multi-word sequences -> PERSON or ORGANIZATION
+/// - Words starting with uppercase after sentence start -> OTHER
+/// - Numbers/amounts -> QUANTITY
+/// - Email-like patterns -> OTHER
+/// - Date-like patterns -> DATE
 pub fn detect_entities(input: &Value) -> Result<Value, AwsError> {
     let text = input["Text"]
         .as_str()
@@ -26,7 +26,7 @@ pub fn detect_entities(input: &Value) -> Result<Value, AwsError> {
     }))
 }
 
-/// DetectKeyPhrases — extract key phrases from text.
+/// DetectKeyPhrases. Extract key phrases from text.
 ///
 /// Heuristic: extract sequences of 1-4 words that look like noun phrases.
 pub fn detect_key_phrases(input: &Value) -> Result<Value, AwsError> {
@@ -46,7 +46,7 @@ pub fn detect_key_phrases(input: &Value) -> Result<Value, AwsError> {
     }))
 }
 
-/// BatchDetectEntities — detect entities in multiple texts.
+/// BatchDetectEntities. Detect entities in multiple texts.
 pub fn batch_detect_entities(input: &Value) -> Result<Value, AwsError> {
     let texts = input["TextList"]
         .as_array()
@@ -74,7 +74,7 @@ pub fn batch_detect_entities(input: &Value) -> Result<Value, AwsError> {
     }))
 }
 
-/// BatchDetectKeyPhrases — detect key phrases in multiple texts.
+/// BatchDetectKeyPhrases. Detect key phrases in multiple texts.
 pub fn batch_detect_key_phrases(input: &Value) -> Result<Value, AwsError> {
     let texts = input["TextList"]
         .as_array()
@@ -102,7 +102,7 @@ pub fn batch_detect_key_phrases(input: &Value) -> Result<Value, AwsError> {
     }))
 }
 
-/// DetectSentiment — detect overall sentiment of text.
+/// DetectSentiment. Detect overall sentiment of text.
 pub fn detect_sentiment(input: &Value) -> Result<Value, AwsError> {
     let text = input["Text"]
         .as_str()
@@ -167,7 +167,7 @@ pub fn detect_sentiment(input: &Value) -> Result<Value, AwsError> {
     }))
 }
 
-/// DetectDominantLanguage — detect the language of text.
+/// DetectDominantLanguage. Detect the language of text.
 pub fn detect_dominant_language(input: &Value) -> Result<Value, AwsError> {
     let text = input["Text"]
         .as_str()

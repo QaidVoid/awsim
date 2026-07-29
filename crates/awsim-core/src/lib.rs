@@ -58,9 +58,9 @@ use serde_json::Value;
 pub type HandlerByteStream = BoxStream<'static, Result<Bytes, AwsError>>;
 
 /// What `ServiceHandler::handle_streaming` returns. Most operations
-/// produce a single JSON `Value` (the existing path); a small set —
+/// produce a single JSON `Value` (the existing path). A small set,
 /// notably Bedrock's `ConverseStream` and
-/// `InvokeModelWithResponseStream` — produce a continuous stream of
+/// `InvokeModelWithResponseStream`, produce a continuous stream of
 /// already-encoded body bytes plus a content-type the gateway puts
 /// straight on the wire.
 pub enum HandlerResult {
@@ -69,7 +69,7 @@ pub enum HandlerResult {
     Json(Value),
     /// Streamed binary body. The gateway sends it via axum's
     /// chunked-transfer body so the client sees bytes as they're
-    /// produced — no buffering on our side.
+    /// produced. No buffering on our side.
     Streaming {
         body: HandlerByteStream,
         content_type: &'static str,
@@ -197,13 +197,13 @@ pub trait ServiceHandler: Send + Sync {
     /// rotation, etc.
     ///
     /// **Contract:**
-    /// - `tick` must be idempotent — it may be called repeatedly, and
+    /// - `tick` must be idempotent. It may be called repeatedly, and
     ///   missing a tick must not lose state. Use absolute deadlines
     ///   (`Instant`/`SystemTime`) rather than per-call deltas.
     /// - `tick` must return quickly (target <10 ms). Slow work
     ///   (HTTP fan-out, subprocess invocation, large iterations)
     ///   should be enqueued onto an internal worker the service spawns
-    ///   from elsewhere — `tick` enqueues, doesn't block.
+    ///   from elsewhere. `tick` enqueues, doesn't block.
     /// - The default implementation is a no-op so existing services
     ///   don't need to opt in.
     async fn tick(&self) {}

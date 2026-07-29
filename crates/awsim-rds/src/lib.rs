@@ -29,7 +29,7 @@ impl RdsService {
         self.store.get(&ctx.account_id, &ctx.region)
     }
 
-    /// Count active DB instances for a given account+region — used by
+    /// Count active DB instances for a given account+region. Used by
     /// the billing meter to charge instance-hours. AWS bills any RDS
     /// instance that's not in `creating`, `deleting`, or `stopped`,
     /// so we accept the most common live states.

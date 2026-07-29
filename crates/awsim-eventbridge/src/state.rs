@@ -12,7 +12,7 @@ pub struct Target {
     pub input_path: Option<String>,
     /// Optional InputTransformer (`{InputPathsMap, InputTemplate}`).
     /// Mutually exclusive with `input` and `input_path`. Stored on
-    /// PutTargets but not yet applied at fan-out — see NEW_PLAN §10.4.
+    /// PutTargets but not yet applied at fan-out. See NEW_PLAN section 10.4.
     #[allow(dead_code)]
     pub input_transformer: Option<InputTransformer>,
     /// AWS Batch-specific submission overrides. Stored verbatim and
@@ -21,7 +21,7 @@ pub struct Target {
     pub batch_parameters: Option<serde_json::Value>,
     /// SQS queue ARN where EventBridge would publish events the target
     /// failed to deliver. Validated for shape at PutTargets; the actual
-    /// delivery path remains stubby (see NEW_PLAN §10.4).
+    /// delivery path remains stubby (see NEW_PLAN section 10.4).
     pub dead_letter_arn: Option<String>,
     /// Retry policy. `(MaximumEventAgeInSeconds, MaximumRetryAttempts)`
     /// bounded by AWS at 60..=86400 and 0..=185 respectively.
@@ -32,14 +32,14 @@ pub struct Target {
     pub role_arn: Option<String>,
 }
 
-/// EventBridge `InputTransformer` shape — stored verbatim and applied
+/// EventBridge `InputTransformer` shape. Stored verbatim and applied
 /// at fan-out time. AWS requires `InputTemplate`; `InputPathsMap` is
 /// optional but every key it declares must appear at least once in
 /// the template as `<key>`.
 ///
 /// The fields are populated and validated on PutTargets but not yet
 /// consulted during fan-out (the EventBridge target invocation path
-/// is itself stubby — see NEW_PLAN §10.4). The `allow(dead_code)`
+/// is itself stubby. See NEW_PLAN section 10.4). The `allow(dead_code)`
 /// keeps `#![deny(warnings)]` happy until that work lands.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
@@ -71,11 +71,11 @@ pub struct Rule {
 pub struct EventBus {
     pub name: String,
     pub arn: String,
-    /// rule_name → Rule
+    /// rule_name -> Rule
     pub rules: HashMap<String, Rule>,
     pub tags: HashMap<String, String>,
     /// Resource policy attached to the bus. Authorizes cross-account
-    /// PutEvents callers — AWS denies cross-account writes when no
+    /// PutEvents callers. AWS denies cross-account writes when no
     /// statement grants `events:PutEvents` to the calling principal.
     pub policy: Option<String>,
 }
@@ -169,17 +169,17 @@ pub struct Replay {
 /// Per-account/region EventBridge state.
 #[derive(Debug, Default)]
 pub struct EventBridgeState {
-    /// bus_name → EventBus
+    /// bus_name -> EventBus
     pub event_buses: DashMap<String, EventBus>,
     /// Recent events for debugging
     pub recent_events: DashMap<String, StoredEvent>,
-    /// archive_name → Archive
+    /// archive_name -> Archive
     pub archives: DashMap<String, Archive>,
-    /// connection_name → Connection
+    /// connection_name -> Connection
     pub connections: DashMap<String, Connection>,
-    /// api_destination_name → ApiDestination
+    /// api_destination_name -> ApiDestination
     pub api_destinations: DashMap<String, ApiDestination>,
-    /// replay_name → Replay
+    /// replay_name -> Replay
     pub replays: DashMap<String, Replay>,
 }
 

@@ -122,7 +122,7 @@ pub fn put_email_identity_dkim_attributes(
     Ok(json!({}))
 }
 
-/// PutEmailIdentityDkimSigningAttributes — switch the identity between
+/// PutEmailIdentityDkimSigningAttributes. Switch the identity between
 /// `AWS_SES` (EASY_DKIM) and `EXTERNAL` (BYODKIM). For EXTERNAL the
 /// caller supplies a domain signing selector + private key, both of
 /// which are persisted so subsequent GetEmailIdentity calls reflect the
@@ -303,7 +303,7 @@ pub fn set_identity_dkim_verification(
             format!("Identity not found: {identity}"),
         )
     })?;
-    // Pending → Success requires tokens to have been issued; otherwise
+    // Pending -> Success requires tokens to have been issued; otherwise
     // AWS leaves the status untouched (we mirror that contract).
     if status == "Success" && entry.dkim_tokens.is_empty() {
         return Err(AwsError::bad_request(
@@ -375,7 +375,7 @@ pub fn put_email_identity_mail_from_attributes(
     Ok(json!({}))
 }
 
-/// PutEmailIdentityConfigurationSetAttributes — attach a default
+/// PutEmailIdentityConfigurationSetAttributes. Attach a default
 /// configuration set to an identity. Subsequent SendEmail calls that
 /// omit `ConfigurationSetName` inherit this value.
 pub fn put_email_identity_configuration_set_attributes(
@@ -552,7 +552,7 @@ fn parse_tls_policy(value: &Value) -> Result<Option<String>, AwsError> {
     }
 }
 
-/// PutConfigurationSetDeliveryOptions — update TLS policy + sending pool
+/// PutConfigurationSetDeliveryOptions. Update TLS policy + sending pool
 /// on an existing configuration set. AWS keeps unspecified fields as-is
 /// when omitted, but in awsim we treat the request as a full replace per
 /// the v2 API contract.
@@ -575,7 +575,7 @@ pub fn put_configuration_set_delivery_options(
     Ok(json!({}))
 }
 
-/// PutConfigurationSetVdmOptions — replace VDM options for a set.
+/// PutConfigurationSetVdmOptions. Replace VDM options for a set.
 pub fn put_configuration_set_vdm_options(
     state: &SesState,
     input: &Value,

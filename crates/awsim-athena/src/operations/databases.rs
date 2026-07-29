@@ -1,7 +1,7 @@
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
-/// ListDatabases — returns a stub `default` database for any catalog.
+/// ListDatabases. Returns a stub `default` database for any catalog.
 pub fn list_databases(
     _state: &crate::state::AthenaState,
     input: &Value,
@@ -21,7 +21,7 @@ pub fn list_databases(
     }))
 }
 
-/// GetDatabase — returns a stub database object.
+/// GetDatabase. Returns a stub database object.
 pub fn get_database(
     _state: &crate::state::AthenaState,
     input: &Value,

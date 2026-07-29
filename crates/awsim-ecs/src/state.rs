@@ -21,7 +21,7 @@ pub struct Task {
     pub tags: Vec<(String, String)>,
     /// ECS-managed attachments surfaced on describe. For `awsvpc`
     /// tasks AWS attaches an `ElasticNetworkInterface` carrying
-    /// subnetId / networkInterfaceId / privateIPv4Address — the
+    /// subnetId / networkInterfaceId / privateIPv4Address. The
     /// simulator generates a synthetic ENI ID per task.
     pub attachments: Vec<Value>,
 }
@@ -50,8 +50,8 @@ pub struct Service {
     /// Tags supplied by the caller on CreateService. AWS may propagate
     /// these to tasks at RunTask time based on `propagateTags`.
     pub tags: Vec<(String, String)>,
-    /// `propagateTags`: AWS accepts `TASK_DEFINITION` or `SERVICE` —
-    /// when set, RunTask copies the matching source's tags onto each
+    /// `propagateTags`: AWS accepts `TASK_DEFINITION` or `SERVICE`.
+    /// When set, RunTask copies the matching source's tags onto each
     /// task. Empty means no propagation.
     pub propagate_tags: Option<String>,
     /// Mirrors `enableECSManagedTags`: when true RunTask layers the
@@ -102,7 +102,7 @@ pub struct TaskDefinition {
     /// `type` is one of `random`, `spread`, or `binpack`. Stored verbatim.
     pub placement_strategy: Vec<Value>,
     /// Top-level `volumes` declared on the task definition (no real
-    /// mount — entries are stored verbatim so DescribeTaskDefinition
+    /// mount. Entries are stored verbatim so DescribeTaskDefinition
     /// echoes the same shape the caller registered).
     pub volumes: Vec<Value>,
     /// Tags supplied at `RegisterTaskDefinition`. Surfaced by
@@ -110,7 +110,7 @@ pub struct TaskDefinition {
     /// service or RunTask call sets `propagateTags=TASK_DEFINITION`.
     pub tags: Vec<(String, String)>,
     /// IAM role tasks assume to call AWS APIs. ECS validates the ARN
-    /// shape, and—when the caller wires an IAM principal lookup—that
+    /// shape, and, when the caller wires an IAM principal lookup, that
     /// cross-account roles actually exist.
     pub task_role_arn: Option<String>,
     /// IAM role the ECS agent itself uses (image pulls, log writes).
@@ -129,16 +129,16 @@ pub struct CapacityProvider {
 /// Per-account/region ECS state.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct EcsState {
-    /// cluster name → Cluster
+    /// cluster name -> Cluster
     pub clusters: DashMap<String, Cluster>,
-    /// family → ordered Vec of TaskDefinition (index 0 = revision 1)
+    /// family -> ordered Vec of TaskDefinition (index 0 = revision 1)
     pub task_definitions: DashMap<String, Vec<TaskDefinition>>,
-    /// resource ARN → HashMap<tag key, tag value>
+    /// resource ARN -> HashMap<tag key, tag value>
     pub resource_tags: DashMap<String, HashMap<String, String>>,
-    /// capacity provider name → CapacityProvider
+    /// capacity provider name -> CapacityProvider
     pub capacity_providers: DashMap<String, CapacityProvider>,
-    /// account setting name → value (e.g. "containerInstanceLongArnFormat" → "enabled")
+    /// account setting name -> value (e.g. "containerInstanceLongArnFormat" -> "enabled")
     pub account_settings: DashMap<String, String>,
-    /// "{cluster_name}|{target_type}" → map of attribute name → value
+    /// "{cluster_name}|{target_type}" -> map of attribute name -> value
     pub attributes: DashMap<String, HashMap<String, String>>,
 }

@@ -156,7 +156,7 @@ pub fn start_lifecycle_policy_preview(
                 format!("Lifecycle policy for repository '{repo_name}' not found"),
             )
         })?;
-    // Validate the policy up front — AWS rejects malformed previews
+    // Validate the policy up front. AWS rejects malformed previews
     // the same way it rejects PutLifecyclePolicy.
     crate::operations::extras::parse_lifecycle_policy(&preview)?;
     repo.lifecycle_policy_preview = Some(preview.clone());

@@ -162,7 +162,7 @@ async fn test_cloudwatch_logs_crud() {
         .await
         .expect("PutLogEvents failed");
 
-    // Describe log groups — should contain the one we just created
+    // Describe log groups. Should contain the one we just created
     let groups = client
         .describe_log_groups()
         .send()
@@ -356,7 +356,7 @@ async fn test_lambda_create_list_delete() {
         .await
         .expect("CreateFunction failed");
 
-    // List functions — should contain the one we created
+    // List functions. Should contain the one we created
     let result = client
         .list_functions()
         .send()
@@ -385,7 +385,7 @@ async fn test_lambda_create_list_delete() {
         .await
         .expect("DeleteFunction failed");
 
-    // List again — should be empty
+    // List again. Should be empty
     let result2 = client
         .list_functions()
         .send()
@@ -506,7 +506,7 @@ async fn test_dynamodb_query() {
             .expect("PutItem (user-2) failed");
     }
 
-    // Query — should return exactly 5 items for user-1
+    // Query. Should return exactly 5 items for user-1
     let result = client
         .query()
         .table_name("orders")
@@ -750,7 +750,7 @@ async fn test_s3_abort_multipart_upload() {
         .await
         .expect("UploadPart failed");
 
-    // Abort — should succeed
+    // Abort. Should succeed
     client
         .abort_multipart_upload()
         .bucket("abort-test")

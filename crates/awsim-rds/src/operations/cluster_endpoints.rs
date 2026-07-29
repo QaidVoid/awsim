@@ -27,7 +27,7 @@ fn endpoint_to_value(e: &DbClusterEndpoint) -> Value {
     obj
 }
 
-/// DescribeDBClusterEndpoints — return cluster endpoints.
+/// DescribeDBClusterEndpoints. Return cluster endpoints.
 pub fn describe_db_cluster_endpoints(
     state: &RdsState,
     input: &Value,
@@ -107,7 +107,7 @@ pub fn describe_db_cluster_endpoints(
     }))
 }
 
-/// CreateDBClusterEndpoint — create a custom cluster endpoint.
+/// CreateDBClusterEndpoint. Create a custom cluster endpoint.
 pub fn create_db_cluster_endpoint(
     state: &RdsState,
     input: &Value,
@@ -145,7 +145,7 @@ pub fn create_db_cluster_endpoint(
     Ok(json!({ "DBClusterEndpoint": result }))
 }
 
-/// DeleteDBClusterEndpoint — delete a custom cluster endpoint.
+/// DeleteDBClusterEndpoint. Delete a custom cluster endpoint.
 pub fn delete_db_cluster_endpoint(
     state: &RdsState,
     input: &Value,

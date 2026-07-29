@@ -60,7 +60,7 @@ pub struct CognitoOAuthState {
     pub default_region: String,
     pub default_account_id: String,
     pub auth_codes: Arc<DashMap<String, AuthCodeEntry>>,
-    /// Revoked refresh tokens (token string → ()).
+    /// Revoked refresh tokens (token string -> ()).
     pub revoked_refresh_tokens: Arc<DashMap<String, ()>>,
     /// In-flight federation state for OIDC IdP redirects.
     pub federation: Arc<crate::federation::FederationState>,
@@ -283,7 +283,7 @@ fn escape_html(s: &str) -> String {
 
 /// Build a `&`-joined query string from `(key, value)` pairs, skipping
 /// empty values. Used to forward OAuth params across hosted-UI pages
-/// (login → forgot-password → confirm) so the user lands back on
+/// (login -> forgot-password -> confirm) so the user lands back on
 /// `/authorize` with PKCE/state intact after a password reset.
 fn build_oauth_query(pairs: &[(&str, &str)]) -> String {
     pairs
@@ -633,7 +633,7 @@ fn forgot_password_confirm_page_html(
         .unwrap_or_default();
     // Show the freshly-issued code right on the page in dev mode so
     // the user doesn't have to scrape it from awsim's logs. This is
-    // explicitly an emulator affordance — real Cognito would email it.
+    // explicitly an emulator affordance. Real Cognito would email it.
     let code_html = code_hint
         .map(|c| {
             format!(
@@ -749,7 +749,7 @@ async fn jwks() -> Json<Value> {
 }
 
 // ---------------------------------------------------------------------------
-// 3a. Authorization endpoint — GET (show login page)
+// 3a. Authorization endpoint. GET (show login page)
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
@@ -1139,7 +1139,7 @@ fn base64_decode_standard(s: &str) -> Option<Vec<u8>> {
 }
 
 // ---------------------------------------------------------------------------
-// 3b. Authorization endpoint — POST (login form submission)
+// 3b. Authorization endpoint. POST (login form submission)
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize, Default)]
@@ -1311,7 +1311,7 @@ async fn authorize_post(
 
     if user.status == "RESET_REQUIRED" {
         // Mirrors the `PasswordResetRequiredException` the SDK paths
-        // return — the user must complete a forgot-password flow before
+        // return. The user must complete a forgot-password flow before
         // direct sign-in is allowed again.
         return login_page_html(
             &pool_id,
@@ -1324,7 +1324,7 @@ async fn authorize_post(
             code_challenge.as_deref().unwrap_or(""),
             code_challenge_method.as_deref().unwrap_or(""),
             Some(
-                "Password reset required — finish the forgot-password flow or have an admin run AdminSetUserPassword to clear the reset state.",
+                "Password reset required. Finish the forgot-password flow or have an admin run AdminSetUserPassword to clear the reset state.",
             ),
             Some(&username),
             &idps,
@@ -1569,7 +1569,7 @@ async fn authorize_post(
 }
 
 // ---------------------------------------------------------------------------
-// 3c. IdP response endpoint — accepts the federated IdP's redirect
+// 3c. IdP response endpoint. Accepts the federated IdP's redirect
 //     after a successful authorize, exchanges the IdP code for an
 //     ID token, validates + maps claims, upserts the federated user,
 //     mints a Cognito authorization code, and finally redirects back
@@ -2098,7 +2098,7 @@ async fn token(
                 .map(|c| c.access_token_validity)
                 .unwrap_or(3600);
 
-            // client_credentials is machine-to-machine — no user groups.
+            // client_credentials is machine-to-machine. No user groups.
             let issuer_url = oauth_state.issuer(&headers, &pool_id);
             let access_tok = jwt::access_token(
                 &effective_client_id,
@@ -2255,7 +2255,7 @@ async fn token(
                 None,
             );
             // AWS Cognito intentionally does NOT issue a new refresh_token
-            // on a refresh-grant exchange — the SPA keeps using the
+            // on a refresh-grant exchange. The SPA keeps using the
             // original one. Mirroring that here avoids confusing SDKs that
             // store the response and either retain a stale value or drop
             // the original.
@@ -2509,7 +2509,7 @@ async fn logout(
                 "logout_uri does not match any registered LogoutURL.",
             );
         }
-        info!(pool_id = %pool_id, client_id = %params.client_id, "OAuth: logout → logout_uri");
+        info!(pool_id = %pool_id, client_id = %params.client_id, "OAuth: logout -> logout_uri");
         return Redirect::to(logout_uri).into_response();
     }
 
@@ -2537,7 +2537,7 @@ async fn logout(
         if !state_param.is_empty() {
             url.push_str(&format!("&state={}", urlencoding(state_param)));
         }
-        info!(pool_id = %pool_id, client_id = %params.client_id, "OAuth: logout → re-authorize");
+        info!(pool_id = %pool_id, client_id = %params.client_id, "OAuth: logout -> re-authorize");
         return Redirect::to(&url).into_response();
     }
 
@@ -2661,7 +2661,7 @@ async fn forgot_password_post(
         crate::operations::users::forgot_password(&oauth_state.cognito, &req_input, &ctx)
     {
         // For a non-existent user we still surface a generic notice +
-        // route to the confirm page — real Cognito is intentionally
+        // route to the confirm page. Real Cognito is intentionally
         // vague about whether an account exists. But we'll only show
         // the dev-mode hint when the user actually exists, so a wrong
         // username won't get a code.

@@ -37,7 +37,7 @@ impl MqService {
         self.store.get(&ctx.account_id, &ctx.region)
     }
 
-    /// Count active brokers for a given account+region — used by the
+    /// Count active brokers for a given account+region. Used by the
     /// billing meter to charge broker-hours. AWS bills any broker
     /// that's running or in a transitional state that still costs
     /// money (`CREATION_IN_PROGRESS`, `RUNNING`, `REBOOT_IN_PROGRESS`).
@@ -574,7 +574,7 @@ mod tests {
         let ctx = ctx();
 
         // Create an ActiveMQ configuration. Revision starts at 1 with
-        // an empty payload — UpdateConfiguration is the first call
+        // an empty payload. UpdateConfiguration is the first call
         // that supplies bytes.
         let c = block_on(svc.handle(
             "CreateConfiguration",
@@ -589,7 +589,7 @@ mod tests {
         let id = c["Id"].as_str().unwrap().to_string();
         assert_eq!(c["LatestRevision"]["Revision"], json!(1));
 
-        // ActiveMQ payload must start with `<broker>` — anything else
+        // ActiveMQ payload must start with `<broker>`. Anything else
         // is rejected. The validator runs on the decoded bytes.
         let activemq_payload =
             base64::engine::general_purpose::STANDARD.encode(b"<broker xmlns=\"...\"></broker>");
@@ -888,7 +888,7 @@ mod tests {
         // Pending mirror survived the round trip.
         assert_eq!(desc["PendingHostInstanceType"], json!("mq.m5.large"));
         assert_eq!(desc["PendingAutoMinorVersionUpgrade"], json!(false));
-        // Live config unchanged — the reboot hasn't fired yet on the
+        // Live config unchanged. The reboot hasn't fired yet on the
         // restored instance either.
         assert_eq!(desc["HostInstanceType"], json!("mq.t3.micro"));
     }
@@ -1015,7 +1015,7 @@ mod tests {
         .unwrap();
         let pre = block_on(svc.handle("DescribeBroker", json!({ "BrokerId": id.clone() }), &ctx))
             .unwrap();
-        // No Logs yet on live config — pending only.
+        // No Logs yet on live config. Pending only.
         assert!(pre.get("Logs").is_none());
         assert_eq!(pre["PendingLogs"]["Audit"], json!(true));
         assert_eq!(pre["PendingConfiguration"]["Id"], json!("c-new"));

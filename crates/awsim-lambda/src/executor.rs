@@ -53,7 +53,7 @@ fn execute_node(
     env_vars: &HashMap<String, String>,
     timeout_secs: u32,
 ) -> ExecutionResult {
-    // handler format: "index.handler" → file "index.js", export "handler"
+    // handler format: "index.handler" -> file "index.js", export "handler"
     let parts: Vec<&str> = handler.splitn(2, '.').collect();
     let (module, func) = if parts.len() == 2 {
         (parts[0], parts[1])
@@ -61,9 +61,9 @@ fn execute_node(
         ("index", "handler")
     };
 
-    // Exit codes are how we distinguish Handled (callback(err) — function
+    // Exit codes are how we distinguish Handled (callback(err). Function
     // signalled failure cleanly) from Unhandled (uncaught throw / promise
-    // rejection — function crashed) for the X-Amz-Function-Error header.
+    // rejection. Function crashed) for the X-Amz-Function-Error header.
     let bootstrap = format!(
         r#"
 const mod = require('./{module}');
@@ -158,7 +158,7 @@ fn execute_python(
     };
 
     // Python has no callback API, so a raised exception is always
-    // "Unhandled" — surface it as AWS-style error JSON on stderr and
+    // "Unhandled". Surface it as AWS-style error JSON on stderr and
     // exit 1 so the Rust side maps it accordingly.
     let bootstrap = format!(
         r#"
@@ -236,7 +236,7 @@ fn run_command(mut cmd: Command, _timeout_secs: u32) -> ExecutionResult {
             } else {
                 // On failure, last line of stderr is the error payload.
                 // Exit code 64 is the bootstrap's signal that the user
-                // called callback(err) — i.e. Handled. Anything else
+                // called callback(err). I.e. Handled. Anything else
                 // (uncaught throw, OOM, native crash) is Unhandled.
                 let error_payload = stderr
                     .lines()

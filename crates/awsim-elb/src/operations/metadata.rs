@@ -21,7 +21,7 @@ pub fn describe_account_limits(_state: &ElbState, _input: &Value) -> Result<Valu
 
 /// ELB Classic `DescribeLoadBalancerPolicies`. With no LoadBalancerName
 /// and an empty PolicyNames filter, AWS returns a fixed sample subset of
-/// predefined policies (not the full catalog) — mirror that. When
+/// predefined policies (not the full catalog). Mirror that. When
 /// PolicyNames is supplied, return matching entries from the catalog or
 /// `PolicyNotFoundException` when any name is unknown.
 pub fn describe_load_balancer_policies(

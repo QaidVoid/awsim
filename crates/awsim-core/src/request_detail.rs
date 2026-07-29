@@ -1,4 +1,4 @@
-//! Per-request detail capture — the data that powers the UI's "Inspect"
+//! Per-request detail capture. The data that powers the UI's "Inspect"
 //! drawer. Stored in a bounded ring buffer keyed by request id, so the
 //! UI can pull headers / bodies on demand without bloating the SSE stream.
 //!
@@ -37,7 +37,7 @@ pub struct CapturedBody {
 
 impl CapturedBody {
     /// A no-content placeholder used for streaming responses, where
-    /// there's nothing to capture — the body is forwarded chunk by
+    /// there's nothing to capture. The body is forwarded chunk by
     /// chunk to the client without buffering. The inspect drawer
     /// renders the message as the body so users see *why* there's
     /// no data.
@@ -65,7 +65,7 @@ pub struct RequestDetail {
     pub response_body: CapturedBody,
 }
 
-/// In-memory ring buffer of recent request details. Cheap to clone — the
+/// In-memory ring buffer of recent request details. Cheap to clone. The
 /// backing store is behind an `Arc<Mutex<_>>`.
 #[derive(Clone)]
 pub struct RequestDetailStore {
@@ -120,7 +120,7 @@ impl RequestDetailStore {
         inner.map.get(id).cloned()
     }
 
-    /// Newest-first list of recent detail ids — used for "open last request".
+    /// Newest-first list of recent detail ids. Used for "open last request".
     pub fn recent_ids(&self, n: usize) -> Vec<String> {
         let inner = match self.inner.lock() {
             Ok(g) => g,

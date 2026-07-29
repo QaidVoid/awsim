@@ -1001,7 +1001,7 @@ pub fn get_operation(
     }))
 }
 
-/// `ListOperations` — return all operations, optionally narrowed by
+/// `ListOperations`. Return all operations, optionally narrowed by
 /// the documented filter dimensions: `NAMESPACE_ID`, `SERVICE_ID`,
 /// `STATUS`, `TYPE`, `UPDATE_DATE`. Multiple filters are ANDed. AWS
 /// supports `EQ`/`IN` conditions for the categorical filters and
@@ -1169,7 +1169,7 @@ fn match_str(f: &OperationFilter, actual: Option<&String>) -> bool {
     }
 }
 
-/// `GetInstancesHealthStatus` — report each instance's current health
+/// `GetInstancesHealthStatus`. Report each instance's current health
 /// status (`HEALTHY` | `UNHEALTHY` | `UNKNOWN`). The emulator has no
 /// health-check prober, so every registered instance reports
 /// `HEALTHY`. Paginates with a numeric `NextToken` offset and honors
@@ -1253,7 +1253,7 @@ pub fn get_instances_health_status(
     Ok(resp)
 }
 
-/// `UpdateService` — patch the mutable fields of an existing service.
+/// `UpdateService`. Patch the mutable fields of an existing service.
 /// AWS accepts `Description`, `DnsConfig`, and `HealthCheckConfig`
 /// inside a wrapping `Service` object; anything else is silently
 /// dropped. Returns the operation id of the (eagerly-succeeded)
@@ -1285,7 +1285,7 @@ pub fn update_service(
     Ok(json!({ "OperationId": op_id }))
 }
 
-/// `UpdateInstanceCustomHealthStatus` — flip the custom health
+/// `UpdateInstanceCustomHealthStatus`. Flip the custom health
 /// status of a registered instance. AWS rejects callers that target a
 /// service without `HealthCheckCustomConfig` set; the per-instance
 /// flag is otherwise opaque to the emulator (no readers act on it),

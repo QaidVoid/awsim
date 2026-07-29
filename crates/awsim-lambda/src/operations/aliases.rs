@@ -346,8 +346,8 @@ mod tests {
         let f = state.functions.get("f").unwrap();
         let cfg = function_configuration(&f);
         assert_eq!(cfg["LastUpdateStatus"], json!("Successful"));
-        // FunctionArn must appear exactly once with the function's ARN —
-        // serde_json silently drops earlier duplicates so this is more of
+        // FunctionArn must appear exactly once with the function's ARN.
+        // Serde_json silently drops earlier duplicates so this is more of
         // a regression guard against re-adding the duplicated key.
         assert_eq!(cfg["FunctionArn"], json!(f.arn));
     }

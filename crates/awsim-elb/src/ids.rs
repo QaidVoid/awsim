@@ -79,7 +79,7 @@ pub fn lb_dns_name(name: &str, region: &str, scheme: &str) -> String {
 /// AWS publishes a per-region canonical hosted zone ID for each
 /// load-balancer family. We synthesize a deterministic 14-char Z-id so
 /// the field is stable across simulator restarts but still per-region.
-/// `lb_type` may be one of `application`, `network`, `gateway` — they
+/// `lb_type` may be one of `application`, `network`, `gateway`. They
 /// share an ID space in our model.
 pub fn canonical_hosted_zone_id(region: &str, lb_type: &str) -> String {
     // Real AWS uses fixed IDs per region; without a static table we

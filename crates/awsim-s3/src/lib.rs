@@ -236,7 +236,7 @@ impl S3Service {
     /// Bulk-seed `buckets` empty buckets, each with `objects_per_bucket`
     /// small text objects. Object body is a deterministic in-memory blob
     /// of `body_bytes` length so the seed is fast + repeatable. Skips
-    /// SigV4 / gateway entirely — a 100-bucket × 100-object seed lands
+    /// SigV4 / gateway entirely. A 100-bucket x 100-object seed lands
     /// in well under a second.
     pub fn seed(&self, input: SeedDatasetInput) -> SeedDatasetOutput {
         use awsim_core::Body;
@@ -247,7 +247,7 @@ impl S3Service {
         let now = chrono::Utc::now().to_rfc3339();
         let body_bytes = input.body_bytes.min(64 * 1024) as usize;
         let body_data: Vec<u8> = (0..body_bytes).map(|i| b'a' + (i as u8 % 26)).collect();
-        // Stable etag for the shared body — md5 of the byte string.
+        // Stable etag for the shared body. Md5 of the byte string.
         let etag_hex = md5_hex(&body_data);
 
         let started = std::time::Instant::now();
@@ -317,7 +317,7 @@ pub struct SeedDatasetInput {
     pub region: String,
     pub buckets: u64,
     pub objects_per_bucket: u64,
-    /// Body bytes per object — capped at 64 KiB by the seeder.
+    /// Body bytes per object. Capped at 64 KiB by the seeder.
     pub body_bytes: u64,
     pub prefix: String,
 }
@@ -401,8 +401,8 @@ impl ServiceHandler for S3Service {
 
     fn routes(&self) -> Vec<RouteDefinition> {
         vec![
-            // ── Bucket-level operations ──────────────────────────────────────
-            // GET / — list all buckets
+            // -- Bucket-level operations --------------------------------------
+            // GET /. List all buckets
             RouteDefinition {
                 method: "GET",
                 path_pattern: "/",
@@ -843,7 +843,7 @@ impl ServiceHandler for S3Service {
                 operation: "PostObject",
                 required_query_param: None,
             },
-            // POST /{Bucket}/{Key+}?select — SelectObjectContent stub
+            // POST /{Bucket}/{Key+}?select. SelectObjectContent stub
             RouteDefinition {
                 method: "POST",
                 path_pattern: "/{Bucket}/{Key+}",
@@ -906,14 +906,14 @@ impl ServiceHandler for S3Service {
                 operation: "RenameObject",
                 required_query_param: Some("renameObject"),
             },
-            // GET /{Bucket} — list objects v1 (no query param; must come after all specific ones)
+            // GET /{Bucket}. List objects v1 (no query param; must come after all specific ones)
             RouteDefinition {
                 method: "GET",
                 path_pattern: "/{Bucket}",
                 operation: "ListObjects",
                 required_query_param: None,
             },
-            // PUT /{Bucket} — create bucket (no query param; must come after all specific ones)
+            // PUT /{Bucket}. Create bucket (no query param; must come after all specific ones)
             RouteDefinition {
                 method: "PUT",
                 path_pattern: "/{Bucket}",
@@ -927,71 +927,71 @@ impl ServiceHandler for S3Service {
                 operation: "DeleteBucket",
                 required_query_param: None,
             },
-            // ── Object-level operations ──────────────────────────────────────
-            // PUT /{Bucket}/{Key+}?partNumber=...  — upload part
+            // -- Object-level operations --------------------------------------
+            // PUT /{Bucket}/{Key+}?partNumber=.... Upload part
             RouteDefinition {
                 method: "PUT",
                 path_pattern: "/{Bucket}/{Key+}",
                 operation: "UploadPart",
                 required_query_param: Some("partNumber"),
             },
-            // POST /{Bucket}/{Key+}?uploads  — initiate multipart upload
+            // POST /{Bucket}/{Key+}?uploads. Initiate multipart upload
             RouteDefinition {
                 method: "POST",
                 path_pattern: "/{Bucket}/{Key+}",
                 operation: "CreateMultipartUpload",
                 required_query_param: Some("uploads"),
             },
-            // POST /{Bucket}/{Key+}?uploadId=...  — complete multipart upload
+            // POST /{Bucket}/{Key+}?uploadId=.... Complete multipart upload
             RouteDefinition {
                 method: "POST",
                 path_pattern: "/{Bucket}/{Key+}",
                 operation: "CompleteMultipartUpload",
                 required_query_param: Some("uploadId"),
             },
-            // DELETE /{Bucket}/{Key+}?uploadId=...  — abort multipart upload
+            // DELETE /{Bucket}/{Key+}?uploadId=.... Abort multipart upload
             RouteDefinition {
                 method: "DELETE",
                 path_pattern: "/{Bucket}/{Key+}",
                 operation: "AbortMultipartUpload",
                 required_query_param: Some("uploadId"),
             },
-            // GET /{Bucket}/{Key+}?uploadId=...  — list parts
+            // GET /{Bucket}/{Key+}?uploadId=.... List parts
             RouteDefinition {
                 method: "GET",
                 path_pattern: "/{Bucket}/{Key+}",
                 operation: "ListParts",
                 required_query_param: Some("uploadId"),
             },
-            // PUT /{Bucket}/{Key+}?tagging — put object tagging
+            // PUT /{Bucket}/{Key+}?tagging. Put object tagging
             RouteDefinition {
                 method: "PUT",
                 path_pattern: "/{Bucket}/{Key+}",
                 operation: "PutObjectTagging",
                 required_query_param: Some("tagging"),
             },
-            // GET /{Bucket}/{Key+}?tagging — get object tagging
+            // GET /{Bucket}/{Key+}?tagging. Get object tagging
             RouteDefinition {
                 method: "GET",
                 path_pattern: "/{Bucket}/{Key+}",
                 operation: "GetObjectTagging",
                 required_query_param: Some("tagging"),
             },
-            // DELETE /{Bucket}/{Key+}?tagging — delete object tagging
+            // DELETE /{Bucket}/{Key+}?tagging. Delete object tagging
             RouteDefinition {
                 method: "DELETE",
                 path_pattern: "/{Bucket}/{Key+}",
                 operation: "DeleteObjectTagging",
                 required_query_param: Some("tagging"),
             },
-            // GET /{Bucket}/{Key+}?acl — get object ACL
+            // GET /{Bucket}/{Key+}?acl. Get object ACL
             RouteDefinition {
                 method: "GET",
                 path_pattern: "/{Bucket}/{Key+}",
                 operation: "GetObjectAcl",
                 required_query_param: Some("acl"),
             },
-            // PUT /{Bucket}/{Key+}  — put object (or copy object via header)
+            // PUT /{Bucket}/{Key+}. Put object (or copy object via header)
             RouteDefinition {
                 method: "PUT",
                 path_pattern: "/{Bucket}/{Key+}",

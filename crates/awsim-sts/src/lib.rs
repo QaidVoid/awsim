@@ -74,15 +74,15 @@ impl StsService {
             "GetCallerIdentity"
         );
         // Resolution order:
-        //   1. Recorded STS session (assumed-role temp creds) — emit
-        //      the proper `arn:aws:sts::…:assumed-role/Name/Session`
-        //      shape and `AROA…:Session` UserId.
-        //   2. Long-term access key — surface as a synthetic IAM-user
+        //   1. Recorded STS session (assumed-role temp creds). Emit
+        //      the proper `arn:aws:sts::...:assumed-role/Name/Session`
+        //      shape and `AROA...:Session` UserId.
+        //   2. Long-term access key. Surface as a synthetic IAM-user
         //      ARN. Real AWS would resolve this to the actual user via
         //      the IAM record; we don't have a hook to that here, so
         //      we fall back to using the key as the UserId. Tools that
         //      key off UserId still get a stable per-credential value.
-        //   3. Anonymous — root shape, the historical default.
+        //   3. Anonymous. Root shape, the historical default.
         let (user_id, arn, account) = if let Some(session) = ctx
             .access_key
             .as_deref()
@@ -511,7 +511,7 @@ fn is_iam_name_char(c: char) -> bool {
 
 /// Validate the AWS Role ARN shape:
 /// `arn:aws(-{partition})?:iam::ACCOUNT_ID:role/PATH`
-/// — 12-digit account id, role/path segments composed of `[\w+=,.@-]`
+///. 12-digit account id, role/path segments composed of `[\w+=,.@-]`
 /// segments separated by `/`.
 fn validate_role_arn(arn: &str) -> Result<(), AwsError> {
     fn invalid(arn: &str) -> AwsError {
@@ -590,8 +590,8 @@ fn validate_source_identity(name: &str) -> Result<(), AwsError> {
 ///     bound to a packed limit (we use 2048 chars as a rough guard)
 ///   - `PolicyArns`: max 10 entries, each must be a valid policy ARN
 ///
-/// Note: we don't yet apply session policies to credential evaluation —
-/// the IAM enforcement engine is opt-in and AssumeRole credentials are
+/// Note: we don't yet apply session policies to credential evaluation.
+/// The IAM enforcement engine is opt-in and AssumeRole credentials are
 /// generated without consulting them. Validation here just prevents
 /// callers from getting silent acceptance of bad input.
 fn validate_session_policies(input: &Value) -> Result<(), AwsError> {
@@ -704,7 +704,7 @@ fn validate_session_tags(input: &Value) -> Result<(), AwsError> {
 }
 
 /// Extract the `sub` claim from a JWT-shaped Web Identity token. We
-/// don't verify the signature against any IDP (no JWKS lookup) — the
+/// don't verify the signature against any IDP (no JWKS lookup). The
 /// purpose here is to give callers a stable per-token subject identity
 /// instead of a hardcoded fixture string. Returns `None` for malformed
 /// tokens so the caller can fall back to a default.
@@ -1163,7 +1163,7 @@ mod tests {
         let ctx = make_ctx();
         let result = svc.get_caller_identity(&ctx).unwrap();
         assert_eq!(result["Account"], "000000000000");
-        // Anonymous/unauthenticated → root shape; UserId equals account id.
+        // Anonymous/unauthenticated -> root shape; UserId equals account id.
         assert_eq!(result["UserId"], json!("000000000000"));
         assert_eq!(
             result["Arn"].as_str().unwrap(),
@@ -1188,8 +1188,8 @@ mod tests {
     fn test_get_caller_identity_assumed_role_uses_session() {
         // Round-trip: AssumeRole records a session, then a follow-up
         // GetCallerIdentity with the issued ASIA key should report the
-        // assumed-role ARN and AROA…:session UserId — not the
-        // synthesised iam:user/ASIA… shape.
+        // assumed-role ARN and AROA...:session UserId. Not the
+        // synthesised iam:user/ASIA... shape.
         let svc = StsService::new();
         let assume_input = json!({
             "RoleArn": "arn:aws:iam::000000000000:role/AppAuthRole",
@@ -1449,7 +1449,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(resp["Subject"].as_str(), Some("alice@example.com"));
-        // Session name was derived from the NameID (sanitized — `@` and
+        // Session name was derived from the NameID (sanitized. `@` and
         // `.` are valid IAM-name chars so they pass through).
         let session_arn = resp["AssumedRoleUser"]["Arn"].as_str().unwrap();
         assert!(

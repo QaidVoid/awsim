@@ -69,7 +69,7 @@ impl SesService {
         self._tempdir.as_ref().map(|d| d.path())
     }
 
-    /// Internal Arc to the sqlite store — exposed so the awsim
+    /// Internal Arc to the sqlite store. Exposed so the awsim
     /// binary's `/_awsim/storage/sqlite` endpoint can surface row
     /// counts + file size, and so the retention sweep can run.
     pub fn sqlite_store_handle(&self) -> Option<Arc<SqliteStore>> {
@@ -136,7 +136,7 @@ impl SesService {
     }
 
     /// Snapshot every sent email across all accounts/regions, newest
-    /// first. Reads straight from SQLite — survives restarts.
+    /// first. Reads straight from SQLite. Survives restarts.
     pub fn list_sent_emails(&self) -> Vec<(String, String, SentEmail)> {
         match self.sqlite_store.list_all() {
             Ok(rows) => rows

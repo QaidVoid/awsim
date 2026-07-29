@@ -32,7 +32,7 @@ pub fn matches_filter_body(filter_policy: &Value, body: &Value) -> bool {
 
     for (key, conditions) in policy {
         let body_value = body.get(key);
-        // Nested object policy → recurse into the same field of the body.
+        // Nested object policy -> recurse into the same field of the body.
         if conditions.is_object() && !is_operator_object(conditions) {
             let Some(nested_body) = body_value else {
                 return false;
@@ -42,7 +42,7 @@ pub fn matches_filter_body(filter_policy: &Value, body: &Value) -> bool {
             }
             continue;
         }
-        // Leaf array of conditions → reuse the same single-value matcher.
+        // Leaf array of conditions -> reuse the same single-value matcher.
         if !matches_conditions(conditions, body_value) {
             return false;
         }
@@ -70,7 +70,7 @@ pub fn validate_filter_policy(policy: &Value) -> Result<(), String> {
 }
 
 fn validate_filter_clause(key: &str, value: &Value) -> Result<(), String> {
-    // Nested policy (used for FilterPolicyScope=MessageBody) — recurse.
+    // Nested policy (used for FilterPolicyScope=MessageBody). Recurse.
     if value.is_object() && !is_operator_object(value) {
         return validate_filter_policy(value);
     }
@@ -228,7 +228,7 @@ fn attr_str(attr: Option<&Value>) -> Option<&str> {
 /// Extract a stringified scalar from either form a filter value can take:
 ///
 /// - `{"Value": "..."}` (SNS attribute envelope; only String reaches here)
-/// - a raw JSON scalar (string/number/boolean) — used when matching
+/// - a raw JSON scalar (string/number/boolean). Used when matching
 ///   against a parsed message body via `FilterPolicyScope=MessageBody`.
 ///
 /// Returns `None` for objects, arrays, and null.
@@ -247,11 +247,11 @@ fn scalar_as_string(attr: Option<&Value>) -> Option<String> {
 
 fn matches_single_condition(condition: &Value, attr: Option<&Value>) -> bool {
     match condition {
-        // String exact match — AWS treats string and numeric values as
+        // String exact match. AWS treats string and numeric values as
         // distinct types, so a string condition only matches a string
         // attribute / body value (no implicit coercion).
         Value::String(s) => attr_str(attr).map(|v| v == s).unwrap_or(false),
-        // Numeric match — accept either a wrapped attribute string or a
+        // Numeric match. Accept either a wrapped attribute string or a
         // raw JSON number from a parsed message body.
         Value::Number(n) => scalar_as_string(attr)
             .and_then(|v| v.parse::<f64>().ok())
@@ -294,9 +294,9 @@ fn matches_single_condition(condition: &Value, attr: Option<&Value>) -> bool {
 }
 
 /// Evaluate an `anything-but` clause:
-/// - `{ "anything-but": "x" }` — matches if attr is present and != "x"
-/// - `{ "anything-but": ["x", "y"] }` — matches if attr is present and not in list
-/// - `{ "anything-but": { "prefix": "x" } }` — matches if attr is present and
+/// - `{ "anything-but": "x" }`. Matches if attr is present and != "x"
+/// - `{ "anything-but": ["x", "y"] }`. Matches if attr is present and not in list
+/// - `{ "anything-but": { "prefix": "x" } }`. Matches if attr is present and
 ///   does not start with "x"
 fn matches_anything_but(spec: &Value, attr: Option<&Value>) -> bool {
     let Some(value) = attr_str(attr) else {
@@ -603,8 +603,8 @@ mod tests {
         let policy = json!({ "kind": [{ "anything-but": "test" }] });
         assert!(matches_filter(&policy, &attrs(&[("kind", "prod")])));
         assert!(!matches_filter(&policy, &attrs(&[("kind", "test")])));
-        // Missing attr does not match anything-but per AWS semantics —
-        // anything-but requires the attribute to be present.
+        // Missing attr does not match anything-but per AWS semantics.
+        // Anything-but requires the attribute to be present.
         assert!(!matches_filter(&policy, &HashMap::new()));
     }
 
@@ -645,7 +645,7 @@ mod tests {
         let policy = json!({ "src": [{ "cidr": "2001:db8::/32" }] });
         assert!(matches_filter(&policy, &attrs(&[("src", "2001:db8::1")])));
         assert!(!matches_filter(&policy, &attrs(&[("src", "2001:db9::1")])));
-        // v4 inside v6 CIDR — no match (mixed family).
+        // v4 inside v6 CIDR. No match (mixed family).
         assert!(!matches_filter(&policy, &attrs(&[("src", "10.0.0.1")])));
     }
 
@@ -671,7 +671,7 @@ mod tests {
         assert!(matches_filter_body(&policy, &body));
         let body2 = json!({ "detail": { "status": "OK" } });
         assert!(!matches_filter_body(&policy, &body2));
-        // Missing nested path → no match.
+        // Missing nested path -> no match.
         let body3 = json!({ "other": { "status": "FAILED" } });
         assert!(!matches_filter_body(&policy, &body3));
     }

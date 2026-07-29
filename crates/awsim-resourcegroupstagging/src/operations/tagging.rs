@@ -6,13 +6,13 @@ use serde_json::{Map, Value, json};
 
 use crate::state::TaggingState;
 
-/// `TagResources` — apply a `Tags` map to one or more `ResourceARNList` ARNs.
+/// `TagResources`. Apply a `Tags` map to one or more `ResourceARNList` ARNs.
 ///
 /// Returns `FailedResourcesMap[ARN -> { StatusCode, ErrorCode, ErrorMessage }]`
 /// populated with one entry per ARN that the index has no record of.
 /// Reserved `aws:` keys raise a top-level `ConstraintViolationException`
 /// (no resource is tagged) because the same `Tags` map applies to the
-/// whole batch — there is no per-ARN partial-success in that case.
+/// whole batch. There is no per-ARN partial-success in that case.
 pub fn tag_resources(
     state: &TaggingState,
     input: &Value,
@@ -43,7 +43,7 @@ pub fn tag_resources(
     Ok(json!({ "FailedResourcesMap": failed }))
 }
 
-/// `UntagResources` — remove the given `TagKeys` from each ARN.
+/// `UntagResources`. Remove the given `TagKeys` from each ARN.
 ///
 /// Mirrors [`tag_resources`]: reserved `aws:` keys fail the whole
 /// request with `ConstraintViolationException`; unknown ARNs land in

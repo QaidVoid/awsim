@@ -71,11 +71,11 @@ pub struct SchedulerStateSnapshot {
 /// Per-account/region Scheduler state.
 #[derive(Debug, Default)]
 pub struct SchedulerState {
-    /// "{group}/{name}" → Schedule
+    /// "{group}/{name}" -> Schedule
     pub schedules: DashMap<String, Schedule>,
-    /// name → ScheduleGroup
+    /// name -> ScheduleGroup
     pub schedule_groups: DashMap<String, ScheduleGroup>,
-    /// ARN → tags (key → value)
+    /// ARN -> tags (key -> value)
     pub tags: DashMap<String, HashMap<String, String>>,
     /// `ClientToken` cache. AWS Scheduler honors the token for 24h:
     /// a replay returns the cached response (ScheduleArn); a different

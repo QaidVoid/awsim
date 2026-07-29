@@ -721,7 +721,7 @@ fn resolve_ref(
         return res.clone();
     }
 
-    // Unknown ref — return as-is string
+    // Unknown ref. Return as-is string
     Value::String(name.to_string())
 }
 

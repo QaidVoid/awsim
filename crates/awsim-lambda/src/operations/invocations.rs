@@ -179,7 +179,7 @@ fn ensure_code_dir(
             debug!(function_name, "Using cached code directory");
             return Ok(cache_dir);
         }
-        // Hash mismatch — clear and re-extract
+        // Hash mismatch. Clear and re-extract
         std::fs::remove_dir_all(&cache_dir).map_err(|e| format!("remove stale cache: {e}"))?;
     }
 
@@ -253,7 +253,7 @@ pub fn invoke(
     }
 
     // DryRun validates the call without executing. AWS responds with HTTP
-    // 204 No Content and an empty body — set __status_code so the gateway
+    // 204 No Content and an empty body. Set __status_code so the gateway
     // emits the right status, and skip Payload entirely so callers don't
     // see a synthetic body. DryRun does not count against concurrency.
     if invocation_type == "DryRun" {
@@ -267,7 +267,7 @@ pub fn invoke(
     // 429 `TooManyRequestsException` with `Reason=ConcurrentInvocationLimitExceeded`.
     // The check + increment are not atomic (DashMap doesn't let us do
     // compare-and-swap on the counter), so a tight race could let us
-    // briefly exceed the cap by one or two — acceptable for the
+    // briefly exceed the cap by one or two. Acceptable for the
     // simulator and consistent with how real Lambda also overshoots
     // slightly before throttling kicks in.
     // Push onto the recursion stack now so any re-entrant invokes that
@@ -308,7 +308,7 @@ pub fn invoke(
 
     // Async (Event) invocations return HTTP 202 with an empty body and run
     // the function on a background thread. The caller doesn't see the
-    // result, errors, or any invocation record — that's the documented
+    // result, errors, or any invocation record. That's the documented
     // AWS behavior. Pre-flight code preparation happens before the
     // detach so a missing-code error is still synchronously visible.
     if invocation_type == "Event" {
@@ -385,7 +385,7 @@ pub fn invoke(
             }
         }
     } else {
-        // No code data or missing runtime/handler — fall back to mock
+        // No code data or missing runtime/handler. Fall back to mock
         warn!(
             function_name = name,
             runtime = ?runtime,
@@ -487,7 +487,7 @@ mod tests {
     }
 
     fn create_test_fn(state: &LambdaState) {
-        // No runtime/handler so the executor fallback short-circuits — we
+        // No runtime/handler so the executor fallback short-circuits. We
         // only care about the dispatch / status-code path here.
         create_function(
             state,
@@ -517,7 +517,7 @@ mod tests {
         .unwrap();
         assert_eq!(resp["StatusCode"], json!(202));
         assert_eq!(resp["__status_code"], json!(202));
-        // Per AWS, async invocations have an empty body — no Payload field.
+        // Per AWS, async invocations have an empty body. No Payload field.
         assert!(resp.get("Payload").is_none());
         assert!(resp.get("FunctionError").is_none());
     }
@@ -594,8 +594,8 @@ mod tests {
             &ctx(),
         )
         .unwrap();
-        // Mock-fallback logs are empty, so LogResult is base64("") = "" —
-        // we only care that the field/header are present and identical.
+        // Mock-fallback logs are empty, so LogResult is base64("") = "".
+        // We only care that the field/header are present and identical.
         let body_log = resp.get("LogResult").and_then(Value::as_str).unwrap();
         let header_log = resp["__headers"]["X-Amz-Log-Result"].as_str().unwrap();
         assert_eq!(body_log, header_log);
@@ -695,7 +695,7 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "TooManyRequestsException");
-        // AWS-documented Reason — SDK clients branch on this value.
+        // AWS-documented Reason. SDK clients branch on this value.
         let extras = err.extras.as_ref().expect("extras populated");
         assert_eq!(
             extras.get("Reason").and_then(|v| v.as_str()),
@@ -720,7 +720,7 @@ mod tests {
     fn reserved_concurrency_unset_allows_unbounded_invokes() {
         let state = LambdaState::default();
         create_test_fn(&state);
-        // No cap configured — 10 back-to-back invocations should all succeed.
+        // No cap configured. 10 back-to-back invocations should all succeed.
         for _ in 0..10 {
             invoke(
                 &state,

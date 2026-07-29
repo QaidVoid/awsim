@@ -38,7 +38,7 @@ pub struct KmsKey {
     pub key_spec: String,
     /// "ENCRYPT_DECRYPT", "SIGN_VERIFY"
     pub key_usage: String,
-    /// Unix epoch seconds — matches awsJson1.1 timestamp wire format.
+    /// Unix epoch seconds. Matches awsJson1.1 timestamp wire format.
     pub creation_date: f64,
     /// Random bytes used for XOR-based emulated encryption.
     pub secret: Vec<u8>,
@@ -48,7 +48,7 @@ pub struct KmsKey {
     pub rotation_enabled: bool,
     /// Key policy document (JSON string), keyed by policy name.
     pub policies: HashMap<String, String>,
-    /// Resource tags: key → value.
+    /// Resource tags: key -> value.
     pub tags: HashMap<String, String>,
     /// Whether key material has been imported.
     pub key_material_imported: bool,
@@ -78,13 +78,13 @@ pub struct KeyRotationEvent {
 /// Per-account/region KMS state.
 #[derive(Debug, Default)]
 pub struct KmsState {
-    /// KeyId → KmsKey
+    /// KeyId -> KmsKey
     pub keys: DashMap<String, KmsKey>,
-    /// alias_name (e.g. "alias/my-key") → key_id
+    /// alias_name (e.g. "alias/my-key") -> key_id
     pub aliases: DashMap<String, String>,
-    /// GrantId → KmsGrant
+    /// GrantId -> KmsGrant
     pub grants: DashMap<String, KmsGrant>,
-    /// CustomKeyStoreId → KmsCustomKeyStore
+    /// CustomKeyStoreId -> KmsCustomKeyStore
     pub custom_key_stores: DashMap<String, KmsCustomKeyStore>,
     /// KeyId -> rotation events
     pub key_rotations: DashMap<String, Vec<KeyRotationEvent>>,

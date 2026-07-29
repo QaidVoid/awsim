@@ -19,7 +19,7 @@ pub fn new_oac_id() -> String {
     new_distribution_id()
 }
 
-/// Distribution ARN (CloudFront is global — no region in ARN).
+/// Distribution ARN (CloudFront is global. No region in ARN).
 pub fn distribution_arn(partition: &str, account: &str, id: &str) -> String {
     format!("arn:{partition}:cloudfront::{account}:distribution/{id}")
 }

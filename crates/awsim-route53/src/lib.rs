@@ -15,7 +15,7 @@ use state::Route53State;
 
 /// The AWSim Route53 service handler.
 ///
-/// Route53 is a global service — state is stored per account under the "global" region key.
+/// Route53 is a global service. State is stored per account under the "global" region key.
 pub struct Route53Service {
     store: AccountRegionStore<Route53State>,
 }
@@ -28,7 +28,7 @@ impl Route53Service {
     }
 
     fn get_state(&self, ctx: &RequestContext) -> Arc<Route53State> {
-        // Route53 is global — ignore region.
+        // Route53 is global. Ignore region.
         self.store.get(&ctx.account_id, "global")
     }
 }

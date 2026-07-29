@@ -312,7 +312,7 @@ pub fn update_key_description(
 /// to the canonical KeyId string.
 ///
 /// The order matters: alias ARNs are checked before key ARNs because
-/// both share the `arn:{partition}:kms:` prefix; a generic `:kms:…/X`
+/// both share the `arn:{partition}:kms:` prefix; a generic `:kms:.../X`
 /// match would otherwise treat the alias name as a raw key ID and fail
 /// the key-table lookup before the alias path is considered.
 pub fn resolve_key_id(state: &KmsState, input: &str) -> Result<String, AwsError> {

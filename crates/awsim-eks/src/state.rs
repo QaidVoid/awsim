@@ -90,7 +90,7 @@ pub struct EksState {
 /// EKS managed addon. `resolve_conflicts` controls the create / update
 /// merge strategy and is one of `NONE`, `OVERWRITE`, or `PRESERVE`.
 /// `configuration_values` is opaque JSON/YAML the caller hands in;
-/// AWS doesn't shape-check it, so we don't either — only `serialize`
+/// AWS doesn't shape-check it, so we don't either. Only `serialize`
 /// is meaningful.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Addon {

@@ -160,7 +160,7 @@ pub fn create_schedule(
 
 /// Parse an optional ISO-8601 timestamp from the request payload.
 /// Accepts the AWS-documented `yyyy-mm-ddTHH:MM:SS` form, optionally
-/// followed by `.<frac>` and a `Z` / `±HH:MM` timezone suffix.
+/// followed by `.<frac>` and a `Z` / `+/-HH:MM` timezone suffix.
 fn parse_optional_iso_timestamp(input: &Value, field: &str) -> Result<Option<String>, AwsError> {
     let raw = match input.get(field).and_then(|v| v.as_str()) {
         Some(s) => s.trim(),
@@ -309,7 +309,7 @@ fn validate_dead_letter_config(target: &Value) -> Result<(), AwsError> {
 /// `arn:<partition>:kms:<region>:<account>:key/<key-id>` shape with a
 /// non-empty region (KMS keys are regional) and a `key/<id>` resource
 /// segment. We do not enforce the partition matches the gateway's
-/// context — multi-partition deployments may legitimately mix.
+/// context. Multi-partition deployments may legitimately mix.
 fn validate_kms_key_arn(arn: &str) -> Result<(), AwsError> {
     let segs: Vec<&str> = arn.split(':').collect();
     if segs.len() < 6 || segs[0] != "arn" {
@@ -376,11 +376,11 @@ pub(crate) fn validate_scheduler_name(value: &str, field: &str) -> Result<(), Aw
 /// return `true` when the expression is a one-shot `at(...)`. AWS
 /// accepts:
 ///
-/// - `at(yyyy-mm-ddTHH:MM:SS)` — one-shot, fires once at the given
+/// - `at(yyyy-mm-ddTHH:MM:SS)`. One-shot, fires once at the given
 ///   wall time in the schedule's `ScheduleExpressionTimezone`.
 /// - `rate(N <unit>)` where `<unit>` is `minute`/`minutes`/`hour`/
 ///   `hours`/`day`/`days` and `N >= 1`.
-/// - `cron(<6 fields>)` — minute hour DOM month DOW year.
+/// - `cron(<6 fields>)`. Minute hour DOM month DOW year.
 fn validate_schedule_expression(expr: &str) -> Result<bool, AwsError> {
     if let Some(body) = expr.strip_prefix("at(").and_then(|s| s.strip_suffix(')')) {
         validate_at_timestamp(body)?;
@@ -436,7 +436,7 @@ fn validate_schedule_expression(expr: &str) -> Result<bool, AwsError> {
 }
 
 /// Validate the `at(...)` timestamp shape: `yyyy-mm-ddTHH:MM:SS`.
-/// No timezone suffix — the schedule's `ScheduleExpressionTimezone`
+/// No timezone suffix. The schedule's `ScheduleExpressionTimezone`
 /// supplies that.
 fn validate_at_timestamp(body: &str) -> Result<(), AwsError> {
     let (date, time) = body.split_once('T').ok_or_else(|| {
@@ -585,11 +585,11 @@ fn resolve_timezone(input: &Value) -> Result<String, AwsError> {
 /// Validate the `Target.Arn` shape. AWS Scheduler accepts two
 /// flavours:
 ///
-/// 1. **Templated service target** — a normal AWS resource ARN
+/// 1. **Templated service target**. A normal AWS resource ARN
 ///    (`arn:aws:<service>:<region>:<account>:<resource>`). We
 ///    sanity-check the prefix and segment count but don't enforce a
 ///    service catalog.
-/// 2. **Universal target** — `arn:aws:scheduler:::aws-sdk:<service>:<action>`.
+/// 2. **Universal target**. `arn:aws:scheduler:::aws-sdk:<service>:<action>`.
 ///    The middle region/account/resource-type segments are empty by
 ///    convention and `<service>:<action>` is required to be a non-empty
 ///    lowercase-letter pair. AWS rejects invalid `service:action`

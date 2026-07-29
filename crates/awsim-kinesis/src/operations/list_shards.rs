@@ -26,7 +26,7 @@ pub fn handle(
 
     let mut shards = stream.shards.clone();
     drop(stream);
-    // Stable ordering — AWS doesn't promise a particular ordering but
+    // Stable ordering. AWS doesn't promise a particular ordering but
     // pagination requires it.
     shards.sort_by(|a, b| a.shard_id.cmp(&b.shard_id));
 

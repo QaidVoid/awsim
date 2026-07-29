@@ -4,11 +4,11 @@ use std::collections::HashMap;
 
 #[derive(Debug, Default)]
 pub struct EfsState {
-    /// fs_id → FileSystem
+    /// fs_id -> FileSystem
     pub file_systems: DashMap<String, FileSystem>,
-    /// mt_id → MountTarget
+    /// mt_id -> MountTarget
     pub mount_targets: DashMap<String, MountTarget>,
-    /// ap_id → AccessPoint
+    /// ap_id -> AccessPoint
     pub access_points: DashMap<String, AccessPoint>,
     /// AccessPoint ClientToken idempotency cache. Default 24-hour TTL
     /// per AWS spec 0009; cached responses are replayed on retry.

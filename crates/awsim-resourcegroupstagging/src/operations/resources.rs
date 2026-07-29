@@ -7,11 +7,11 @@ use serde_json::{Value, json};
 
 use crate::state::TaggingState;
 
-/// Per-call paging cursor — opaque to the caller, base64-encoded JSON
+/// Per-call paging cursor. Opaque to the caller, base64-encoded JSON
 /// for us. We carry the last ARN that was returned so the next call
 /// resumes by skipping everything `<= last_arn`. Encoding the ARN
 /// (rather than an integer offset) makes pagination stable across
-/// inserts/deletes that happen between calls — if a resource is
+/// inserts/deletes that happen between calls. If a resource is
 /// added before the cursor, the next page still picks up where the
 /// previous one left off.
 #[derive(Debug, Serialize, Deserialize)]
@@ -21,18 +21,18 @@ struct Cursor {
     last_arn: String,
 }
 
-/// `GetResources` — list tagged resources, optionally filtered by tag.
+/// `GetResources`. List tagged resources, optionally filtered by tag.
 ///
 /// Supported inputs:
-///   * `TagFilters: [{ Key, Values? }]` — match resources whose tags include
+///   * `TagFilters: [{ Key, Values? }]`. Match resources whose tags include
 ///     the key, and (when provided) one of the given values.
-///   * `ResourceTypeFilters: [String]` — match resources whose ARN service
+///   * `ResourceTypeFilters: [String]`. Match resources whose ARN service
 ///     segment matches any of the given strings.
-///   * `ResourcesPerPage` — caller-supplied page size, clamped to 100.
-///   * `PaginationToken` — opaque cursor returned by a previous call.
+///   * `ResourcesPerPage`. Caller-supplied page size, clamped to 100.
+///   * `PaginationToken`. Opaque cursor returned by a previous call.
 ///
 /// `IncludeComplianceDetails` and `ExcludeCompliantResources` are accepted but
-/// not enforced — the emulator has no compliance signal.
+/// not enforced. The emulator has no compliance signal.
 pub fn get_resources(
     state: &TaggingState,
     input: &Value,
@@ -40,8 +40,8 @@ pub fn get_resources(
 ) -> Result<Value, AwsError> {
     let tag_filters = parse_tag_filters(input.get("TagFilters"))?;
     // ResourceTypeFilters: AWS matches case-sensitively against the
-    // canonical service / `service:resource-type` form. Trim only —
-    // do not lowercase, because callers that pass `ec2:Instance`
+    // canonical service / `service:resource-type` form. Trim only.
+    // Do not lowercase, because callers that pass `ec2:Instance`
     // expect a different match set than `ec2:instance`.
     let type_filters: Vec<String> = input
         .get("ResourceTypeFilters")
@@ -112,7 +112,7 @@ pub fn get_resources(
     // Hand back a cursor only when there is more to walk after the
     // last ARN we touched (filtered or otherwise). When `walked_arn`
     // is None we exhausted the entire map without seeing a single
-    // entry — there is no next page either way.
+    // entry. There is no next page either way.
     let next_token = match walked_arn {
         Some(last)
             if snapshot
@@ -157,8 +157,8 @@ fn parse_tag_filters(value: Option<&Value>) -> Result<Vec<TagFilter>, AwsError> 
             })
             .unwrap_or_default();
         // AWS caps TagFilter.Values at 256 per filter and treats
-        // missing/empty `Values` as "match any tag with this key" —
-        // the latter is encoded by leaving the vector empty so
+        // missing/empty `Values` as "match any tag with this key".
+        // The latter is encoded by leaving the vector empty so
         // `matches_tag_filters` short-circuits.
         if values.len() > 256 {
             return Err(AwsError::validation(format!(
@@ -352,11 +352,11 @@ mod tests {
         for arn in &arns2 {
             assert!(
                 !arns1.contains(arn),
-                "{arn} appeared on both pages — cursor is not stable",
+                "{arn} appeared on both pages. Cursor is not stable",
             );
         }
         // The injected ARN sorts before the page-1 head, so it must
-        // NOT show up on page 2 — that's the whole point of the
+        // NOT show up on page 2. That's the whole point of the
         // marker-based design.
         assert!(
             !arns2.contains(&"arn:aws:s3:::aaa-injected".to_string()),
@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn resource_type_filters_are_case_sensitive() {
         let state = populated();
-        // `S3` (uppercase) must not match `s3` ARNs — real AWS is
+        // `S3` (uppercase) must not match `s3` ARNs. Real AWS is
         // case-sensitive on canonical service names.
         let resp =
             get_resources(&state, &json!({ "ResourceTypeFilters": ["S3"] }), &ctx()).unwrap();
@@ -406,7 +406,7 @@ mod tests {
     #[test]
     fn tag_filter_with_empty_values_matches_any_value_for_key() {
         let state = populated();
-        // No Values means "any value for the key" — bucket-a has
+        // No Values means "any value for the key". Bucket-a has
         // `Env=prod`, bucket-b has `Env=dev`; both match.
         let resp = get_resources(
             &state,

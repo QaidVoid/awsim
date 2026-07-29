@@ -62,7 +62,7 @@ pub struct Broker {
     /// `MaintenanceWindowStartTime` echoed on Describe.
     #[serde(default)]
     pub maintenance_window_start_time: Option<serde_json::Value>,
-    /// LDAP config — required when `AuthenticationStrategy=LDAP`.
+    /// LDAP config. Required when `AuthenticationStrategy=LDAP`.
     #[serde(default)]
     pub ldap_server_metadata: Option<serde_json::Value>,
     /// Initial Configuration reference: `{ "Id": "c-...", "Revision": 1 }`.

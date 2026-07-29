@@ -204,7 +204,7 @@ fn parse_notification_arns(input: &Value) -> Result<Vec<String>, AwsError> {
 /// Parse + validate `StackPolicyBody` from a CreateStack /
 /// UpdateStack / SetStackPolicy input. The body must be JSON; CFN
 /// uses an IAM-flavoured Statement[] schema. We validate the JSON
-/// shape but don't bind it to a typed model — the policy evaluator
+/// shape but don't bind it to a typed model. The policy evaluator
 /// reads it back ad hoc so missing optional fields stay missing.
 fn parse_stack_policy(input: &Value) -> Result<Option<String>, AwsError> {
     let Some(raw) = input.get("StackPolicyBody").and_then(Value::as_str) else {
@@ -244,7 +244,7 @@ fn parse_stack_policy(input: &Value) -> Result<Option<String>, AwsError> {
 /// `Update:Delete`, `Update:*`, `*`. Resource patterns are glob-style
 /// against the logical id with `*` as the wildcard char. Allow
 /// statements are treated as overrides over a default-deny, matching
-/// CFN's evaluation semantics — but only when at least one Deny
+/// CFN's evaluation semantics. But only when at least one Deny
 /// applies. Stacks without a policy treat every update as allowed.
 fn evaluate_stack_policy(
     policy_body: &str,
@@ -403,7 +403,7 @@ fn publish_stack_event_notifications(
             detail: json!({
                 "topic_arn": topic_arn,
                 "message": message,
-                "subject": format!("AWS CloudFormation Notification — {status}"),
+                "subject": format!("AWS CloudFormation Notification. {status}"),
             }),
         });
     }
@@ -792,7 +792,7 @@ pub fn delete_stack(
         );
         state.stacks.insert(stack_name.to_string(), stack);
     }
-    // DeleteStack is idempotent — no error if not found
+    // DeleteStack is idempotent. No error if not found
 
     Ok(json!({}))
 }
@@ -1008,7 +1008,7 @@ pub fn get_template(state: &CloudFormationState, input: &Value) -> Result<Value,
     Ok(json!({ "TemplateBody": stack.template_body }))
 }
 
-/// DescribeStackResource — get a single resource from a stack by logical ID.
+/// DescribeStackResource. Get a single resource from a stack by logical ID.
 pub fn describe_stack_resource(
     state: &CloudFormationState,
     input: &Value,
@@ -1036,7 +1036,7 @@ pub fn describe_stack_resource(
     Ok(json!({ "StackResourceDetail": detail }))
 }
 
-/// GetTemplateSummary — parse template and return metadata without creating a stack.
+/// GetTemplateSummary. Parse template and return metadata without creating a stack.
 pub fn get_template_summary(
     _state: &CloudFormationState,
     input: &Value,
@@ -1093,7 +1093,7 @@ pub fn get_template_summary(
     Ok(result)
 }
 
-/// ListStackResources — paginated list of resources in a stack.
+/// ListStackResources. Paginated list of resources in a stack.
 pub fn list_stack_resources(state: &CloudFormationState, input: &Value) -> Result<Value, AwsError> {
     let stack_name = require_str(input, "StackName")?;
 
@@ -1125,17 +1125,17 @@ pub fn list_stack_resources(state: &CloudFormationState, input: &Value) -> Resul
     }))
 }
 
-/// ListExports — stub returning empty list.
+/// ListExports. Stub returning empty list.
 pub fn list_exports(_state: &CloudFormationState, _input: &Value) -> Result<Value, AwsError> {
     Ok(json!({ "Exports": { "member": [] }, "NextToken": null }))
 }
 
-/// ListImports — stub returning empty list.
+/// ListImports. Stub returning empty list.
 pub fn list_imports(_state: &CloudFormationState, _input: &Value) -> Result<Value, AwsError> {
     Ok(json!({ "Imports": { "member": [] }, "NextToken": null }))
 }
 
-/// TagResource — add or update tags on a stack.
+/// TagResource. Add or update tags on a stack.
 pub fn tag_resource(state: &CloudFormationState, input: &Value) -> Result<Value, AwsError> {
     let resource_arn = require_str(input, "ResourceArn")?;
     // Extract the stack name from the ARN (last segment after the final '/')
@@ -1152,7 +1152,7 @@ pub fn tag_resource(state: &CloudFormationState, input: &Value) -> Result<Value,
     Ok(json!({}))
 }
 
-/// UntagResource — remove tags from a stack.
+/// UntagResource. Remove tags from a stack.
 pub fn untag_resource(state: &CloudFormationState, input: &Value) -> Result<Value, AwsError> {
     let resource_arn = require_str(input, "ResourceArn")?;
     let stack_name = resource_arn.split('/').nth(1).unwrap_or(resource_arn);
@@ -1200,7 +1200,7 @@ pub fn update_termination_protection(
     Ok(json!({ "StackId": stack.stack_id }))
 }
 
-/// SignalResource — record a SUCCESS / FAILURE signal against a custom
+/// SignalResource. Record a SUCCESS / FAILURE signal against a custom
 /// or CreationPolicy-gated resource, completing it once it has received
 /// all the signals it requires.
 pub fn signal_resource(state: &CloudFormationState, input: &Value) -> Result<Value, AwsError> {
@@ -1264,7 +1264,7 @@ pub fn signal_resource(state: &CloudFormationState, input: &Value) -> Result<Val
     Ok(json!({}))
 }
 
-/// EstimateTemplateCost — stub returning a cost estimate URL.
+/// EstimateTemplateCost. Stub returning a cost estimate URL.
 pub fn estimate_template_cost(
     _state: &CloudFormationState,
     _input: &Value,

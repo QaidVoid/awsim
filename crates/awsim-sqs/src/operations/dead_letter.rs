@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use crate::state::SqsState;
 use crate::util::queue_name_from_url;
 
-/// ListDeadLetterSourceQueues — find all queues whose RedrivePolicy targets
+/// ListDeadLetterSourceQueues. Find all queues whose RedrivePolicy targets
 /// the given DLQ URL (matched by ARN).
 pub fn list_dead_letter_source_queues(
     state: &SqsState,
