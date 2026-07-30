@@ -9,7 +9,7 @@ AWS Step Functions serverless orchestration service for coordinating distributed
 | Protocol | `AwsJson1_0` |
 | Signing Name | `states` |
 | Target Prefix | `AWSStepFunctions` |
-| Persistence | No |
+| Persistence | Yes |
 
 ## Quick Start
 

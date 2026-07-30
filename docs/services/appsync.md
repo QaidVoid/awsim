@@ -8,7 +8,7 @@ AWS AppSync managed GraphQL service for building data-driven APIs with real-time
 |----------|-------|
 | Protocol | `RestJson1` |
 | Signing Name | `appsync` |
-| Persistence | No |
+| Persistence | Yes |
 
 AppSync uses REST-style routing with JSON bodies. Paths follow the pattern `/v1/apis/{apiId}/...`.
 

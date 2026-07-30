@@ -9,7 +9,7 @@ Amazon Athena interactive SQL query service for analyzing data in S3 using stand
 | Protocol | `AwsJson1_1` |
 | Signing Name | `athena` |
 | Target Prefix | `AmazonAthena` |
-| Persistence | No |
+| Persistence | Yes |
 
 ## Quick Start
 

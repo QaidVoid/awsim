@@ -8,7 +8,7 @@ Elastic Load Balancing v2 (ALB/NLB) for distributing traffic across targets with
 |----------|-------|
 | Protocol | `AwsQuery` |
 | Signing Name | `elasticloadbalancing` |
-| Persistence | No |
+| Persistence | Yes |
 
 ELB uses the `AwsQuery` protocol: `POST` requests with `Content-Type: application/x-www-form-urlencoded` and an `Action=` parameter. The CLI command is `elbv2`.
 

@@ -8,7 +8,7 @@ AWS CloudFormation for infrastructure as code — deploying and managing AWS res
 |----------|-------|
 | Protocol | `AwsQuery` |
 | Signing Name | `cloudformation` |
-| Persistence | No |
+| Persistence | Yes |
 
 CloudFormation uses the `AwsQuery` protocol: `POST` requests with `Content-Type: application/x-www-form-urlencoded` and an `Action=` parameter.
 

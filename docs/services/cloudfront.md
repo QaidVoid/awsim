@@ -9,7 +9,7 @@ Amazon CloudFront CDN for distributing content globally with low latency using e
 | Protocol | `RestXml` |
 | Signing Name | `cloudfront` |
 | API Version | `2020-05-31` |
-| Persistence | No |
+| Persistence | Yes |
 
 CloudFront uses the `RestXml` protocol: XML request/response bodies with REST routing. Paths follow `/{apiVersion}/distribution/...`. It is a **global** service — state is shared across all regions.
 

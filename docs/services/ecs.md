@@ -9,7 +9,7 @@ Amazon Elastic Container Service for running and managing containerized applicat
 | Protocol | `AwsJson1_1` |
 | Signing Name | `ecs` |
 | Target Prefix | `AmazonEC2ContainerServiceV20141113` |
-| Persistence | No |
+| Persistence | Yes |
 
 ## Quick Start
 

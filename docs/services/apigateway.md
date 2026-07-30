@@ -175,7 +175,7 @@ AWSim also implements API Gateway v1 (REST APIs), the older `/restapis/...` shap
 |----------|-------|
 | Protocol | `RestJson1` |
 | Signing Name | `apigateway` |
-| Persistence | No |
+| Persistence | Yes (the authorizer decision cache is excluded) |
 
 **Operations**
 

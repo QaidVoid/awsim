@@ -9,7 +9,7 @@ AWS Key Management Service for creating and controlling cryptographic keys used 
 | Protocol | `AwsJson1_1` |
 | Signing Name | `kms` |
 | Target Prefix | `TrentService` |
-| Persistence | No |
+| Persistence | Yes |
 
 ## Quick Start
 

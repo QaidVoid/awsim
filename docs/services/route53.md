@@ -9,7 +9,7 @@ Amazon Route 53 DNS service for domain management, hosted zones, and DNS record 
 | Protocol | `RestXml` |
 | Signing Name | `route53` |
 | API Version | `2013-04-01` |
-| Persistence | No |
+| Persistence | Yes |
 
 Route 53 uses the `RestXml` protocol: XML request/response bodies with REST routing. It is a **global** service — state is shared across all regions. Zone IDs are returned in the format `/hostedzone/{id}`.
 

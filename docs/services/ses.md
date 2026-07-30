@@ -1,17 +1,27 @@
 # SES
 
-Amazon Simple Email Service v2 for sending transactional and marketing emails.
+Amazon Simple Email Service for sending transactional and marketing emails.
 
 ## Configuration
 
 | Property | Value |
 |----------|-------|
-| Protocol | `RestJson1` |
+| Protocol | `RestJson1` (v2), `AwsQuery` (classic) |
 | Signing Name | `ses` |
-| API Version | v2 |
-| Persistence | No |
+| API Version | v2 and classic (v1) |
+| Persistence | Yes (sent mail lives in SQLite) |
 
-SES v2 uses REST-style routing with JSON bodies. All paths are under `/v2/email/...`.
+SES has two APIs and AWSim serves both from the same account state, so an
+identity verified through one is visible to the other.
+
+- **v2** uses REST-style routing with JSON bodies under `/v2/email/...`.
+  This is what `@aws-sdk/client-sesv2` and `aws sesv2` speak.
+- **Classic (v1)** is the original form-encoded query API at `POST /`.
+  This is what `aws ses` speaks, along with `@aws-sdk/client-ses` and
+  boto3's `ses` client.
+
+Which one you get is decided by the request: a form body carrying
+`Action=` is answered as XML, everything else as JSON.
 
 ## Quick Start
 
@@ -46,7 +56,7 @@ curl -s -X POST http://localhost:4566/v2/email/outbound-emails \
 ## Operations
 
 ### Emails
-- `SendEmail` — send an email to one or more recipients
+- `SendEmail`: send an email to one or more recipients
   - Path: `POST /v2/email/outbound-emails`
   - Input:
     - `FromEmailAddress` (required, must be a verified identity)
@@ -59,40 +69,87 @@ curl -s -X POST http://localhost:4566/v2/email/outbound-emails \
   - Returns: `MessageId`
 
 ### Identities
-- `CreateEmailIdentity` — register a domain or email address as a verified sender identity
+- `CreateEmailIdentity`: register a domain or email address as a verified sender identity
   - Path: `POST /v2/email/identities`
   - Input: `EmailIdentity` (email address or domain name), optional `Tags`
   - Returns: `IdentityType` (`EMAIL_ADDRESS` or `DOMAIN`), `VerifiedForSendingStatus` (`true` in AWSim), `DkimAttributes`
 
-- `GetEmailIdentity` — get details of a verified identity
+- `GetEmailIdentity`: get details of a verified identity
   - Path: `GET /v2/email/identities/{EmailIdentity}`
   - Returns: `IdentityType`, `VerifiedForSendingStatus`, `DkimAttributes`, `Tags`
 
-- `ListEmailIdentities` — list all verified sender identities
+- `ListEmailIdentities`: list all verified sender identities
   - Path: `GET /v2/email/identities`
   - Returns: paginated `EmailIdentities` list with `IdentityName`, `IdentityType`, `SendingEnabled`
 
-- `DeleteEmailIdentity` — remove a verified identity
+- `DeleteEmailIdentity`: remove a verified identity
   - Path: `DELETE /v2/email/identities/{EmailIdentity}`
 
 ### Templates
-- `CreateEmailTemplate` — create a reusable email template with variable substitution
+- `CreateEmailTemplate`: create a reusable email template with variable substitution
   - Path: `POST /v2/email/templates`
   - Input: `TemplateName`, `TemplateContent` with `Subject`, `Text`, `Html` (use `{{VariableName}}` for substitutions)
 
-- `GetEmailTemplate` — get a template by name
+- `GetEmailTemplate`: get a template by name
   - Path: `GET /v2/email/templates/{TemplateName}`
 
-- `ListEmailTemplates` — list all email templates
+- `ListEmailTemplates`: list all email templates
   - Path: `GET /v2/email/templates`
 
-- `DeleteEmailTemplate` — delete a template
+- `DeleteEmailTemplate`: delete a template
   - Path: `DELETE /v2/email/templates/{TemplateName}`
 
 ### Account
-- `GetAccount` — get account-level sending details and limits
+- `GetAccount`: get account-level sending details and limits
   - Path: `GET /v2/email/account`
   - Returns: `SendingEnabled: true`, `SendQuota` (`Max24HourSend`, `MaxSendRate`, `SentLast24Hours`), `ProductionAccessEnabled`
+
+## Classic (v1) API
+
+Everything above has a classic equivalent, plus the operations that only
+exist on the older API. All of it is `POST /` with a form-encoded body,
+which is what `aws ses` sends.
+
+```bash
+# Verify a sender, then send through it
+aws --endpoint-url http://localhost:4566 ses verify-email-identity \
+  --email-address dev@example.com
+aws --endpoint-url http://localhost:4566 ses send-email \
+  --from dev@example.com \
+  --destination ToAddresses=alice@example.com \
+  --message 'Subject={Data=Hello},Body={Text={Data=Hi there}}'
+```
+
+| Group | Calls |
+|-------|-------|
+| Identities | `VerifyEmailIdentity`, `VerifyDomainIdentity`, `VerifyEmailAddress`, `ListIdentities`, `ListVerifiedEmailAddresses`, `DeleteIdentity`, `DeleteVerifiedEmailAddress`, `GetIdentityVerificationAttributes` |
+| Notifications | `SetIdentityNotificationTopic`, `GetIdentityNotificationAttributes`, `SetIdentityFeedbackForwardingEnabled`, `SetIdentityHeadersInNotificationsEnabled` |
+| MAIL FROM | `SetIdentityMailFromDomain`, `GetIdentityMailFromDomainAttributes` |
+| Identity policies | `PutIdentityPolicy`, `GetIdentityPolicies`, `ListIdentityPolicies`, `DeleteIdentityPolicy` |
+| Templates | `CreateTemplate`, `GetTemplate`, `UpdateTemplate`, `DeleteTemplate`, `ListTemplates`, `TestRenderTemplate` |
+| Sending | `SendEmail`, `SendTemplatedEmail`, `SendRawEmail`, `SendBulkTemplatedEmail` |
+| Account | `GetSendQuota`, `GetSendStatistics`, `GetAccountSendingEnabled`, `UpdateAccountSendingEnabled` |
+| Configuration sets | `DescribeConfigurationSet`, `ListConfigurationSets`, `UpdateConfigurationSetSendingEnabled`, `UpdateConfigurationSetReputationMetricsEnabled`, `UpdateConfigurationSetEventDestination`, tracking options |
+| Receiving | `CreateReceiptFilter`, `DeleteReceiptFilter`, `ListReceiptFilters`, `CloneReceiptRuleSet`, `SetReceiptRulePosition`, plus the rule and rule-set calls |
+
+`SendBounce` is the one classic operation AWSim does not implement.
+
+### Where the two APIs disagree
+
+A handful of fields are spelled differently on each API. AWSim accepts
+both spellings on input, so the same handler serves either client:
+
+| Concept | Classic | v2 |
+|---------|---------|-----|
+| Sender | `Source` | `FromEmailAddress` |
+| Body | `Message.Subject` / `Message.Body` | `Content.Simple` |
+| Message tags | `Tags` | `EmailTags` |
+| Event types | `send`, `renderingFailure` | `SEND`, `RENDERING_FAILURE` |
+| SNS event target | `SNSDestination.TopicARN` | `SnsDestination.TopicArn` |
+
+`ListConfigurationSets` is the one response the two cannot share: the
+classic API returns objects with a `Name`, v2 returns bare strings.
+AWSim picks by the path the request arrived on.
 
 ## Curl Examples
 
@@ -203,9 +260,9 @@ console.log('Sent in last 24h:', account.SendQuota?.SentLast24Hours);
 
 ## Outbox
 
-Awsim captures every outbound email — `SendEmail`, `SendBulkEmail`, `SendCustomVerificationEmail` — into a SQLite store so you can inspect what was actually sent without parsing the SDK call.
+Awsim captures every outbound email into a SQLite store, covering `SendEmail`, `SendBulkEmail` and `SendCustomVerificationEmail`, so you can inspect what was actually sent without parsing the SDK call.
 
-**UI:** open `/ses` and switch to the **Outbox** tab (default). Lists every captured message newest-first, with a search box that filters by subject / from / recipient. Click a row to expand the body — picks the best view automatically (Text → HTML in a sandboxed iframe → Raw). The dialog shows message ID, full To / Cc / Bcc, account, region, and timestamp.
+**UI:** open `/ses` and switch to the **Outbox** tab (default). Lists every captured message newest-first, with a search box that filters by subject / from / recipient. Click a row to expand the body. It picks the best view automatically, preferring Text, then HTML in a sandboxed iframe, then Raw. The dialog shows message ID, full To / Cc / Bcc, account, region, and timestamp.
 
 **Admin endpoint:**
 
@@ -226,10 +283,9 @@ Returns `{ count, emails: [...] }`; each email has `messageId`, `from`, `to`, `c
 
 ## Behavior Notes
 
-- SES uses the REST/JSON v2 API (`/v2/email/...` paths), not the legacy form-encoded `ses` protocol.
-- Emails are accepted, recorded into the [Outbox](#outbox), and **not actually delivered** — no SMTP connection is made.
-- Identity verification status is set to `SUCCESS` immediately without DNS verification or email confirmation.
-- Template variable substitution (`{{variable}}`) is stored but **not rendered** during send in the current implementation.
+- Emails are accepted, recorded into the [Outbox](#outbox), and **not actually delivered**. No SMTP connection is made.
+- Identity verification succeeds immediately, with no DNS record to publish and no confirmation link to click. A domain still gets a verification token, and the same domain always gets the same one so re-running provisioning does not churn your DNS fixtures.
+- Template variables (`{{variable}}`) are rendered at send time, and `TestRenderTemplate` renders one without sending. A variable the data omits collapses to an empty string, which is what AWS does.
 - `MessageId` is returned as a UUID for each sent email.
-- `GetAccount` always reports `SendingEnabled: true` and generous quota limits.
-- Outbound emails are persisted in SQLite (see [Outbox](#outbox)). All other state (identities, templates, contact lists, suppression list) is in-memory only and lost on restart.
+- `GetAccount` reports the quota of a production account rather than the sandbox, so a local run does not trip a limit that only exists to gate real outbound mail. `UpdateAccountSendingEnabled` still turns sending off if you want to exercise that path.
+- Outbound emails persist in SQLite (see [Outbox](#outbox)). Configuration persists through the JSON snapshot: identities and their notification, MAIL FROM and policy settings, templates, configuration sets, receipt rule sets, and receipt filters.

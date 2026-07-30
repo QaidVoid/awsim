@@ -9,7 +9,7 @@ AWS Systems Manager Parameter Store for managing configuration data and secrets 
 | Protocol | `AwsJson1_1` |
 | Signing Name | `ssm` |
 | Target Prefix | `AmazonSSM` |
-| Persistence | No |
+| Persistence | Yes |
 
 ## Quick Start
 

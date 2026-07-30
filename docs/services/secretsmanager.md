@@ -9,7 +9,7 @@ AWS Secrets Manager for storing, rotating, and retrieving secrets such as databa
 | Protocol | `AwsJson1_1` |
 | Signing Name | `secretsmanager` |
 | Target Prefix | `secretsmanager` |
-| Persistence | No |
+| Persistence | Yes |
 
 ## Quick Start
 

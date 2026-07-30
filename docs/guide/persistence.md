@@ -1,6 +1,6 @@
 # Persistence
 
-By default, AWSim is stateless — all data lives in memory and is lost when the process exits. Enable persistence with `--data-dir`.
+By default, AWSim is stateless. All data lives in memory and is lost when the process exits. Enable persistence with `--data-dir`.
 
 ## Enabling Persistence
 
@@ -17,7 +17,7 @@ AWSim creates the directory if it does not exist.
 awsim has two distinct persistence layers:
 
 1. **JSON snapshots** for handler state (table schemas, IAM users, queue metadata, etc.) under `{data_dir}/snapshots/`.
-2. **Per-service SQLite databases** for high-volume row data (DDB items, log events, metrics, kinesis records, SES outbox) — sit alongside the snapshots, not replaced by them.
+2. **Per-service SQLite databases** for high-volume row data (DDB items, log events, metrics, kinesis records, SES outbox). These sit alongside the snapshots rather than replacing them.
 
 Most services write and restore JSON snapshots on graceful shutdown / startup. As of the current build, 53 of 61 registered services do.
 
@@ -87,11 +87,11 @@ errors.
 # Save the current state under a name.
 awsim snapshot save baseline
 
-# Make changes (apply chaos, create resources, …)
+# Make changes (apply chaos, create resources, and so on)
 awsim chaos clear
 aws --endpoint-url http://localhost:4566 s3 mb s3://scratch
 
-# Restore — overwrites live state for any service captured in the snapshot.
+# Restore. This overwrites live state for any service captured in the snapshot.
 awsim snapshot load baseline
 
 # Inspect what's saved.
@@ -114,7 +114,7 @@ HTTP API is also available directly:
 **Limitations (v1):** named snapshots only capture
 JSON-serialisable handler state. DynamoDB rows (SQLite) and
 body-store payloads (S3 object bytes, Lambda code, SQS message
-bodies) are *not* in the bundle — buckets/queues/tables are
+bodies) are *not* in the bundle. Buckets, queues and tables are
 recreated on load but their contents are not. This is good enough
 for sharing topology, IAM, Cognito and chaos scenarios; deeper
 bundling is on the roadmap.
@@ -122,11 +122,11 @@ bundling is on the roadmap.
 `awsim snapshot` requires `--data-dir` to be set on the running
 server.
 
-**Note on S3:** S3 bucket metadata and object metadata are persisted via the JSON snapshot. Object bodies (the raw bytes) are persisted separately to disk under `{data_dir}/s3/` whenever `--data-dir` is supplied — see [S3 object bodies](#s3-object-bodies) below.
+**Note on S3:** S3 bucket metadata and object metadata are persisted via the JSON snapshot. Object bodies (the raw bytes) are persisted separately to disk under `{data_dir}/s3/` whenever `--data-dir` is supplied. See [S3 object bodies](#s3-object-bodies) below.
 
-**Note on SQS:** SQS queue metadata is persisted via the JSON snapshot. Message bodies are written separately to disk under `{data_dir}/sqs/` whenever `--data-dir` is supplied — see [SQS message bodies](#sqs-message-bodies) below.
+**Note on SQS:** SQS queue metadata is persisted via the JSON snapshot. Message bodies are written separately to disk under `{data_dir}/sqs/` whenever `--data-dir` is supplied. See [SQS message bodies](#sqs-message-bodies) below.
 
-**Note on DynamoDB:** Only table schema metadata rides in the JSON snapshot. Items live in a dedicated SQLite database at `{data_dir}/dynamodb.db` — see [DynamoDB SQLite store](#dynamodb-sqlite-store) below.
+**Note on DynamoDB:** Only table schema metadata rides in the JSON snapshot. Items live in a dedicated SQLite database at `{data_dir}/dynamodb.db`. See [DynamoDB SQLite store](#dynamodb-sqlite-store) below.
 
 ## S3 object bodies
 
@@ -141,7 +141,7 @@ When `--data-dir` is set, the S3 service writes each `PutObject`, `CopyObject`, 
       <bucket>/<upload-id>/<part-number>
 ```
 
-Object metadata still rides in the regular `s3.json` snapshot. On restore, each object is wired up to its on-disk path and bytes are read lazily by `GetObject` rather than preloaded — keeping startup cheap even for large datasets. `DeleteObject`, `DeleteBucket`, `AbortMultipartUpload`, and `CompleteMultipartUpload` clean up their files on a best-effort basis (failures are logged via `tracing`).
+Object metadata still rides in the regular `s3.json` snapshot. On restore, each object is wired up to its on-disk path and bytes are read lazily by `GetObject` rather than preloaded, which keeps startup cheap even for large datasets. `DeleteObject`, `DeleteBucket`, `AbortMultipartUpload`, and `CompleteMultipartUpload` clean up their files on a best-effort basis (failures are logged via `tracing`).
 
 If a body file is missing on disk after a restart (for example, the data directory was partially wiped), `GetObject` returns `NoSuchKey` for that object.
 
@@ -149,7 +149,7 @@ When `--data-dir` is not supplied, the service stays fully in-memory and object 
 
 ## DynamoDB SQLite store
 
-Unlike the other services, DynamoDB does not persist its items through the JSON snapshot. Items are written directly to a single SQLite database at `{data_dir}/dynamodb.db` (or a per-process tempfile when `--data-dir` is unset). One database serves every account/region — partitioning is handled by `(account, region, table_name)` columns on the `items` table.
+Unlike the other services, DynamoDB does not persist its items through the JSON snapshot. Items are written directly to a single SQLite database at `{data_dir}/dynamodb.db` (or a per-process tempfile when `--data-dir` is unset). One database serves every account/region, with partitioning handled by `(account, region, table_name)` columns on the `items` table.
 
 ```
 /var/lib/awsim/
@@ -175,7 +175,7 @@ The original implementation stored every item in an in-memory `BTreeMap` per tab
 
 ### `TruncateTable`
 
-The awsim-only `TruncateTable` op clears every item in a table while leaving schema, indexes, and stream config intact — backed by a single `DELETE FROM items WHERE account=? AND region=? AND table_name=?`. Useful for "reset between tests" loops in the admin UI; not available in real DynamoDB.
+The awsim-only `TruncateTable` op clears every item in a table while leaving schema, indexes, and stream config intact, backed by a single `DELETE FROM items WHERE account=? AND region=? AND table_name=?`. Useful for "reset between tests" loops in the admin UI; not available in real DynamoDB.
 
 When `--data-dir` is unset, `dynamodb.db` is created in `std::env::temp_dir()` with a per-process UUID suffix and dies with the process.
 
@@ -211,7 +211,7 @@ When `--data-dir` is set, the SQS service writes each accepted message body to d
 
 `SendMessage` and `SendMessageBatch` write the body to `{data_dir}/sqs/{queue}/{message_id}` and store an on-disk reference on the in-memory message; `ReceiveMessage` reads the bytes back lazily when responding. `DeleteMessage` and `DeleteMessageBatch` remove the per-message blob; `PurgeQueue` and `DeleteQueue` drop the entire queue subtree. When a message is redriven to a configured DLQ, its blob is migrated from the source queue's bucket to the DLQ's bucket so it survives source-queue cleanup. All cleanup is best-effort and failures are logged via `tracing` rather than failing the API call.
 
-The `sqs.json` snapshot stores queue and message metadata only — body bytes for on-disk messages are omitted from the snapshot. On restore, each message's body is rebound to its on-disk path. If a body file is missing on disk after restart, `ReceiveMessage` returns an internal error for that message rather than fabricating an empty body.
+The `sqs.json` snapshot stores queue and message metadata only, so body bytes for on-disk messages are omitted from the snapshot. On restore, each message's body is rebound to its on-disk path. If a body file is missing on disk after restart, `ReceiveMessage` returns an internal error for that message rather than fabricating an empty body.
 
 When `--data-dir` is not supplied, message bodies stay in memory and are lost on shutdown.
 
@@ -226,7 +226,7 @@ When `--data-dir` is set, the ECR service writes each completed layer's bytes to
       sha256:abc...    # layer body, named by digest
 ```
 
-`CompleteLayerUpload` finalizes an upload, hashes the buffered bytes into a sha256 digest, and writes them to `{data_dir}/ecr/{repository}/{digest}`. Repository and image metadata still ride in the regular `ecr.json` snapshot — the snapshot only stores layer digest, size, and media type, never the bytes. On restore, each layer is rebound to its on-disk path; bytes are read lazily by the `/v2/{repo}/blobs/{digest}` HTTP endpoint.
+`CompleteLayerUpload` finalizes an upload, hashes the buffered bytes into a sha256 digest, and writes them to `{data_dir}/ecr/{repository}/{digest}`. Repository and image metadata still ride in the regular `ecr.json` snapshot, which stores only layer digest, size, and media type, never the bytes. On restore, each layer is rebound to its on-disk path; bytes are read lazily by the `/v2/{repo}/blobs/{digest}` HTTP endpoint.
 
 `BatchDeleteImage` parses each removed image manifest and best-effort deletes any referenced layer blobs. `DeleteRepository` best-effort removes the entire `{repository}/` subtree.
 
@@ -238,7 +238,7 @@ When `--data-dir` is not supplied, layer bodies stay in memory and are lost on s
 
 CloudWatch Logs events live in a single SQLite database at `{data_dir}/cloudwatch-logs.db`. Without `--data-dir`, the events go into a per-process tempdir DB that's cleaned up on shutdown.
 
-Each `PutLogEvents` batch is committed inside one SQLite transaction. `FilterLogEvents` queries push timestamp + message-pattern filters down into SQL so the index does the work. Group + stream metadata still rides in the regular `logs.json` snapshot — the schema includes `account`, `region`, `log_group`, `log_stream`, `ts`, `ingestion_ts`, `message` columns plus a composite index on the time fields.
+Each `PutLogEvents` batch is committed inside one SQLite transaction. `FilterLogEvents` queries push timestamp + message-pattern filters down into SQL so the index does the work. Group and stream metadata still rides in the regular `logs.json` snapshot. The schema includes `account`, `region`, `log_group`, `log_stream`, `ts`, `ingestion_ts`, `message` columns plus a composite index on the time fields.
 
 `DeleteLogStream` deletes only that stream's rows; `DeleteLogGroup` cascades to every stream in the group. Both operations run inside a single transaction.
 
@@ -246,7 +246,7 @@ Each `PutLogEvents` batch is committed inside one SQLite transaction. `FilterLog
 
 Metric data points live at `{data_dir}/cloudwatch-metrics.db`. Each `PutMetricData` call inserts one row per data point with `account`, `region`, `namespace`, `metric_name`, `value`, `unit`, `timestamp`, `ts_ms`, and a JSON-encoded `dimensions` column. `GetMetricData` queries push the namespace + metric + dimensions filters down to SQL.
 
-A 15-day retention sweep runs on every `PutMetricData` so the DB doesn't grow unbounded — anything older than 15 days is deleted lazily.
+A 15-day retention sweep runs on every `PutMetricData` so the DB doesn't grow unbounded. Anything older than 15 days is deleted lazily.
 
 ## Kinesis records
 
@@ -292,7 +292,7 @@ On startup, AWSim reads each `{data_dir}/snapshots/{service}.json` file and rest
 
 ## Garbage Collection
 
-After snapshot restore, AWSim sweeps each persisted service's body store for orphaned files — disk blobs that no longer correspond to anything in the in-memory state. Orphans typically appear after a process crash, an out-of-band file deletion, or any other abnormal shutdown that left the snapshot and the body store out of sync.
+After snapshot restore, AWSim sweeps each persisted service's body store for orphaned files, meaning disk blobs that no longer correspond to anything in the in-memory state. Orphans typically appear after a process crash, an out-of-band file deletion, or any other abnormal shutdown that left the snapshot and the body store out of sync.
 
 The GC walks only the directories it owns:
 
@@ -326,13 +326,13 @@ Each iteration walks the same per-service inventories as the startup sweep and l
 
 ## Disk space limit
 
-Long-running services with high write volume — large S3 uploads, busy SQS queues, frequent Lambda code updates, and pushes to ECR — can grow the body store unbounded. Pass `--max-blob-bytes <N>` (or set `AWSIM_MAX_BLOB_BYTES=N`) to cap each persisted service's body store at `N` bytes:
+Long-running services with high write volume can grow the body store unbounded: large S3 uploads, busy SQS queues, frequent Lambda code updates, and pushes to ECR. Pass `--max-blob-bytes <N>` (or set `AWSIM_MAX_BLOB_BYTES=N`) to cap each persisted service's body store at `N` bytes:
 
 ```bash
 ./awsim --data-dir /var/lib/awsim --max-blob-bytes 1073741824   # 1 GiB per service
 ```
 
-The cap is applied independently to S3, Lambda, SQS, ECR, and CloudWatch Logs — each service may use up to `N` bytes. When a `write_blob` would push a service over its cap, AWSim deletes the oldest files (by modification time) until the new write fits, then writes the new blob.
+The cap is applied independently to S3, Lambda, SQS, ECR, and CloudWatch Logs, so each service may use up to `N` bytes. When a `write_blob` would push a service over its cap, AWSim deletes the oldest files (by modification time) until the new write fits, then writes the new blob.
 
 Eviction caveats:
 

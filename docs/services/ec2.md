@@ -8,7 +8,7 @@ Amazon EC2 networking primitives — VPCs, subnets, security groups, route table
 |----------|-------|
 | Protocol | `AwsQuery` |
 | Signing Name | `ec2` |
-| Persistence | No |
+| Persistence | Yes |
 
 EC2 uses the `AwsQuery` protocol: `POST` requests with `Content-Type: application/x-www-form-urlencoded` and an `Action=` parameter.
 

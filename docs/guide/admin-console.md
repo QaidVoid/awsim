@@ -2,9 +2,23 @@
 
 AWSim includes a SvelteKit-based web UI for browsing and managing emulated resources.
 
-## Running the UI
+## Opening the UI
 
-The UI lives in the `ui/` directory of the repository:
+The console is compiled into the binary, so a running AWSim already
+serves it:
+
+```
+http://localhost:4566/_awsim/ui/
+```
+
+There is nothing to install and nothing to start separately. The page
+talks to whichever origin served it, so if you moved AWSim to another
+port or are reaching it through a tunnel, the UI follows without any
+configuration.
+
+### Running from source
+
+Only needed when you are changing the UI itself:
 
 ```bash
 cd ui
@@ -12,7 +26,9 @@ bun install
 bun run dev
 ```
 
-The dev server starts on `http://localhost:5173` by default. It proxies `/_awsim` requests to AWSim running on `http://localhost:4566`, so make sure AWSim is running before opening the UI.
+The dev server starts on `http://localhost:5173` and proxies `/_awsim`
+requests to AWSim on `http://localhost:4566`, so start AWSim first.
+Rebuild with `bun run build` to fold your changes back into the binary.
 
 ## Admin API Endpoints
 
@@ -20,7 +36,7 @@ AWSim exposes a lightweight admin API independent of the AWS wire protocol:
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/_awsim/health` | GET | Health check — returns `{"status":"ok"}` |
+| `/_awsim/health` | GET | Health check that returns `{"status":"ok"}` |
 | `/_awsim/services` | GET | List all registered services with their signing names and protocols |
 | `/_awsim/config` | GET | Active configuration (port, region, account ID, data-dir) |
 | `/_awsim/stats` | GET | Runtime statistics |
@@ -28,10 +44,10 @@ AWSim exposes a lightweight admin API independent of the AWS wire protocol:
 | `/_awsim/storage/sqlite` | GET | Per-service SQLite store row counts + database file sizes (DynamoDB, CloudWatch Logs, CloudWatch Metrics, Kinesis, SES) |
 | `/_awsim/events` | GET | Server-Sent Events stream of every gateway request |
 | `/_awsim/requests` | GET | Most recent captured request ids (newest first) |
-| `/_awsim/requests/{id}` | GET | Full captured detail for one request — headers + bodies |
+| `/_awsim/requests/{id}` | GET | Full captured detail for one request: headers and bodies |
 | `/_awsim/requests/{id}/replay` | POST | Re-issue the captured request through the gateway |
-| `/_awsim/billing` | GET | Rolling estimated AWS bill — running cost, projected monthly, per-service breakdown. See the [Billing guide](/guide/billing). |
-| `/_awsim/debug/objects` | GET | Memory diagnostic — process RSS plus per-subsystem object counts. See [Observability](#observability) below. |
+| `/_awsim/billing` | GET | Rolling estimated AWS bill: running cost, projected monthly, per-service breakdown. See the [Billing guide](/guide/billing). |
+| `/_awsim/debug/objects` | GET | Memory diagnostic: process RSS plus per-subsystem object counts. See [Observability](#observability) below. |
 | `/_awsim/ses/sent` | GET | List every captured outbound email (newest first). Optional `?account=` and `?region=` filters. See the [SES service doc](/services/ses). |
 | `/_awsim/admin/dynamodb/vacuum` | POST | Reclaim disk space in the DynamoDB SQLite store after heavy DELETE / UPDATE churn. |
 | `/_awsim/snapshots` | GET | List saved named snapshots (see [Persistence](/guide/persistence#named-snapshots)). |
@@ -181,27 +197,27 @@ curl -X POST http://localhost:4566/_awsim/requests/a1b2.../replay
 ```
 
 Replay returns `409 RequestBodyTruncated` when the original request
-body exceeded the capture cap — partial-body replay would silently lie
+body exceeded the capture cap, because a partial-body replay would silently lie
 about the result.
 
 ## Dashboard
 
 The main dashboard composes a live overview of the running emulator:
 
-- **KPI strip** — total requests since boot, live RPS over a trailing 5s window, on-disk usage across BodyStores, and uptime.
-- **Live request stream** — auto-tailing table of recent requests, filterable by 4xx / 5xx. Click any row to open the inspect drawer.
-- **Service status list** — per-service blob counts and disk usage from `/_awsim/storage`.
-- **Insights panel** — config + BodyStore + SQLite-store summary (top service by row count, total bytes on disk).
+- **KPI strip**: total requests since boot, live RPS over a trailing 5s window, on-disk usage across BodyStores, and uptime.
+- **Live request stream**: auto-tailing table of recent requests, filterable by 4xx / 5xx. Click any row to open the inspect drawer.
+- **Service status list**: per-service blob counts and disk usage from `/_awsim/storage`.
+- **Insights panel**: config + BodyStore + SQLite-store summary (top service by row count, total bytes on disk).
 
 ## Observability
 
 Open `/observability` from **Admin → Observability** in the sidebar. It polls `/_awsim/debug/objects` every 5 s and renders:
 
-- **Process** — current RSS plus VmHWM (peak), VmSize, VmData, VmPeak, with a 60-sample RSS sparkline below.
-- **Gateway / app** — request-details ring size, SSE subscriber counts (catches leaked subscribers), chaos rule + recent injection counts, registered services, uptime.
-- **Cognito** — user-pool count, mfa-sessions, totals across all pools, plus a per-pool breakdown table (users, groups, clients, auth events, devices, revoked refresh tokens).
-- **Billing meter** — account-region buckets and total op-counter / storage / compute / resource rows.
-- **SQLite-backed stores** — row counts per service plus the DynamoDB DB file size.
+- **Process**: current RSS plus VmHWM (peak), VmSize, VmData, VmPeak, with a 60-sample RSS sparkline below.
+- **Gateway / app**: request-details ring size, SSE subscriber counts (catches leaked subscribers), chaos rule + recent injection counts, registered services, uptime.
+- **Cognito**: user-pool count, mfa-sessions, totals across all pools, plus a per-pool breakdown table (users, groups, clients, auth events, devices, revoked refresh tokens).
+- **Billing meter**: account-region buckets and total op-counter / storage / compute / resource rows.
+- **SQLite-backed stores**: row counts per service plus the DynamoDB DB file size.
 
 Hit **Snapshot baseline** to capture the current values; subsequent renders show signed deltas next to every cell so a leak shows up as a stream of orange `+N` annotations against the structure that's growing. See the [Memory + diagnostics guide](/guide/admin-console#observability).
 
@@ -210,7 +226,7 @@ Hit **Snapshot baseline** to capture the current values; subsequent renders show
 The `/_awsim/seed/<service>` endpoints fill services with realistic fake data, skipping SigV4 + the gateway so a 10k-row seed completes in well under a second. Three ways to drive them:
 
 ```bash
-# 1. UI: Admin → Seed data — service cards with count inputs + Run buttons.
+# 1. UI: Admin -> Seed data, which gives service cards with count inputs and Run buttons.
 
 # 2. curl directly:
 curl -XPOST http://localhost:4566/_awsim/seed/cognito-users \
@@ -287,7 +303,7 @@ The console is keyboard-first. Press `?` any time to bring up the cheat sheet.
 | `[` | Collapse / expand the sidebar |
 | `i` | Inspect the most recent captured request |
 
-**Navigation** — type the leader key `g`, then a target letter:
+**Navigation**: type the leader key `g`, then a target letter:
 
 | Sequence | Page |
 |----------|------|
@@ -310,15 +326,15 @@ The console is keyboard-first. Press `?` any time to bring up the cheat sheet.
 
 A small "leader" chip appears at the bottom of the screen while a sequence is in flight. `Esc` cancels.
 
-Shortcuts are ignored while typing into inputs, textareas, selects, contenteditable elements, and the command palette input — so they never compete with normal typing.
+Shortcuts are ignored while typing into inputs, textareas, selects, contenteditable elements, and the command palette input, so they never compete with normal typing.
 
 ## Inspect Drawer
 
 The Inspect drawer is a global side-panel that loads the captured detail for any request and shows it in a tabbed view:
 
-- **Request** — every captured header plus the request body, decoded by content-type. JSON is pretty-printed; XML and form payloads are shown verbatim; non-UTF-8 binary bodies fall back to a hex dump of the first 256 bytes.
-- **Response** — same treatment for the response side.
-- **curl** — a runnable `curl` invocation that reproduces the request against the local emulator, headers and body included.
+- **Request**: every captured header plus the request body, decoded by content-type. JSON is pretty-printed; XML and form payloads are shown verbatim; non-UTF-8 binary bodies fall back to a hex dump of the first 256 bytes.
+- **Response**: same treatment for the response side.
+- **curl**: a runnable `curl` invocation that reproduces the request against the local emulator, headers and body included.
 
 The drawer header shows the HTTP method, the captured URL, and a **Replay** button. Clicking Replay re-issues the request through the gateway, swaps the drawer to the freshly captured detail, and toasts the new status code. The button is disabled with an explanatory tooltip when the original body was truncated during capture.
 
@@ -337,14 +353,14 @@ The theme picker on the topbar (and in the command palette's "Theme" group) offe
 | Default Dark | Neutral charcoal with the warm AWS-amber accent. |
 | Midnight | Deep blue-purple ground with an electric violet accent. |
 | Slate | Cooler, less saturated dark with a muted blue accent. |
-| Solarized Dark | Ethan Schoonover's classic palette — warm dark cyan ground, yellow accent. |
-| Light | The default light scheme — full token coverage, usable but not the primary mode. |
+| Solarized Dark | Ethan Schoonover's classic palette: warm dark cyan ground, yellow accent. |
+| Light | The default light scheme: full token coverage, usable but not the primary mode. |
 
 Each variant is applied as a CSS class composed on top of the existing Tailwind `dark` class, so any component that uses `dark:` utilities continues to work. The active theme is persisted in `localStorage` (`awsim-theme`), and the pre-paint script in `app.html` applies it before first paint to avoid a flash of the wrong palette.
 
-Pressing `t` toggles between dark and light while remembering the most recent dark variant — so a quick `t t` round-trip never costs you your customised dark.
+Pressing `t` toggles between dark and light while remembering the most recent dark variant, so a quick `t t` round-trip never costs you your customised dark.
 
 ## Notes
 
-- The UI is a development tool only — it is not packaged inside the AWSim binary.
-- The UI connects to whichever AWSim instance is running on `localhost:4566`. To point it at a different host/port, set the `VITE_AWSIM_URL` environment variable before running `bun run dev`.
+- The console ships inside the AWSim binary. It is served from `/_awsim/ui/` with no separate process to run.
+- It signs its AWS calls against the origin that served the page, so it follows AWSim to any host or port without configuration. The `bun run dev` server is the exception: it proxies to `localhost:4566`, which is what you want while editing the UI.

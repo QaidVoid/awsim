@@ -9,7 +9,7 @@ AWS Glue ETL (Extract, Transform, Load) service and Data Catalog for managing da
 | Protocol | `AwsJson1_1` |
 | Signing Name | `glue` |
 | Target Prefix | `AWSGlue` |
-| Persistence | No |
+| Persistence | Yes |
 
 ## Quick Start
 

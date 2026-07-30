@@ -9,7 +9,7 @@ Amazon EventBridge event bus and rule engine for routing events between AWS serv
 | Protocol | `AwsJson1_1` |
 | Signing Name | `events` |
 | Target Prefix | `AWSEvents` |
-| Persistence | No |
+| Persistence | Yes (the recent-events ring is excluded) |
 
 ## Quick Start
 
