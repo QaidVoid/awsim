@@ -202,7 +202,7 @@
 			<RefreshCw class="size-3.5 {loading ? 'animate-spin' : ''}" />
 		</Button>
 		<Button size="xs" onclick={() => (createOpen = true)}>
-			<Plus class="size-3.5" /> Resource server
+			<Plus class="size-3.5" /> Create resource server
 		</Button>
 	</div>
 

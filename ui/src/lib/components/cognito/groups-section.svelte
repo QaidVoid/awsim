@@ -101,7 +101,7 @@
 			<RefreshCw class="size-3.5 {loading ? 'animate-spin' : ''}" />
 		</Button>
 		<Button size="xs" onclick={() => (createOpen = true)}>
-			<Plus class="size-3.5" /> Group
+			<Plus class="size-3.5" /> Create group
 		</Button>
 	</div>
 

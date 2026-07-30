@@ -136,7 +136,7 @@
 			<RefreshCw class="size-3.5 {loading ? 'animate-spin' : ''}" />
 		</Button>
 		<Button size="xs" onclick={() => (createOpen = true)}>
-			<Plus class="size-3.5" /> Pool
+			<Plus class="size-3.5" /> Create pool
 		</Button>
 	</div>
 	<div class="min-h-0 flex-1 overflow-hidden">

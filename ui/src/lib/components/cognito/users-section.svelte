@@ -250,7 +250,7 @@
 		</Button>
 		<Button variant="outline" size="xs" onclick={() => (importOpen = true)}>Import CSV</Button>
 		<Button size="xs" onclick={() => (createUserOpen = true)}>
-			<Plus class="size-3.5" /> User
+			<Plus class="size-3.5" /> Create user
 		</Button>
 	</div>
 

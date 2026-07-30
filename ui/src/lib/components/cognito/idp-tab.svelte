@@ -86,7 +86,7 @@
 			<Sparkles class="size-3.5" /> Add awsim mock IdP
 		</Button>
 		<Button size="xs" onclick={() => (createOpen = true)}>
-			<Plus class="size-3.5" /> Provider
+			<Plus class="size-3.5" /> Add provider
 		</Button>
 	</div>
 

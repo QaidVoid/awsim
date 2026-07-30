@@ -62,7 +62,7 @@
 			<RefreshCw class="size-3.5 {loading ? 'animate-spin' : ''}" />
 		</Button>
 		<Button size="sm" onclick={() => (requestOpen = true)}>
-			<Plus class="size-3.5" /> Request
+			<Plus class="size-3.5" /> Request certificate
 		</Button>
 	</div>
 	<div class="min-h-0 flex-1 overflow-hidden">
