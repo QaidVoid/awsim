@@ -28,7 +28,9 @@
 		<div class="min-w-0">
 			<h1 class="truncate text-lg font-semibold tracking-tight">{title}</h1>
 			{#if description}
-				<p class="mt-0.5 max-w-3xl text-pretty text-[13px] text-muted-foreground">
+				<p
+					class="mt-0.5 max-w-3xl text-pretty break-words text-[13px] text-muted-foreground"
+				>
 					{description}
 				</p>
 			{/if}

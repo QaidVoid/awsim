@@ -544,8 +544,11 @@
 					{#each presets as preset (preset.name)}
 						<Card>
 							<CardHeader>
-								<CardTitle class="text-base">{preset.name}</CardTitle>
-								<CardDescription>{preset.description}</CardDescription>
+								<CardTitle class="text-base break-words">{preset.name}</CardTitle>
+								<!-- Descriptions name AWS error types, and
+								     `ProvisionedThroughputExceededException` is one
+								     unbreakable token wider than a grid column. -->
+								<CardDescription class="break-words">{preset.description}</CardDescription>
 							</CardHeader>
 							<CardContent>
 								<Button
