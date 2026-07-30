@@ -248,6 +248,11 @@ export interface CreateFunctionInput {
   memorySize?: number;
   timeout?: number;
   envVars?: Record<string, string>;
+  /** `x86_64` or `arm64`. AWS takes exactly one. */
+  architecture?: string;
+  /** `/tmp` size in MiB, 512 to 10240. */
+  ephemeralStorageMb?: number;
+  tags?: Record<string, string>;
 }
 
 export async function createFunction(
@@ -265,6 +270,13 @@ export async function createFunction(
   if (input.timeout !== undefined) body["Timeout"] = input.timeout;
   if (input.envVars && Object.keys(input.envVars).length > 0) {
     body["Environment"] = { Variables: input.envVars };
+  }
+  if (input.architecture) body["Architectures"] = [input.architecture];
+  if (input.ephemeralStorageMb !== undefined) {
+    body["EphemeralStorage"] = { Size: input.ephemeralStorageMb };
+  }
+  if (input.tags && Object.keys(input.tags).length > 0) {
+    body["Tags"] = input.tags;
   }
   const res = await lambdaFetch("POST", `/2015-03-31/functions`, body);
   await ok(res);

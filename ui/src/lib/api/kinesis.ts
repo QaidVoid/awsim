@@ -121,8 +121,16 @@ export async function describeStream(
 export async function createStream(
   name: string,
   shardCount: number,
+  streamMode: "PROVISIONED" | "ON_DEMAND" = "PROVISIONED",
 ): Promise<void> {
-  await request("CreateStream", { StreamName: name, ShardCount: shardCount });
+  const body: Record<string, unknown> = {
+    StreamName: name,
+    StreamModeDetails: { StreamMode: streamMode },
+  };
+  // On-demand streams size themselves, and Kinesis rejects a shard
+  // count alongside that mode.
+  if (streamMode === "PROVISIONED") body.ShardCount = shardCount;
+  await request("CreateStream", body);
 }
 
 export async function deleteStream(name: string): Promise<void> {

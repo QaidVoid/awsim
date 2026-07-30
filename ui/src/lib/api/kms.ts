@@ -97,16 +97,40 @@ export async function describeKey(keyId: string): Promise<KeyDetail> {
   };
 }
 
-export async function createKey(description?: string): Promise<Key> {
-  const body: Record<string, unknown> = { KeyUsage: "ENCRYPT_DECRYPT" };
-  if (description) body.Description = description;
+export interface CreateKeyInput {
+  description?: string;
+  /** `SYMMETRIC_DEFAULT`, `RSA_2048`, `ECC_NIST_P256`, and so on. */
+  keySpec?: string;
+  /** `ENCRYPT_DECRYPT` or `SIGN_VERIFY`. */
+  keyUsage?: string;
+  /** `AWS_KMS` for generated material, `EXTERNAL` to import your own. */
+  origin?: string;
+  /** Created as a second call, since KMS aliases are their own resource. */
+  alias?: string;
+  tags?: Record<string, string>;
+}
+
+export async function createKey(input: CreateKeyInput = {}): Promise<Key> {
+  const body: Record<string, unknown> = {
+    KeySpec: input.keySpec ?? "SYMMETRIC_DEFAULT",
+    KeyUsage: input.keyUsage ?? "ENCRYPT_DECRYPT",
+  };
+  if (input.description) body.Description = input.description;
+  if (input.origin) body.Origin = input.origin;
+  // KMS spells its tag members TagKey/TagValue, not Key/Value.
+  const tags = Object.entries(input.tags ?? {});
+  if (tags.length) {
+    body.Tags = tags.map(([TagKey, TagValue]) => ({ TagKey, TagValue }));
+  }
   const data = (await kmsRequest("CreateKey", body)) as {
     KeyMetadata?: { KeyId?: string; Arn?: string };
   };
-  return {
+  const key = {
     keyId: data.KeyMetadata?.KeyId ?? "",
     keyArn: data.KeyMetadata?.Arn ?? "",
   };
+  if (input.alias && key.keyId) await createAlias(input.alias, key.keyId);
+  return key;
 }
 
 export async function scheduleKeyDeletion(

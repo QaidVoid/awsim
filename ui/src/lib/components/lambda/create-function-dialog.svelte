@@ -31,6 +31,11 @@
 	let memorySize = $state(128);
 	let timeoutSec = $state(3);
 	let zipBase64 = $state('');
+	let description = $state('');
+	let architecture = $state('x86_64');
+	let ephemeralStorageMb = $state(512);
+	let envText = $state('');
+	let tagsText = $state('');
 	let creating = $state(false);
 
 	$effect(() => {
@@ -46,11 +51,39 @@
 		memorySize = 128;
 		timeoutSec = 3;
 		zipBase64 = '';
+		description = '';
+		architecture = 'x86_64';
+		ephemeralStorageMb = 512;
+		envText = '';
+		tagsText = '';
+	}
+
+	/** Parse `key=value` lines into a map, rejecting malformed rows. */
+	function parsePairs(text: string): Record<string, string> | null {
+		const out: Record<string, string> = {};
+		for (const line of text.split('\n')) {
+			const trimmed = line.trim();
+			if (!trimmed) continue;
+			const eq = trimmed.indexOf('=');
+			if (eq <= 0) return null;
+			out[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim();
+		}
+		return out;
 	}
 
 	async function submit(e: Event) {
 		e.preventDefault();
 		if (!name.trim()) return;
+		const envVars = parsePairs(envText);
+		if (envVars === null) {
+			toast.error('Environment variables must be one `KEY=value` per line.');
+			return;
+		}
+		const tags = parsePairs(tagsText);
+		if (tags === null) {
+			toast.error('Tags must be one `key=value` per line.');
+			return;
+		}
 		creating = true;
 		try {
 			await createFunction({
@@ -60,7 +93,12 @@
 				role,
 				memorySize: Number(memorySize),
 				timeout: Number(timeoutSec),
-				zipFileBase64: zipBase64.trim() || undefined
+				zipFileBase64: zipBase64.trim() || undefined,
+				description: description.trim() || undefined,
+				architecture,
+				ephemeralStorageMb: Number(ephemeralStorageMb),
+				envVars,
+				tags
 			});
 			toast.success(`Created ${name.trim()}`);
 			onCreated(name.trim());
@@ -75,7 +113,7 @@
 </script>
 
 <Dialog {open} {onOpenChange}>
-	<DialogContent class="sm:max-w-lg">
+	<DialogContent class="sm:max-w-lg max-h-[85vh] overflow-y-auto">
 		<DialogHeader>
 			<DialogTitle>Create Lambda function</DialogTitle>
 			<DialogDescription>
@@ -122,6 +160,31 @@
 				<Label for="cf-role">Execution role ARN</Label>
 				<Input id="cf-role" bind:value={role} class="font-mono text-xs" />
 			</div>
+			<div class="flex flex-col gap-1.5">
+				<Label for="cf-arch">Architecture</Label>
+				<select
+					id="cf-arch"
+					bind:value={architecture}
+					class="h-9 rounded-md border border-border bg-background px-2 text-sm"
+				>
+					<option value="x86_64">x86_64</option>
+					<option value="arm64">arm64 (Graviton)</option>
+				</select>
+			</div>
+			<div class="flex flex-col gap-1.5">
+				<Label for="cf-ephemeral">Ephemeral storage (MB)</Label>
+				<Input
+					id="cf-ephemeral"
+					type="number"
+					min="512"
+					max="10240"
+					bind:value={ephemeralStorageMb}
+				/>
+			</div>
+			<div class="flex flex-col gap-1.5 sm:col-span-2">
+				<Label for="cf-description">Description (optional)</Label>
+				<Input id="cf-description" bind:value={description} placeholder="What it does" />
+			</div>
 			<div class="flex flex-col gap-1.5 sm:col-span-2">
 				<Label for="cf-zip">Code (base64 ZIP, optional)</Label>
 				<Input
@@ -130,6 +193,30 @@
 					class="font-mono text-xs"
 					placeholder="UEsDBBQAA..."
 				/>
+			</div>
+			<div class="flex flex-col gap-1.5 sm:col-span-2">
+				<Label for="cf-env">Environment variables</Label>
+				<textarea
+					id="cf-env"
+					bind:value={envText}
+					rows="3"
+					placeholder="STAGE=dev&#10;TABLE_NAME=orders"
+					class="rounded-md border border-border bg-background px-2 py-1.5 font-mono text-xs"
+				></textarea>
+				<p class="text-[11px] text-muted-foreground">
+					One `KEY=value` per line. Available to the handler through the usual
+					environment lookup.
+				</p>
+			</div>
+			<div class="flex flex-col gap-1.5 sm:col-span-2">
+				<Label for="cf-tags">Tags</Label>
+				<textarea
+					id="cf-tags"
+					bind:value={tagsText}
+					rows="2"
+					placeholder="env=dev&#10;team=platform"
+					class="rounded-md border border-border bg-background px-2 py-1.5 font-mono text-xs"
+				></textarea>
 			</div>
 			<DialogFooter class="sm:col-span-2">
 				<Button type="button" variant="ghost" onclick={() => onOpenChange(false)}>
