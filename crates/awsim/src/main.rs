@@ -1,3 +1,17 @@
+// musl's mallocng serializes on a small number of locks, so throughput
+// falls as concurrency rises rather than holding flat. Measured on 61
+// services under mixed-size request bodies, the stock musl binary went
+// from 2927 rps at 16 concurrent requests to 2699 at 128, with p50
+// latency climbing from 3.3ms to 35.8ms. glibc holds ~5000 rps flat.
+// mimalloc closes the gap. It is scoped to musl so the glibc path,
+// which is already fast, keeps the system allocator. Unlike jemalloc,
+// which was dropped for flaky CI builds, this is a plain cc-crate build
+// of a few .c files, and both musl release targets already compile
+// aws-lc-sys, libsqlite3-sys and zstd-sys natively.
+#[cfg(target_env = "musl")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use anyhow::{Context, Result};
 use axum::error_handling::HandleErrorLayer;
 use axum::http::StatusCode;

@@ -1,6 +1,6 @@
 [package]
 name = "awsim"
-description = "AWSim — a fully offline, free AWS development environment"
+description = "AWSim, a fully offline, free AWS development environment"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,6 +11,9 @@ build = "build.rs"
 [[bin]]
 name = "awsim"
 path = "src/main.rs"
+
+[target.'cfg(target_env = "musl")'.dependencies]
+mimalloc = { version = "0.1", default-features = false }
 
 [dependencies]
 awsim-apigateway = { workspace = true }
@@ -127,7 +130,7 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring"]
 [features]
 rds-data = ["dep:awsim-rds-data"]
 
-# rlimit is POSIX only — the crate's Resource::NOFILE / get/setrlimit don't
+# rlimit is POSIX only. The crate's Resource::NOFILE and get/setrlimit do not
 # exist on Windows, so the unix-targeted fd watcher / soft-limit bumper
 # is cfg-gated below.
 [target.'cfg(unix)'.dependencies]
