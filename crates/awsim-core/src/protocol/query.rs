@@ -345,7 +345,12 @@ pub fn json_to_xml_fields(value: &Value) -> String {
 fn render_element(key: &str, value: &Value) -> String {
     match value {
         Value::Object(_) => format!("<{key}>\n{}</{key}>\n", json_to_xml_fields(value)),
-        Value::String(s) => format!("<{key}>{s}</{key}>\n"),
+        // Text nodes carry caller data: policy documents, email
+        // templates, object keys. Writing them raw produced a document
+        // the client could not parse, so an SES template containing
+        // `<p>` came back with an empty body and one containing `&`
+        // broke the response outright.
+        Value::String(s) => format!("<{key}>{}</{key}>\n", xml_escape(s)),
         Value::Number(n) => format!("<{key}>{n}</{key}>\n"),
         Value::Bool(b) => format!("<{key}>{b}</{key}>\n"),
         Value::Null => format!("<{key}/>\n"),
@@ -356,6 +361,29 @@ fn render_element(key: &str, value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Text nodes carry caller data. An SES template holding `<p>` came
+    /// back with an empty body because the markup parsed as child
+    /// elements, and one holding `&` produced a document no client could
+    /// read at all.
+    #[test]
+    fn text_nodes_are_escaped() {
+        let value = serde_json::json!({
+            "Template": {
+                "SubjectPart": "A & B",
+                "HtmlPart": "<p>hi</p>",
+            }
+        });
+        let xml = json_to_xml_fields(&value);
+        assert!(
+            xml.contains("<SubjectPart>A &amp; B</SubjectPart>"),
+            "{xml}"
+        );
+        assert!(
+            xml.contains("<HtmlPart>&lt;p&gt;hi&lt;/p&gt;</HtmlPart>"),
+            "{xml}"
+        );
+    }
 
     #[test]
     fn test_parse_simple_query() {
