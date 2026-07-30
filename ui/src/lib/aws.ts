@@ -1,18 +1,29 @@
 /**
  * Where to send AWS API calls.
  *
- * The admin UI is served by the emulator itself, so its own origin is
- * always the right endpoint. Hardcoding the default port meant every
- * page failed with "Failed to fetch" whenever the server ran anywhere
- * else, which is the normal case when 4566 is already taken.
+ * In a packaged build the admin UI is served by the emulator itself, so
+ * its own origin is always the right endpoint. Hardcoding the default
+ * port meant every page failed with "Failed to fetch" whenever the
+ * server ran anywhere else, which is the normal case when 4566 is
+ * already taken.
  *
- * The fallback only applies while prerendering, where there is no
- * window; the module re-evaluates in the browser during hydration.
+ * Under `bun run dev` the origin is Vite's, which serves the app at `/`
+ * and so cannot also proxy `/` to the emulator. Dev therefore targets
+ * the default port directly, which is where `awsim` listens unless it
+ * was told otherwise.
+ *
+ * The last branch also covers prerendering, where there is no window;
+ * the module re-evaluates in the browser during hydration.
  */
-export const ENDPOINT =
-  typeof window !== "undefined" && window.location?.origin
-    ? window.location.origin
-    : "http://localhost:4566";
+function resolveEndpoint(): string {
+  if (import.meta.env.DEV) return "http://localhost:4566";
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return window.location.origin;
+  }
+  return "http://localhost:4566";
+}
+
+export const ENDPOINT = resolveEndpoint();
 
 const FAKE_DATE = new Date().toISOString().slice(0, 10).replace(/-/g, "");
 

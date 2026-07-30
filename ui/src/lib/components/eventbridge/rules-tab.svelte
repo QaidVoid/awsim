@@ -19,6 +19,7 @@
 	import FilterIcon from '@lucide/svelte/icons/filter';
 	import { toast } from 'svelte-sonner';
 	import { listRules, putRule, deleteRule, type Rule } from '$lib/api/eventbridge';
+	import TargetsPanel from './targets-panel.svelte';
 
 	interface Props {
 		busName: string;
@@ -162,6 +163,7 @@
 								<pre
 									class="mt-2 max-h-32 overflow-auto rounded-md border border-border bg-muted/40 p-2 text-[11px] font-mono whitespace-pre-wrap break-all">{rule.eventPattern}</pre>
 							{/if}
+							<TargetsPanel ruleName={rule.name} {busName} />
 						</div>
 						<Button
 							size="xs"
@@ -218,7 +220,7 @@
 		<DialogFooter>
 			<Button variant="outline" onclick={() => (createOpen = false)}>Cancel</Button>
 			<Button onclick={create} disabled={creating || !newName.trim()}>
-				{creating ? 'Creating…' : 'Create rule'}
+				{creating ? 'Creating...' : 'Create rule'}
 			</Button>
 		</DialogFooter>
 	</DialogContent>

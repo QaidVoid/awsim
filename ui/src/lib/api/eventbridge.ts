@@ -38,6 +38,21 @@ export interface Archive {
   creationTime?: number;
 }
 
+/**
+ * A rule target. `arn` decides what EventBridge invokes; everything
+ * else shapes the payload or the failure handling.
+ */
+export interface Target {
+  id: string;
+  arn: string;
+  input?: string;
+  inputPath?: string;
+  roleArn?: string;
+  deadLetterArn?: string;
+  maximumEventAgeInSeconds?: number;
+  maximumRetryAttempts?: number;
+}
+
 export interface PutEventEntry {
   source: string;
   detailType: string;
@@ -167,6 +182,112 @@ export async function deleteRule(
   const params: Record<string, unknown> = { Name: name, Force: true };
   if (busName) params["EventBusName"] = busName;
   await request("DeleteRule", params);
+}
+
+export async function listTargetsByRule(
+  ruleName: string,
+  busName?: string,
+): Promise<Target[]> {
+  const params: Record<string, unknown> = { Rule: ruleName };
+  if (busName) params["EventBusName"] = busName;
+  const data = await request<{
+    Targets?: {
+      Id: string;
+      Arn: string;
+      Input?: string;
+      InputPath?: string;
+      RoleArn?: string;
+      DeadLetterConfig?: { Arn?: string };
+      RetryPolicy?: {
+        MaximumEventAgeInSeconds?: number;
+        MaximumRetryAttempts?: number;
+      };
+    }[];
+  }>("ListTargetsByRule", params);
+  return (data.Targets ?? []).map((t) => ({
+    id: t.Id,
+    arn: t.Arn,
+    input: t.Input,
+    inputPath: t.InputPath,
+    roleArn: t.RoleArn,
+    deadLetterArn: t.DeadLetterConfig?.Arn,
+    maximumEventAgeInSeconds: t.RetryPolicy?.MaximumEventAgeInSeconds,
+    maximumRetryAttempts: t.RetryPolicy?.MaximumRetryAttempts,
+  }));
+}
+
+/**
+ * PutTargets is an upsert keyed on target id, so passing an existing id
+ * replaces that target rather than adding a second one. AWS caps a rule
+ * at five targets and reports per-target problems in `FailedEntries`
+ * instead of failing the call, so the caller has to read the result.
+ */
+export async function putTargets(
+  ruleName: string,
+  targets: Target[],
+  busName?: string,
+): Promise<{ failedEntryCount: number; messages: string[] }> {
+  const params: Record<string, unknown> = {
+    Rule: ruleName,
+    Targets: targets.map((t) => {
+      const out: Record<string, unknown> = { Id: t.id, Arn: t.arn };
+      if (t.input) out["Input"] = t.input;
+      if (t.inputPath) out["InputPath"] = t.inputPath;
+      if (t.roleArn) out["RoleArn"] = t.roleArn;
+      if (t.deadLetterArn) out["DeadLetterConfig"] = { Arn: t.deadLetterArn };
+      if (
+        t.maximumEventAgeInSeconds !== undefined ||
+        t.maximumRetryAttempts !== undefined
+      ) {
+        out["RetryPolicy"] = {
+          MaximumEventAgeInSeconds: t.maximumEventAgeInSeconds,
+          MaximumRetryAttempts: t.maximumRetryAttempts,
+        };
+      }
+      return out;
+    }),
+  };
+  if (busName) params["EventBusName"] = busName;
+  const data = await request<{
+    FailedEntryCount?: number;
+    FailedEntries?: { TargetId?: string; ErrorMessage?: string }[];
+  }>("PutTargets", params);
+  return {
+    failedEntryCount: data.FailedEntryCount ?? 0,
+    messages: (data.FailedEntries ?? []).map(
+      (f) => `${f.TargetId ?? "target"}: ${f.ErrorMessage ?? "failed"}`,
+    ),
+  };
+}
+
+export async function removeTargets(
+  ruleName: string,
+  ids: string[],
+  busName?: string,
+): Promise<{ failedEntryCount: number; messages: string[] }> {
+  const params: Record<string, unknown> = { Rule: ruleName, Ids: ids };
+  if (busName) params["EventBusName"] = busName;
+  const data = await request<{
+    FailedEntryCount?: number;
+    FailedEntries?: { TargetId?: string; ErrorMessage?: string }[];
+  }>("RemoveTargets", params);
+  return {
+    failedEntryCount: data.FailedEntryCount ?? 0,
+    messages: (data.FailedEntries ?? []).map(
+      (f) => `${f.TargetId ?? "target"}: ${f.ErrorMessage ?? "failed"}`,
+    ),
+  };
+}
+
+export async function createEventBus(name: string): Promise<{ arn: string }> {
+  const data = await request<{ EventBusArn?: string }>("CreateEventBus", {
+    Name: name,
+  });
+  return { arn: data.EventBusArn ?? "" };
+}
+
+export async function deleteEventBus(name: string): Promise<void> {
+  await request("DeleteEventBus", { Name: name });
 }
 
 export async function putEvents(
