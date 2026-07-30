@@ -122,20 +122,40 @@ export interface CreateRepositoryInput {
   repositoryName: string;
   imageTagMutability?: "MUTABLE" | "IMMUTABLE";
   scanOnPush?: boolean;
+  /** `AES256` (the default) or `KMS`. */
+  encryptionType?: "AES256" | "KMS";
+  /** Key id, ARN, or alias. Required with `KMS`, rejected with AES256. */
+  kmsKey?: string;
+  tags?: Record<string, string>;
 }
 
 export async function createRepository(
   input: CreateRepositoryInput,
 ): Promise<Repository> {
+  const body: Record<string, unknown> = {
+    repositoryName: input.repositoryName,
+    imageTagMutability: input.imageTagMutability ?? "MUTABLE",
+    imageScanningConfiguration: {
+      scanOnPush: input.scanOnPush ?? false,
+    },
+  };
+  // ECR rejects a kmsKey alongside AES256, so only send the key when
+  // the type actually takes one.
+  if (input.encryptionType === "KMS") {
+    body.encryptionConfiguration = {
+      encryptionType: "KMS",
+      kmsKey: input.kmsKey,
+    };
+  } else if (input.encryptionType) {
+    body.encryptionConfiguration = { encryptionType: input.encryptionType };
+  }
+  const tags = Object.entries(input.tags ?? {});
+  if (tags.length) {
+    body.tags = tags.map(([Key, Value]) => ({ Key, Value }));
+  }
   const data = await request<{ repository?: RawRepository }>(
     "CreateRepository",
-    {
-      repositoryName: input.repositoryName,
-      imageTagMutability: input.imageTagMutability ?? "MUTABLE",
-      imageScanningConfiguration: {
-        scanOnPush: input.scanOnPush ?? false,
-      },
-    },
+    body,
   );
   return mapRepo(data.repository ?? {});
 }
