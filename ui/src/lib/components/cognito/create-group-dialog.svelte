@@ -27,7 +27,7 @@
 	let name = $state('');
 	let description = $state('');
 	let roleArn = $state('');
-	let precedenceText = $state('');
+	let precedenceInput = $state<number | string>('');
 	let saving = $state(false);
 	let error = $state<string | null>(null);
 
@@ -36,7 +36,7 @@
 			name = '';
 			description = '';
 			roleArn = '';
-			precedenceText = '';
+			precedenceInput = '';
 			saving = false;
 			error = null;
 		}
@@ -47,7 +47,7 @@
 			error = 'Group name is required';
 			return;
 		}
-		const precedence = precedenceText.trim() ? Number(precedenceText.trim()) : undefined;
+		const precedence = precedenceInput === '' || precedenceInput === null ? undefined : Number(precedenceInput);
 		if (precedence !== undefined && Number.isNaN(precedence)) {
 			error = 'Precedence must be a number';
 			return;
@@ -109,7 +109,7 @@
 				<Input
 					id="grp-prec"
 					type="number"
-					bind:value={precedenceText}
+					bind:value={precedenceInput}
 					placeholder="optional"
 					autocomplete="off"
 				/>

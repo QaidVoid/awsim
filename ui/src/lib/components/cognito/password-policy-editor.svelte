@@ -15,22 +15,22 @@
 
 	let original = $state<PasswordPolicy | null>(null);
 	let policy = $state<PasswordPolicy>({});
-	let minLengthText = $state('8');
-	let tempDaysText = $state('7');
+	let minLength = $state(8);
+	let tempDays = $state(7);
 	let loading = $state(true);
 	let saving = $state(false);
 
 	const dirty = $derived.by(() => {
 		if (!original) return false;
-		const minLen = Number(minLengthText.trim());
-		const tempDays = Number(tempDaysText.trim());
+		const minLen = Number(minLength);
+		const days = Number(tempDays);
 		return (
 			minLen !== (original.minimumLength ?? 8) ||
 			policy.requireUppercase !== (original.requireUppercase ?? false) ||
 			policy.requireLowercase !== (original.requireLowercase ?? false) ||
 			policy.requireNumbers !== (original.requireNumbers ?? false) ||
 			policy.requireSymbols !== (original.requireSymbols ?? false) ||
-			tempDays !== (original.temporaryPasswordValidityDays ?? 7)
+			days !== (original.temporaryPasswordValidityDays ?? 7)
 		);
 	});
 
@@ -42,8 +42,8 @@
 			const detail = await describeUserPool(poolId);
 			original = detail.passwordPolicy ?? {};
 			policy = { ...original };
-			minLengthText = String(original.minimumLength ?? 8);
-			tempDaysText = String(original.temporaryPasswordValidityDays ?? 7);
+			minLength = original.minimumLength ?? 8;
+			tempDays = original.temporaryPasswordValidityDays ?? 7;
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to load policy');
 		} finally {
@@ -52,13 +52,13 @@
 	}
 
 	async function save() {
-		const minLen = Number(minLengthText.trim());
-		const tempDays = Number(tempDaysText.trim());
+		const minLen = Number(minLength);
+		const days = Number(tempDays);
 		if (Number.isNaN(minLen) || minLen < 6 || minLen > 99) {
 			toast.error('Minimum length must be between 6 and 99');
 			return;
 		}
-		if (Number.isNaN(tempDays) || tempDays < 0 || tempDays > 365) {
+		if (Number.isNaN(days) || days < 0 || days > 365) {
 			toast.error('Temporary password validity must be 0-365 days');
 			return;
 		}
@@ -71,7 +71,7 @@
 					requireLowercase: policy.requireLowercase ?? false,
 					requireNumbers: policy.requireNumbers ?? false,
 					requireSymbols: policy.requireSymbols ?? false,
-					temporaryPasswordValidityDays: tempDays
+					temporaryPasswordValidityDays: days
 				}
 			});
 			toast.success('Password policy saved');
@@ -86,8 +86,8 @@
 	function reset() {
 		if (!original) return;
 		policy = { ...original };
-		minLengthText = String(original.minimumLength ?? 8);
-		tempDaysText = String(original.temporaryPasswordValidityDays ?? 7);
+		minLength = original.minimumLength ?? 8;
+		tempDays = original.temporaryPasswordValidityDays ?? 7;
 	}
 </script>
 
@@ -113,7 +113,7 @@
 					type="number"
 					min="6"
 					max="99"
-					bind:value={minLengthText}
+					bind:value={minLength}
 					class="h-8"
 				/>
 			</div>
@@ -124,7 +124,7 @@
 					type="number"
 					min="0"
 					max="365"
-					bind:value={tempDaysText}
+					bind:value={tempDays}
 					class="h-8"
 				/>
 			</div>
