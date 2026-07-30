@@ -1,3 +1,4 @@
+use awsim_core::pagination::{cap_max_results, paginate};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -7,35 +8,64 @@ use crate::util::now_iso8601;
 use super::require_str;
 
 /// GET /. List all buckets.
-pub fn list_buckets(state: &S3State, ctx: &RequestContext) -> Result<Value, AwsError> {
-    let mut buckets: Vec<Value> = state
+/// AWS caps a ListBuckets page at 10000 and defaults to the same.
+const DEFAULT_MAX_BUCKETS: usize = 10_000;
+const MAX_MAX_BUCKETS: usize = 10_000;
+
+pub fn list_buckets(
+    state: &S3State,
+    input: &Value,
+    ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    // Query parameters arrive under their wire names, which S3 spells in
+    // lowercase with hyphens.
+    let prefix = input
+        .get("prefix")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+
+    let mut names: Vec<String> = state
         .buckets
         .iter()
-        .map(|entry| {
-            let b = entry.value();
-            json!({
-                "Name": b.name,
-                "CreationDate": b.created_at,
-            })
+        .map(|entry| entry.value().name.clone())
+        .filter(|name| name.starts_with(prefix))
+        .collect();
+    names.sort();
+
+    // `MaxBuckets`, `ContinuationToken` and `Prefix` were accepted and
+    // ignored, so a caller asking for one page got every bucket back.
+    let requested = input.get("max-buckets").and_then(|v| {
+        v.as_i64()
+            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+    });
+    let limit = cap_max_results(requested, DEFAULT_MAX_BUCKETS, MAX_MAX_BUCKETS);
+    let token = input.get("continuation-token").and_then(Value::as_str);
+    let page = paginate(names, limit, token, Clone::clone)?;
+
+    let buckets: Vec<Value> = page
+        .items
+        .iter()
+        .filter_map(|name| {
+            let b = state.buckets.get(name)?;
+            Some(json!({ "Name": b.name, "CreationDate": b.created_at }))
         })
         .collect();
 
-    // Sort by name for deterministic output.
-    buckets.sort_by(|a, b| {
-        a.get("Name")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .cmp(b.get("Name").and_then(Value::as_str).unwrap_or(""))
-    });
-
-    Ok(json!({
+    let mut out = json!({
         "__xml_root": "ListAllMyBucketsResult",
         "Buckets": { "Bucket": buckets },
         "Owner": {
             "ID": ctx.account_id,
             "DisplayName": ctx.account_id,
         }
-    }))
+    });
+    if let Some(next) = page.next_token {
+        out["ContinuationToken"] = json!(next);
+    }
+    if !prefix.is_empty() {
+        out["Prefix"] = json!(prefix);
+    }
+    Ok(out)
 }
 
 /// PUT /{Bucket}. Create a bucket.

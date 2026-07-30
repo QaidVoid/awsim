@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use awsim_core::pagination::{cap_max_results, paginate};
 use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 use tracing::info;
@@ -200,16 +201,33 @@ pub fn describe_clusters(
 // ListClusters
 // ---------------------------------------------------------------------------
 
+/// AWS returns at most 100 cluster ARNs per page.
+const MAX_CLUSTERS_PER_PAGE: usize = 100;
+
 pub fn list_clusters(
     state: &EcsState,
-    _input: &Value,
+    input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let arns: Vec<Value> = state
+    let mut arns: Vec<String> = state
         .clusters
         .iter()
-        .map(|e| json!(e.value().arn))
+        .map(|e| e.value().arn.clone())
         .collect();
+    arns.sort();
 
-    Ok(json!({ "clusterArns": arns }))
+    // `maxResults` and `nextToken` were accepted and ignored, so a
+    // caller asking for one page got every cluster back.
+    let limit = cap_max_results(
+        input["maxResults"].as_i64(),
+        MAX_CLUSTERS_PER_PAGE,
+        MAX_CLUSTERS_PER_PAGE,
+    );
+    let page = paginate(arns, limit, input["nextToken"].as_str(), Clone::clone)?;
+
+    let mut out = json!({ "clusterArns": page.items });
+    if let Some(token) = page.next_token {
+        out["nextToken"] = json!(token);
+    }
+    Ok(out)
 }

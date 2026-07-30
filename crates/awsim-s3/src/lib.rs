@@ -1033,7 +1033,7 @@ impl ServiceHandler for S3Service {
 
         match operation {
             // Bucket operations
-            "ListBuckets" => operations::bucket::list_buckets(&state, ctx),
+            "ListBuckets" => operations::bucket::list_buckets(&state, &input, ctx),
             "CreateBucket" => operations::bucket::create_bucket(&state, &input, ctx),
             "DeleteBucket" => operations::bucket::delete_bucket(&state, &input),
             "HeadBucket" => operations::bucket::head_bucket(&state, &input),

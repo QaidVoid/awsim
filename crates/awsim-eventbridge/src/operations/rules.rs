@@ -1,3 +1,4 @@
+use awsim_core::pagination::{cap_max_results, paginate};
 use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 use tracing::info;
@@ -219,6 +220,9 @@ pub fn describe_rule(
 // ListRules
 // ---------------------------------------------------------------------------
 
+/// AWS returns at most 100 rules per page.
+const MAX_RULES_PER_PAGE: usize = 100;
+
 pub fn list_rules(
     state: &EventBridgeState,
     input: &Value,
@@ -236,14 +240,30 @@ pub fn list_rules(
         )
     })?;
 
-    let rules: Vec<Value> = bus
+    let mut rules: Vec<Value> = bus
         .rules
         .values()
         .filter(|r| name_prefix.is_empty() || r.name.starts_with(name_prefix))
         .map(rule_to_json)
         .collect();
+    rules.sort_by(|a, b| a["Name"].as_str().cmp(&b["Name"].as_str()));
 
-    Ok(json!({ "Rules": rules }))
+    // `Limit` and `NextToken` were accepted and ignored, so a caller
+    // asking for one page got every rule back.
+    let limit = cap_max_results(
+        input["Limit"].as_i64(),
+        MAX_RULES_PER_PAGE,
+        MAX_RULES_PER_PAGE,
+    );
+    let page = paginate(rules, limit, input["NextToken"].as_str(), |r| {
+        r["Name"].as_str().unwrap_or_default().to_string()
+    })?;
+
+    let mut out = json!({ "Rules": page.items });
+    if let Some(token) = page.next_token {
+        out["NextToken"] = json!(token);
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------

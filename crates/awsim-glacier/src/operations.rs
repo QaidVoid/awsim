@@ -1,5 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use awsim_core::pagination::{cap_max_results, paginate};
 use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
@@ -157,18 +158,37 @@ pub fn describe_vault(
     Ok(vault_to_value(&v))
 }
 
+/// AWS returns at most 1000 vaults per page.
+const MAX_VAULTS_PER_PAGE: usize = 1000;
+
 pub fn list_vaults(
     state: &GlacierState,
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     resolve_account_id(input, ctx)?;
-    let items: Vec<Value> = state
+    let mut items: Vec<Value> = state
         .vaults
         .iter()
         .map(|e| vault_to_value(e.value()))
         .collect();
-    Ok(json!({ "VaultList": items, "Marker": null }))
+    items.sort_by(|a, b| a["VaultName"].as_str().cmp(&b["VaultName"].as_str()));
+
+    // `limit` and `marker` arrive as query parameters and were ignored,
+    // so a caller asking for one page got every vault back.
+    let requested = input.get("limit").and_then(|v| {
+        v.as_i64()
+            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+    });
+    let limit = cap_max_results(requested, MAX_VAULTS_PER_PAGE, MAX_VAULTS_PER_PAGE);
+    let page = paginate(
+        items,
+        limit,
+        input.get("marker").and_then(Value::as_str),
+        |v| v["VaultName"].as_str().unwrap_or_default().to_string(),
+    )?;
+
+    Ok(json!({ "VaultList": page.items, "Marker": page.next_token }))
 }
 
 pub fn delete_vault(
