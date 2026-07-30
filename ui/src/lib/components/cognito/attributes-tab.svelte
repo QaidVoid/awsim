@@ -50,20 +50,22 @@
 	let attrType = $state<(typeof TYPE_OPTIONS)[number]>('String');
 	let attrMutable = $state(true);
 	let attrRequired = $state(false);
-	let minLen = $state('');
-	let maxLen = $state('');
-	let minVal = $state('');
-	let maxVal = $state('');
+	// `bind:value` on a number input yields a number, or null when the
+	// field is empty. Blank means "leave the constraint unset".
+	let minLen = $state<number | null>(null);
+	let maxLen = $state<number | null>(null);
+	let minVal = $state<number | null>(null);
+	let maxVal = $state<number | null>(null);
 
 	function reset() {
 		attrName = '';
 		attrType = 'String';
 		attrMutable = true;
 		attrRequired = false;
-		minLen = '';
-		maxLen = '';
-		minVal = '';
-		maxVal = '';
+		minLen = null;
+		maxLen = null;
+		minVal = null;
+		maxVal = null;
 		error = null;
 		saving = false;
 	}
@@ -106,16 +108,16 @@
 
 		if (attrType === 'String') {
 			const sc: { minLength?: number; maxLength?: number } = {};
-			if (minLen.trim()) {
-				const n = Number.parseInt(minLen, 10);
+			if (minLen !== null) {
+				const n = Number(minLen);
 				if (!Number.isFinite(n) || n < 0) {
 					error = 'MinLength must be a non-negative integer';
 					return;
 				}
 				sc.minLength = n;
 			}
-			if (maxLen.trim()) {
-				const n = Number.parseInt(maxLen, 10);
+			if (maxLen !== null) {
+				const n = Number(maxLen);
 				if (!Number.isFinite(n) || n < 0) {
 					error = 'MaxLength must be a non-negative integer';
 					return;
@@ -135,16 +137,16 @@
 
 		if (attrType === 'Number') {
 			const nc: { minValue?: number; maxValue?: number } = {};
-			if (minVal.trim()) {
-				const n = Number.parseInt(minVal, 10);
+			if (minVal !== null) {
+				const n = Number(minVal);
 				if (!Number.isFinite(n)) {
 					error = 'MinValue must be an integer';
 					return;
 				}
 				nc.minValue = n;
 			}
-			if (maxVal.trim()) {
-				const n = Number.parseInt(maxVal, 10);
+			if (maxVal !== null) {
+				const n = Number(maxVal);
 				if (!Number.isFinite(n)) {
 					error = 'MaxValue must be an integer';
 					return;

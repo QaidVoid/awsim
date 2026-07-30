@@ -31,7 +31,8 @@
 	let { functionName }: Props = $props();
 
 	let reserved = $state<number | undefined>(undefined);
-	let reservedDraft = $state('');
+	// Bound to a number input, so this is a number or null when blank.
+	let reservedDraft = $state<number | null>(null);
 	let savingReserved = $state(false);
 
 	let provisioned = $state<ProvisionedConcurrencyConfig[]>([]);
@@ -52,7 +53,7 @@
 				listProvisionedConcurrencyConfigs(functionName)
 			]);
 			reserved = r.reservedConcurrentExecutions;
-			reservedDraft = reserved !== undefined ? String(reserved) : '';
+			reservedDraft = reserved ?? null;
 			provisioned = p;
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to load concurrency');
@@ -62,8 +63,8 @@
 	}
 
 	async function saveReserved() {
-		const n = parseInt(reservedDraft.trim(), 10);
-		if (Number.isNaN(n) || n < 0) {
+		const n = Number(reservedDraft);
+		if (reservedDraft === null || Number.isNaN(n) || n < 0) {
 			toast.error('Reserved concurrent executions must be a non-negative integer');
 			return;
 		}
