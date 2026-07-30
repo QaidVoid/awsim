@@ -83,13 +83,13 @@ Valid values for `--log-level` / `AWSIM_LOG_LEVEL`:
 
 ## Allocator
 
-AWSim ships with `tikv-jemallocator` as the global allocator on Linux + macOS (MSVC builds keep the system allocator). Jemalloc returns memory to the OS more aggressively than glibc malloc, so idle RSS stays flat after burst workloads instead of ratcheting upward.
+AWSim uses mimalloc as the global allocator on musl targets, which covers the published Linux binaries and the Docker image. Every other target keeps the system allocator. musl's own mallocng contends heavily under concurrency, and swapping it out is what keeps request throughput flat as load rises rather than degrading.
 
-If you need to tune jemalloc's page-decay behaviour — useful when investigating per-second memory cycling — set `MALLOC_CONF` in the environment:
+There is nothing to configure here. If you build from source for a glibc, macOS or Windows target you get the platform allocator, and on glibc `MALLOC_ARENA_MAX` is the one knob worth reaching for:
 
 ```bash
-# Aggressive page return: drop dirty/muzzy pages after 1s + 0s
-MALLOC_CONF="dirty_decay_ms:1000,muzzy_decay_ms:0,narenas:2" ./awsim
+# Cap arena count when idle RSS ratchets upward across bursts
+MALLOC_ARENA_MAX=2 ./awsim
 ```
 
 See the [memory + observability guide](/guide/admin-console#observability) for diagnosing growth.
