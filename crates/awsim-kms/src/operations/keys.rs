@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use awsim_core::pagination::{cap_max_results, paginate};
+use awsim_core::tags::{TagOpts, validate_aws_tags};
 use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -12,6 +13,26 @@ use crate::util::{now_epoch_f64, random_secret};
 // ---------------------------------------------------------------------------
 // CreateKey
 // ---------------------------------------------------------------------------
+
+/// Read the optional `Tags` on CreateKey. AWS spells the members
+/// `TagKey` / `TagValue` here, not the `Key` / `Value` most services use.
+fn create_tags(input: &Value) -> Result<HashMap<String, String>, AwsError> {
+    let Some(tags) = input.get("Tags") else {
+        return Ok(HashMap::new());
+    };
+    if tags.is_null() {
+        return Ok(HashMap::new());
+    }
+    validate_aws_tags(tags, &TagOpts::aws_default())?;
+    let mut out = HashMap::new();
+    for tag in tags.as_array().into_iter().flatten() {
+        let (Some(k), Some(v)) = (tag["TagKey"].as_str(), tag["TagValue"].as_str()) else {
+            return Err(error::missing_parameter("TagKey"));
+        };
+        out.insert(k.to_string(), v.to_string());
+    }
+    Ok(out)
+}
 
 pub fn create_key(
     state: &KmsState,
@@ -63,7 +84,9 @@ pub fn create_key(
         deletion_date: None,
         rotation_enabled: false,
         policies: HashMap::new(),
-        tags: HashMap::new(),
+        // AWS lets a key be tagged at creation. Dropping them meant a
+        // caller had to follow every CreateKey with a TagResource.
+        tags: create_tags(input)?,
         key_material_imported: false,
         origin: origin.clone(),
     };
