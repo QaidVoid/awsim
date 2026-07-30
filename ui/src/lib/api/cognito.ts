@@ -1335,24 +1335,52 @@ export async function deleteDomain(
 
 // ---- Pool create/delete ----
 
-export async function createUserPool(input: {
+export interface CreateUserPoolInput {
   name: string;
-  autoVerifyEmail?: boolean;
+  /** Attributes Cognito verifies on sign-up: `email`, `phone_number`. */
+  autoVerifiedAttributes?: string[];
+  /** Attributes usable in place of a username at sign-in. */
+  usernameAttributes?: string[];
   passwordMinLength?: number;
-}): Promise<UserPool> {
+  requireUppercase?: boolean;
+  requireLowercase?: boolean;
+  requireNumbers?: boolean;
+  requireSymbols?: boolean;
+  /** How long an admin-set temporary password stays valid. */
+  temporaryPasswordValidityDays?: number;
+  /** `OFF`, `OPTIONAL`, or `ON`. */
+  mfaConfiguration?: string;
+  tags?: Record<string, string>;
+}
+
+export async function createUserPool(
+  input: CreateUserPoolInput,
+): Promise<UserPool> {
   const body: Record<string, unknown> = { PoolName: input.name };
-  if (input.autoVerifyEmail) body.AutoVerifiedAttributes = ["email"];
-  if (input.passwordMinLength !== undefined) {
-    body.Policies = {
-      PasswordPolicy: {
-        MinimumLength: input.passwordMinLength,
-        RequireUppercase: false,
-        RequireLowercase: false,
-        RequireNumbers: false,
-        RequireSymbols: false,
-      },
-    };
+  if (input.autoVerifiedAttributes?.length) {
+    body.AutoVerifiedAttributes = input.autoVerifiedAttributes;
   }
+  if (input.usernameAttributes?.length) {
+    body.UsernameAttributes = input.usernameAttributes;
+  }
+  if (input.mfaConfiguration) body.MfaConfiguration = input.mfaConfiguration;
+  if (input.tags && Object.keys(input.tags).length > 0) {
+    body.UserPoolTags = input.tags;
+  }
+  // Cognito's own defaults require all four character classes, so the
+  // flags are sent explicitly rather than left to chance.
+  body.Policies = {
+    PasswordPolicy: {
+      MinimumLength: input.passwordMinLength ?? 8,
+      RequireUppercase: input.requireUppercase ?? true,
+      RequireLowercase: input.requireLowercase ?? true,
+      RequireNumbers: input.requireNumbers ?? true,
+      RequireSymbols: input.requireSymbols ?? true,
+      ...(input.temporaryPasswordValidityDays !== undefined
+        ? { TemporaryPasswordValidityDays: input.temporaryPasswordValidityDays }
+        : {}),
+    },
+  };
   const data = (await idpRequest("CreateUserPool", body)) as {
     UserPool?: {
       Id?: string;
