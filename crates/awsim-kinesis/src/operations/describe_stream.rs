@@ -50,6 +50,7 @@ pub fn handle(
     let stream_name_out = stream.name.clone();
     let stream_arn = stream.arn.clone();
     let stream_status = stream.status.clone();
+    let stream_mode = stream.stream_mode.clone();
     let created_at = stream.created_at;
     drop(stream);
 
@@ -90,6 +91,7 @@ pub fn handle(
             "StreamName": stream_name_out,
             "StreamARN": stream_arn,
             "StreamStatus": stream_status,
+            "StreamModeDetails": { "StreamMode": stream_mode },
             "Shards": shards_json,
             "HasMoreShards": has_more_shards,
             "RetentionPeriodHours": retention_hours,

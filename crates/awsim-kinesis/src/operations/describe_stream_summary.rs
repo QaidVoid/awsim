@@ -31,6 +31,9 @@ pub fn handle(
             "StreamName": stream.name,
             "StreamARN": stream.arn,
             "StreamStatus": stream.status,
+            // Callers branch on the capacity mode to decide whether
+            // shard counts are theirs to manage, so it has to be here.
+            "StreamModeDetails": { "StreamMode": stream.stream_mode },
             "RetentionPeriodHours": stream.retention_hours,
             "StreamCreationTimestamp": stream.created_at,
             "EnhancedMonitoring": [],
