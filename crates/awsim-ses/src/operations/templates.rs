@@ -116,5 +116,5 @@ pub fn list_email_templates(
         })
         .collect();
 
-    Ok(json!({ "TemplatesMetadata": templates }))
+    Ok(json!({ "TemplatesMetadata": { "member": templates } }))
 }

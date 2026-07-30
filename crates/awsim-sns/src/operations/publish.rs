@@ -483,8 +483,8 @@ pub fn publish_batch(
     }
 
     Ok(json!({
-        "Successful": successful,
-        "Failed": failed,
+        "Successful": { "member": successful },
+        "Failed": { "member": failed },
     }))
 }
 
@@ -828,7 +828,7 @@ mod tests {
             &ctx_us(),
         )
         .unwrap();
-        let first_id = resp1["Successful"][0]["MessageId"]
+        let first_id = resp1["Successful"]["member"][0]["MessageId"]
             .as_str()
             .unwrap()
             .to_string();
@@ -848,7 +848,9 @@ mod tests {
             &ctx_us(),
         )
         .unwrap();
-        let second_id = resp2["Successful"][0]["MessageId"].as_str().unwrap();
+        let second_id = resp2["Successful"]["member"][0]["MessageId"]
+            .as_str()
+            .unwrap();
         assert_eq!(second_id, first_id);
     }
 
@@ -870,7 +872,7 @@ mod tests {
             &ctx_us(),
         )
         .unwrap();
-        let successes = resp["Successful"].as_array().unwrap();
+        let successes = resp["Successful"]["member"].as_array().unwrap();
         assert_eq!(successes.len(), 3);
         assert_eq!(successes[0]["MessageId"], successes[1]["MessageId"]);
         assert_ne!(successes[0]["MessageId"], successes[2]["MessageId"]);
@@ -904,7 +906,7 @@ mod tests {
             &ctx_us(),
         )
         .unwrap();
-        let successes = resp["Successful"].as_array().unwrap();
+        let successes = resp["Successful"]["member"].as_array().unwrap();
         assert_ne!(successes[0]["MessageId"], successes[1]["MessageId"]);
     }
 }

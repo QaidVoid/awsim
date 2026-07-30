@@ -341,7 +341,7 @@ pub fn send_bulk_templated_email(
         statuses.push(json!({ "Status": "Success", "MessageId": message_id }));
     }
 
-    Ok(json!({ "Status": statuses }))
+    Ok(json!({ "Status": { "member": statuses } }))
 }
 
 /// Merge per-destination `ReplacementTemplateData` over the request's
@@ -970,7 +970,7 @@ mod tls_policy_enforcement_tests {
         )
         .unwrap();
 
-        let statuses = resp["Status"].as_array().unwrap();
+        let statuses = resp["Status"]["member"].as_array().unwrap();
         assert_eq!(statuses.len(), 2);
         assert!(statuses.iter().all(|s| s["Status"] == "Success"));
 
@@ -1013,7 +1013,7 @@ mod tls_policy_enforcement_tests {
             &ctx(),
         )
         .unwrap();
-        let statuses = resp["Status"].as_array().unwrap();
+        let statuses = resp["Status"]["member"].as_array().unwrap();
         assert_eq!(statuses[0]["Status"], "MessageRejected");
     }
 

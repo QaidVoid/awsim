@@ -1024,7 +1024,7 @@ pub fn describe_global_clusters(
         .map(|e| global_cluster_to_value(e.value()))
         .collect();
     Ok(json!({
-        "GlobalClusters": { "GlobalCluster": items },
+        "GlobalClusters": { "GlobalClusterMember": items },
         "Marker": null,
     }))
 }
@@ -1390,7 +1390,9 @@ mod cluster_tests {
             &ctx(),
         )
         .unwrap();
-        let items = resp["GlobalClusters"]["GlobalCluster"].as_array().unwrap();
+        let items = resp["GlobalClusters"]["GlobalClusterMember"]
+            .as_array()
+            .unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["Engine"], json!("aurora-postgresql"));
     }

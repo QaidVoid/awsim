@@ -114,7 +114,9 @@ fn strip_magic_keys(output: &Value) -> Value {
         ) {
             continue;
         }
-        cleaned.insert(k.clone(), v.clone());
+        let mut value = v.clone();
+        super::unwrap_member_lists(&mut value);
+        cleaned.insert(k.clone(), value);
     }
     Value::Object(cleaned)
 }

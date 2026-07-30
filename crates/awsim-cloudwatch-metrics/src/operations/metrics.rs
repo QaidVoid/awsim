@@ -270,12 +270,12 @@ pub fn list_metrics(
             json!({
                 "Namespace": ns,
                 "MetricName": name,
-                "Dimensions": dims,
+                "Dimensions": { "member": dims },
             })
         })
         .collect();
 
-    Ok(json!({ "Metrics": metrics }))
+    Ok(json!({ "Metrics": { "member": metrics } }))
 }
 
 /// GetMetricStatistics
@@ -401,7 +401,7 @@ pub fn get_metric_statistics(
 
     Ok(json!({
         "Label": metric_name,
-        "Datapoints": if values.is_empty() { vec![] } else { vec![dp] },
+        "Datapoints": { "member": if values.is_empty() { vec![] } else { vec![dp] } },
     }))
 }
 
@@ -459,13 +459,13 @@ pub fn get_metric_data(
         results.push(json!({
             "Id": id,
             "StatusCode": "Complete",
-            "Values": values,
-            "Timestamps": timestamps,
+            "Values": { "member": values },
+            "Timestamps": { "member": timestamps },
         }));
     }
 
     Ok(json!({
-        "MetricDataResults": results,
+        "MetricDataResults": { "member": results },
         "NextToken": null,
     }))
 }
@@ -758,9 +758,9 @@ mod tests {
             &ctx,
         )
         .unwrap();
-        let metrics = resp["Metrics"].as_array().unwrap();
+        let metrics = resp["Metrics"]["member"].as_array().unwrap();
         assert_eq!(metrics.len(), 1);
-        assert_eq!(metrics[0]["Dimensions"][0]["Value"], "auth");
+        assert_eq!(metrics[0]["Dimensions"]["member"][0]["Value"], "auth");
     }
 
     #[test]
@@ -791,9 +791,9 @@ mod tests {
             &ctx,
         )
         .unwrap();
-        let metrics = resp["Metrics"].as_array().unwrap();
+        let metrics = resp["Metrics"]["member"].as_array().unwrap();
         assert_eq!(metrics.len(), 1);
-        assert_eq!(metrics[0]["Dimensions"][0]["Name"], "Region");
+        assert_eq!(metrics[0]["Dimensions"]["member"][0]["Name"], "Region");
     }
 
     #[test]
@@ -828,7 +828,7 @@ mod tests {
             &ctx,
         )
         .unwrap();
-        let dps = resp["Datapoints"].as_array().unwrap();
+        let dps = resp["Datapoints"]["member"].as_array().unwrap();
         assert_eq!(dps.len(), 1);
         assert_eq!(dps[0]["SampleCount"], 1.0);
 
@@ -843,7 +843,7 @@ mod tests {
             &ctx,
         )
         .unwrap();
-        let dps = resp["Datapoints"].as_array().unwrap();
+        let dps = resp["Datapoints"]["member"].as_array().unwrap();
         assert_eq!(dps[0]["SampleCount"], 2.0);
     }
 }

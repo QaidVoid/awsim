@@ -36,7 +36,7 @@ pub fn get_health_check_status(
     }
 
     Ok(json!({
-        "HealthCheckObservations": [
+        "HealthCheckObservations": { "HealthCheckObservation": [
             {
                 "Region": "us-east-1",
                 "IPAddress": "198.51.100.1",
@@ -53,7 +53,7 @@ pub fn get_health_check_status(
                     "CheckedTime": "2024-01-01T00:00:00Z",
                 }
             }
-        ]
+        ] }
     }))
 }
 

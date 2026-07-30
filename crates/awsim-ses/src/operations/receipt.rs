@@ -116,7 +116,7 @@ pub fn describe_receipt_rule_set(
     })?;
     Ok(json!({
         "Metadata": { "Name": set.name, "CreatedTimestamp": set.created_at },
-        "Rules": set.rules.iter().map(rule_to_json).collect::<Vec<_>>(),
+        "Rules": { "member": set.rules.iter().map(rule_to_json).collect::<Vec<_>>() },
     }))
 }
 
@@ -130,7 +130,7 @@ pub fn list_receipt_rule_sets(
         .iter()
         .map(|e| json!({ "Name": e.name, "CreatedTimestamp": e.created_at }))
         .collect();
-    Ok(json!({ "RuleSets": sets }))
+    Ok(json!({ "RuleSets": { "member": sets } }))
 }
 
 pub fn set_active_receipt_rule_set(
@@ -163,7 +163,7 @@ pub fn describe_active_receipt_rule_set(
     match active.and_then(|n| state.receipt_rule_sets.get(&n).map(|s| s.clone())) {
         Some(set) => Ok(json!({
             "Metadata": { "Name": set.name, "CreatedTimestamp": set.created_at },
-            "Rules": set.rules.iter().map(rule_to_json).collect::<Vec<_>>(),
+            "Rules": { "member": set.rules.iter().map(rule_to_json).collect::<Vec<_>>() },
         })),
         None => Ok(json!({})),
     }
@@ -430,10 +430,10 @@ mod tests {
         .unwrap();
         let out =
             describe_receipt_rule_set(&state, &json!({ "RuleSetName": "rs" }), &ctx()).unwrap();
-        assert_eq!(out["Rules"][0]["Name"], "r1");
-        assert_eq!(out["Rules"][0]["Recipients"][0], "a@example.com");
+        assert_eq!(out["Rules"]["member"][0]["Name"], "r1");
+        assert_eq!(out["Rules"]["member"][0]["Recipients"][0], "a@example.com");
         assert_eq!(
-            out["Rules"][0]["Actions"][0]["SNSAction"]["TopicArn"],
+            out["Rules"]["member"][0]["Actions"][0]["SNSAction"]["TopicArn"],
             "arn:aws:sns:us-east-1:000000000000:t"
         );
     }
@@ -556,7 +556,7 @@ mod tests {
         .unwrap();
         let out =
             describe_receipt_rule_set(&state, &json!({ "RuleSetName": "rs" }), &ctx()).unwrap();
-        let names: Vec<&str> = out["Rules"]
+        let names: Vec<&str> = out["Rules"]["member"]
             .as_array()
             .unwrap()
             .iter()

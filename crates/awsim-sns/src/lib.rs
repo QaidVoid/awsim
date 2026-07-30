@@ -663,8 +663,8 @@ mod tests {
         ))
         .unwrap();
 
-        let successful = result["Successful"].as_array().unwrap();
-        let failed = result["Failed"].as_array().unwrap();
+        let successful = result["Successful"]["member"].as_array().unwrap();
+        let failed = result["Failed"]["member"].as_array().unwrap();
         assert_eq!(successful.len(), 2);
         assert_eq!(failed.len(), 0);
         assert!(successful[0]["MessageId"].as_str().is_some());

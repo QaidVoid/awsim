@@ -84,6 +84,43 @@ def renamed_output_members(model: dict) -> dict[str, list[tuple[str, str]]]:
     return found
 
 
+def unnested_lists(model: dict) -> dict[str, list[tuple[str, str]]]:
+    """Map operation -> [(member, element tag)] for XML list members.
+
+    In the XML protocols a list serializes as an outer element holding
+    one inner element per item: `<Metrics><member>..</member></Metrics>`.
+    Handlers build responses as JSON, where a bare array flattens into
+    repeated outer elements instead, which clients read as one empty
+    struct per item. Only non-flattened lists are reported; a flattened
+    list really is repeated outer elements.
+    """
+    shapes = model.get("shapes", {})
+    found: dict[str, list[tuple[str, str]]] = {}
+    for op, spec in model.get("operations", {}).items():
+        out = spec.get("output", {}).get("shape")
+        if not out or out not in shapes:
+            continue
+        pairs = []
+        for name, member in shapes[out].get("members", {}).items():
+            target = shapes.get(member.get("shape"), {})
+            if target.get("type") != "list" or target.get("flattened"):
+                continue
+            inner = target.get("member", {}).get("locationName", "member")
+            pairs.append((member.get("locationName", name), inner))
+        if pairs:
+            found[op] = pairs
+    return found
+
+
+def xml_protocol(model: dict) -> bool:
+    meta = model.get("metadata", {})
+    protocol = meta.get("protocol") or ""
+    protocols = meta.get("protocols") or []
+    return protocol in ("query", "ec2", "rest-xml") or any(
+        p in ("query", "ec2", "rest-xml") for p in protocols
+    )
+
+
 def crate_dir(service: str) -> str | None:
     name = CRATE_OVERRIDES.get(service, f"awsim-{service}")
     path = os.path.join(REPO, "crates", name, "src")
@@ -137,12 +174,9 @@ def main() -> int:
         checked += 1
         with open(versions[-1], encoding="utf-8") as fh:
             model = json.load(fh)
-        renames = renamed_output_members(model)
-        if not renames:
-            continue
-
         files = sources(src_dir)
-        for op, pairs in sorted(renames.items()):
+
+        for op, pairs in sorted(renamed_output_members(model).items()):
             for model_name, wire_name in pairs:
                 emits_model = re.compile(r'"%s"\s*:' % re.escape(model_name))
                 emits_wire = re.compile(r'"%s"\s*:' % re.escape(wire_name))
@@ -154,6 +188,23 @@ def main() -> int:
                 rel = os.path.relpath(hits[0], REPO)
                 findings[service].append(
                     f'{op}: emits "{model_name}", wire name is "{wire_name}" ({rel})'
+                )
+
+        if not xml_protocol(model):
+            continue
+        for op, pairs in sorted(unnested_lists(model).items()):
+            for outer, inner in pairs:
+                # A nested list is emitted as `"Outer": { "Inner": .. }`.
+                # A bare `"Outer": something_else` flattens on the wire.
+                nested = re.compile(r'"%s"\s*:\s*\{\s*"%s"' % (re.escape(outer), re.escape(inner)))
+                bare = re.compile(r'"%s"\s*:\s*(?!\{\s*"%s")' % (re.escape(outer), re.escape(inner)))
+                hits = [p for p, s in files if bare.search(s)]
+                if not hits or any(nested.search(s) for _, s in files):
+                    continue
+                rel = os.path.relpath(hits[0], REPO)
+                findings[service].append(
+                    f'{op}: "{outer}" is a list; each item needs its own '
+                    f'<{inner}> element ({rel})'
                 )
 
     print(f"checked {checked} services against the SDK models")

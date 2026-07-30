@@ -8,7 +8,7 @@ use crate::state::Ec2State;
 // ---------------------------------------------------------------------------
 
 pub fn describe_network_interfaces(_state: &Ec2State, _input: &Value) -> Result<Value, AwsError> {
-    Ok(json!({ "networkInterfaceSet": {} }))
+    Ok(json!({ "networkInterfaceSet": { "item": [] } }))
 }
 
 // ---------------------------------------------------------------------------
@@ -16,7 +16,7 @@ pub fn describe_network_interfaces(_state: &Ec2State, _input: &Value) -> Result<
 // ---------------------------------------------------------------------------
 
 pub fn describe_nat_gateways(_state: &Ec2State, _input: &Value) -> Result<Value, AwsError> {
-    Ok(json!({ "natGatewaySet": {} }))
+    Ok(json!({ "natGatewaySet": { "item": [] } }))
 }
 
 // ---------------------------------------------------------------------------
@@ -24,7 +24,7 @@ pub fn describe_nat_gateways(_state: &Ec2State, _input: &Value) -> Result<Value,
 // ---------------------------------------------------------------------------
 
 pub fn describe_vpc_endpoints(_state: &Ec2State, _input: &Value) -> Result<Value, AwsError> {
-    Ok(json!({ "vpcEndpointSet": {} }))
+    Ok(json!({ "vpcEndpointSet": { "item": [] } }))
 }
 
 // ---------------------------------------------------------------------------

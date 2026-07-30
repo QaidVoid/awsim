@@ -26,7 +26,7 @@ pub fn put_dashboard(
         .dashboards
         .insert(name.clone(), Dashboard { name, body });
 
-    Ok(json!({ "DashboardValidationMessages": [] }))
+    Ok(json!({ "DashboardValidationMessages": { "member": [] } }))
 }
 
 /// GetDashboard
@@ -73,7 +73,7 @@ pub fn list_dashboards(
         })
         .collect();
 
-    Ok(json!({ "DashboardEntries": entries }))
+    Ok(json!({ "DashboardEntries": { "member": entries } }))
 }
 
 /// DeleteDashboards

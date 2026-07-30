@@ -62,11 +62,11 @@ fn alarm_to_json(alarm: &MetricAlarm) -> Value {
         "StateValue": alarm.state_value,
         "StateReason": alarm.state_reason,
         "ActionsEnabled": alarm.actions_enabled,
-        "AlarmActions": alarm.alarm_actions,
-        "Dimensions": alarm.dimensions.iter().map(|d| json!({
+        "AlarmActions": { "member": alarm.alarm_actions },
+        "Dimensions": { "member": alarm.dimensions.iter().map(|d| json!({
             "Name": d.name,
             "Value": d.value,
-        })).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>() },
     });
     if let Some(ts) = &alarm.state_updated_at {
         v["StateUpdatedTimestamp"] = Value::String(ts.clone());
@@ -192,7 +192,7 @@ pub fn describe_alarms(
         .map(|entry| alarm_to_json(entry.value()))
         .collect();
 
-    Ok(json!({ "MetricAlarms": alarms }))
+    Ok(json!({ "MetricAlarms": { "member": alarms } }))
 }
 
 /// DeleteAlarms

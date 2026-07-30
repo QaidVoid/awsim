@@ -247,6 +247,32 @@ pub fn serialize_response(
     }
 }
 
+/// Drop the `member` wrapper that XML lists carry.
+///
+/// A service like CloudWatch answers JSON or CBOR to a modern SDK and
+/// XML to an older one, all from the same handler output. Handlers shape
+/// lists for XML (`{"Metrics": {"member": [..]}}`) because that nesting
+/// cannot be inferred from a bare array, so the non-XML encoders have to
+/// undo it. Leaving it in place made every CloudWatch list operation
+/// fail inside the SDK's parser.
+///
+/// Only a lone `member` key holding an array counts as a wrapper, so a
+/// service with a genuine field of that name is left alone.
+pub(crate) fn unwrap_member_lists(value: &mut Value) {
+    match value {
+        Value::Array(items) => items.iter_mut().for_each(unwrap_member_lists),
+        Value::Object(obj) => {
+            obj.values_mut().for_each(unwrap_member_lists);
+            if obj.len() == 1
+                && let Some(Value::Array(items)) = obj.get("member")
+            {
+                *value = Value::Array(items.clone());
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Serialize a successful CBOR response.
 fn serialize_cbor_response(
     output: &Value,
@@ -264,7 +290,9 @@ fn serialize_cbor_response(
     if let Ok(v) = request_id.parse() {
         headers.insert("x-amzn-requestid", v);
     }
-    let body = cbor::encode(output).unwrap_or_default();
+    let mut body_value = output.clone();
+    unwrap_member_lists(&mut body_value);
+    let body = cbor::encode(&body_value).unwrap_or_default();
     (axum::http::StatusCode::OK, headers, Bytes::from(body))
 }
 

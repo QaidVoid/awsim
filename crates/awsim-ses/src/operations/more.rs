@@ -195,7 +195,7 @@ pub fn put_email_identity_dkim_signing_attributes(
             ));
         }
     }
-    Ok(json!({ "DkimStatus": entry.dkim_status, "DkimTokens": [] }))
+    Ok(json!({ "DkimStatus": entry.dkim_status, "DkimTokens": { "member": [] } }))
 }
 
 /// Generate the three CNAME-style DKIM tokens for a domain identity and
@@ -216,7 +216,7 @@ pub fn verify_domain_dkim(
     entry.dkim_tokens = tokens.clone();
     entry.dkim_status = Some("Pending".to_string());
     entry.dkim_signing_enabled = true;
-    Ok(json!({ "DkimTokens": tokens }))
+    Ok(json!({ "DkimTokens": { "member": tokens } }))
 }
 
 /// Return the DKIM attributes for one or more identities. AWS shape:
@@ -241,7 +241,7 @@ pub fn get_identity_dkim_attributes(
                         .dkim_status
                         .as_deref()
                         .unwrap_or("NotStarted"),
-                    "DkimTokens": entry.dkim_tokens,
+                    "DkimTokens": { "member": entry.dkim_tokens },
                 }),
             );
         }
@@ -477,9 +477,14 @@ pub fn create_configuration_set(
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
-    let name = input["ConfigurationSetName"].as_str().ok_or_else(|| {
-        AwsError::bad_request("InvalidParameter", "ConfigurationSetName is required")
-    })?;
+    // SES v2 takes a flat `ConfigurationSetName`; SES v1 wraps it as
+    // `ConfigurationSet.Name`. Both reach this handler, so accept either.
+    let name = input["ConfigurationSetName"]
+        .as_str()
+        .or_else(|| input["ConfigurationSet"]["Name"].as_str())
+        .ok_or_else(|| {
+            AwsError::bad_request("InvalidParameter", "ConfigurationSetName is required")
+        })?;
     validate_aws_tags(&input["Tags"], &TagOpts::aws_default())?;
     let sending_enabled = input["SendingOptions"]["SendingEnabled"]
         .as_bool()
@@ -693,7 +698,7 @@ pub fn list_configuration_sets(
         .iter()
         .map(|e| e.key().clone())
         .collect();
-    Ok(json!({ "ConfigurationSets": names }))
+    Ok(json!({ "ConfigurationSets": { "member": names } }))
 }
 
 /// AWS SES configuration-set event-destination `MatchingEventTypes`
@@ -815,7 +820,7 @@ pub fn get_configuration_set_event_destinations(
                 .collect()
         })
         .unwrap_or_default();
-    Ok(json!({ "EventDestinations": destinations }))
+    Ok(json!({ "EventDestinations": { "member": destinations } }))
 }
 
 pub fn create_dedicated_ip_pool(
@@ -1248,7 +1253,7 @@ pub fn list_custom_verification_email_templates(
             })
         })
         .collect();
-    Ok(json!({ "CustomVerificationEmailTemplates": templates }))
+    Ok(json!({ "CustomVerificationEmailTemplates": { "member": templates } }))
 }
 
 pub fn update_email_template(
@@ -1600,7 +1605,7 @@ mod dkim_verification_state_machine_tests {
         let state = SesState::default();
         create_email_identity(&state, &json!({ "EmailIdentity": "example.com" }), &ctx()).unwrap();
         let resp = verify_domain_dkim(&state, &json!({ "Domain": "example.com" }), &ctx()).unwrap();
-        let tokens = resp["DkimTokens"].as_array().unwrap();
+        let tokens = resp["DkimTokens"]["member"].as_array().unwrap();
         assert_eq!(tokens.len(), 3);
         assert!(tokens.iter().all(|t| t.as_str().unwrap().len() == 32));
         let entry = state.identities.get("example.com").unwrap();
@@ -1678,7 +1683,7 @@ mod dkim_verification_state_machine_tests {
         let row = &attrs["example.com"];
         assert_eq!(row["DkimEnabled"], true);
         assert_eq!(row["DkimVerificationStatus"], "Pending");
-        assert_eq!(row["DkimTokens"].as_array().unwrap().len(), 3);
+        assert_eq!(row["DkimTokens"]["member"].as_array().unwrap().len(), 3);
     }
 
     #[test]
@@ -1995,7 +2000,7 @@ mod event_destination_tests {
             &ctx(),
         )
         .unwrap();
-        let d = &out["EventDestinations"][0];
+        let d = &out["EventDestinations"]["member"][0];
         assert_eq!(d["Name"], "d1");
         assert_eq!(
             d["SnsDestination"]["TopicArn"],
@@ -2047,7 +2052,7 @@ mod event_destination_tests {
             &ctx(),
         )
         .unwrap();
-        let dests = out["EventDestinations"].as_array().unwrap();
+        let dests = out["EventDestinations"]["member"].as_array().unwrap();
         assert_eq!(dests.len(), 2);
         let fh = dests.iter().find(|d| d["Name"] == "fh").unwrap();
         assert_eq!(

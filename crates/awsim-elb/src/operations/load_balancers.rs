@@ -22,7 +22,7 @@ pub fn lb_to_value(lb: &LoadBalancer) -> Value {
         "State": { "Code": lb.state },
         "Type": lb.lb_type,
         "AvailabilityZones": [],
-        "SecurityGroups": lb.security_groups,
+        "SecurityGroups": { "member": lb.security_groups },
         "IpAddressType": "ipv4",
     })
 }
