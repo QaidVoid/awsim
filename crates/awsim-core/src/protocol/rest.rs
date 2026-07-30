@@ -175,16 +175,37 @@ fn match_route<'a>(
     query_string: &str,
     routes: &'a [RouteDefinition],
 ) -> Result<RouteMatch<'a>, AwsError> {
-    // Strip a trailing slash ONLY for bucket-level operations (paths like `/bucket/`).
-    // Don't strip for object keys like `/bucket/folder/`. The trailing slash is
-    // significant (it marks S3 "folder" objects).
+    match match_route_exact(method, path, query_string, routes) {
+        Ok(m) => Ok(m),
+        // A trailing slash is only meaningful to S3, where it marks a
+        // folder object and is absorbed by a greedy `{Key+}` route on
+        // the first pass. Everywhere else the models are inconsistent
+        // about it: Route53 spells ChangeResourceRecordSets `/rrset/`
+        // and ListResourceRecordSets `/rrset`, and an SDK sends exactly
+        // what the model says. Retrying without it makes those reachable
+        // without registering each path twice.
+        Err(e) => match path.strip_suffix('/').filter(|p| !p.is_empty()) {
+            Some(trimmed) => {
+                match_route_exact(method, trimmed, query_string, routes).map_err(|_| e)
+            }
+            None => Err(e),
+        },
+    }
+}
+
+fn match_route_exact<'a>(
+    method: &str,
+    path: &str,
+    query_string: &str,
+    routes: &'a [RouteDefinition],
+) -> Result<RouteMatch<'a>, AwsError> {
+    // `/bucket/` and `/bucket` name the same bucket, so a single-segment
+    // path loses its trailing slash before matching.
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     let path = if segments.len() <= 1 {
-        // Bucket-level: `/bucket/` -> `/bucket`
         let stripped = path.strip_suffix('/').unwrap_or(path);
         if stripped.is_empty() { "/" } else { stripped }
     } else {
-        // Object-level: preserve trailing slash for folder markers
         path
     };
 

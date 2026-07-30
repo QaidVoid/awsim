@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""Compare AWSim's response field names against the AWS SDK models.
+"""Compare AWSim's wire surface against the AWS SDK models.
 
-Every service model names its members twice: the Rust-facing name a
-handler is likely to use, and the `locationName` that actually goes on
-the wire. Where the two differ, a handler that emits the model name
-produces a response the SDK silently parses as empty. That failure is
-invisible from inside the codebase, which is why it kept shipping.
+Three checks, all static, all read-only:
 
-This script does no network calls. It reads the botocore models bundled
-with the AWS CLI, collects every output member whose wire name differs
-from its model name, then greps the AWSim sources for handlers emitting
-the model name instead. Report only, no changes.
+1. Response members emitted under the SDK's model name where the wire
+   name differs, which an SDK parses as absent.
+2. XML list members emitted as a bare array where the protocol needs one
+   element per item.
+3. REST routes whose registered path does not match the model's
+   `requestUri`, which makes the operation unreachable.
+
+None of these are visible from inside the codebase: the handler and its
+tests agree with each other, and both disagree with every real client.
 
 Usage:
     python3 xtask/wire_shape_check.py [--models DIR] [--service NAME]
@@ -121,6 +122,82 @@ def xml_protocol(model: dict) -> bool:
     )
 
 
+def rest_protocol(model: dict) -> bool:
+    meta = model.get("metadata", {})
+    protocol = meta.get("protocol") or ""
+    protocols = meta.get("protocols") or []
+    return protocol in ("rest-json", "rest-xml") or any(
+        p in ("rest-json", "rest-xml") for p in protocols
+    )
+
+
+# Brace-matching the struct body does not work: a path pattern contains
+# braces of its own (`/schedules/{Name}`), so the first `}` closes the
+# match early. Read the two fields directly instead.
+ROUTE_RE = re.compile(
+    r'RouteDefinition\s*\{\s*method:\s*"(?P<method>[^"]*)"\s*,\s*'
+    r'path_pattern:\s*"(?P<path>[^"]*)"',
+    re.S,
+)
+
+
+def registered_routes(files: list[tuple[str, str]]) -> set[tuple[str, str]]:
+    """Collect (method, path) for every RouteDefinition in a crate."""
+    routes = set()
+    for _, text in files:
+        for m in ROUTE_RE.finditer(text):
+            routes.add((m.group("method").upper(), m.group("path")))
+    return routes
+
+
+def normalize_path(path: str) -> str:
+    """Reduce a path to its shape, so parameter names do not matter.
+
+    A trailing slash is dropped because the router retries without one,
+    which is what makes Route53's `/rrset/` and Backup's `/backup/plans/`
+    reachable from the bare registration.
+    """
+    path = path.split("?", 1)[0]
+    path = re.sub(r"\{[^}]*\+\}", "{+}", path)
+    path = re.sub(r"\{[^}]*\}", "{}", path)
+    return path.rstrip("/") or "/"
+
+
+def route_matches(wanted: str, registered: str) -> bool:
+    """Whether a registered pattern can serve the model's path."""
+    if wanted == registered:
+        return True
+    # A greedy tail absorbs everything after it, so `/{}/{+}` serves any
+    # deeper path rooted at the same prefix.
+    if "{+}" not in registered:
+        return False
+    prefix = registered.split("{+}")[0]
+    return wanted.startswith(prefix)
+
+
+def route_mismatches(model: dict, files: list[tuple[str, str]]) -> list[str]:
+    """Implemented operations whose model path no route can serve."""
+    routes = {(m, normalize_path(p)) for m, p in registered_routes(files)}
+    if not routes:
+        return []
+    findings = []
+    for op, spec in sorted(model.get("operations", {}).items()):
+        http = spec.get("http") or {}
+        uri = http.get("requestUri")
+        method = (http.get("method") or "").upper()
+        if not uri or not method:
+            continue
+        # Only operations the crate actually dispatches are in scope; an
+        # unimplemented one has no route by design.
+        if not any(re.search(r'"%s"' % re.escape(op), text) for _, text in files):
+            continue
+        wanted = normalize_path(uri)
+        if any(m == method and route_matches(wanted, p) for m, p in routes):
+            continue
+        findings.append(f'{op}: no route serves {method} "{wanted}"')
+    return findings
+
+
 def crate_dir(service: str) -> str | None:
     name = CRATE_OVERRIDES.get(service, f"awsim-{service}")
     path = os.path.join(REPO, "crates", name, "src")
@@ -190,6 +267,10 @@ def main() -> int:
                     f'{op}: emits "{model_name}", wire name is "{wire_name}" ({rel})'
                 )
 
+        if rest_protocol(model):
+            for line in route_mismatches(model, files):
+                findings[service].append(line)
+
         if not xml_protocol(model):
             continue
         for op, pairs in sorted(unnested_lists(model).items()):
@@ -209,7 +290,7 @@ def main() -> int:
 
     print(f"checked {checked} services against the SDK models")
     if not findings:
-        print("no output members emitted under a model name that differs on the wire")
+        print("no wire-shape or route mismatches")
         return 0
 
     for service in sorted(findings):
@@ -217,7 +298,7 @@ def main() -> int:
         for line in sorted(set(findings[service])):
             print(f"  {line}")
     total = sum(len(set(v)) for v in findings.values())
-    print(f"\n{total} suspect field(s) across {len(findings)} service(s)")
+    print(f"\n{total} finding(s) across {len(findings)} service(s)")
     return 0
 
 
