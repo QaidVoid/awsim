@@ -106,11 +106,11 @@
 				.catch(() => {
 					/* leave defaults */
 				});
-			// Pick up the operator's IAM credentials so subsequent
-			// signed requests carry their access key (and therefore
-			// surface the right principal to policy evaluation).
-			void credentials.refresh();
 		}
+		// The operator's IAM credentials are fetched by `auth.refresh()`
+		// below, once whoami reports a session to fetch them for. Asking
+		// for them up front put a guaranteed 401 in the console on every
+		// page load of a loginless run, which is the default.
 
 		// Probe whoami to populate the session. The response always
 		// 200s with { auth_required, setup_required, principal } so a
