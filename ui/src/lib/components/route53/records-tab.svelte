@@ -2,6 +2,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { DataTable, EmptyState } from '$lib/components/service';
+	import { ConfirmDialog } from '$lib/components/ui/confirm-dialog';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
@@ -53,11 +54,19 @@
 		return !(isApex(r.name) && (r.type === 'NS' || r.type === 'SOA'));
 	}
 
-	async function handleDelete(r: ResourceRecordSet) {
+	let pendingDelete = $state<ResourceRecordSet | null>(null);
+	let deleteBusy = $state(false);
+
+	function askDelete(r: ResourceRecordSet) {
 		if (!deletable(r)) {
 			toast.error('Apex NS/SOA records cannot be deleted.');
 			return;
 		}
+		pendingDelete = r;
+	}
+
+	async function handleDelete(r: ResourceRecordSet) {
+		deleteBusy = true;
 		try {
 			await changeResourceRecordSets(hostedZoneId, [
 				{
@@ -69,9 +78,12 @@
 				},
 			]);
 			toast.success('Record deleted.');
+			pendingDelete = null;
 			await load();
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to delete record');
+		} finally {
+			deleteBusy = false;
 		}
 	}
 </script>
@@ -145,10 +157,21 @@
 		size="xs"
 		variant="ghost"
 		class="text-destructive hover:text-destructive"
-		onclick={() => handleDelete(r)}
+		onclick={() => askDelete(r)}
 		disabled={!deletable(r)}
 		aria-label="Delete record"
 	>
 		<Trash2Icon />
 	</Button>
 {/snippet}
+
+<ConfirmDialog
+	open={pendingDelete !== null}
+	title="Delete record?"
+	description={pendingDelete
+		? `Permanently delete the ${pendingDelete.type} record for ${pendingDelete.name}. This cannot be undone.`
+		: ''}
+	busy={deleteBusy}
+	onConfirm={() => pendingDelete && handleDelete(pendingDelete)}
+	onClose={() => (pendingDelete = null)}
+/>
