@@ -2,8 +2,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct SentEmail {
     pub message_id: String,
@@ -23,7 +24,7 @@ pub struct SentEmail {
     pub tags: Vec<(String, String)>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct EmailIdentity {
     pub identity: String,
@@ -65,7 +66,7 @@ pub struct EmailIdentity {
     pub delivery_headers_included: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmailTemplate {
     pub name: String,
     pub subject: Option<String>,
@@ -74,7 +75,7 @@ pub struct EmailTemplate {
     pub created_at: u64,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ConfigurationSet {
     pub name: String,
     pub tags: HashMap<String, String>,
@@ -103,7 +104,7 @@ pub struct ConfigurationSet {
     pub tracking_https_policy: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventDestination {
     pub name: String,
     pub enabled: bool,
@@ -120,14 +121,14 @@ pub struct EventDestination {
     pub cloudwatch_dimensions: Vec<serde_json::Value>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DedicatedIpPool {
     pub name: String,
     pub scaling_mode: String,
     pub ips: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContactList {
     pub name: String,
     pub description: Option<String>,
@@ -135,7 +136,7 @@ pub struct ContactList {
     pub created_at: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Contact {
     pub email: String,
     pub list_name: String,
@@ -149,7 +150,7 @@ pub struct Contact {
 /// members (S3Action, SNSAction, LambdaAction, StopAction,
 /// AddHeaderAction, BounceAction, ...) stored verbatim so we don't have
 /// to model every member; synthetic delivery walks them in order.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReceiptRule {
     pub name: String,
     pub enabled: bool,
@@ -159,7 +160,7 @@ pub struct ReceiptRule {
     pub actions: Vec<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ReceiptRuleSet {
     pub name: String,
     pub created_at: u64,
@@ -168,7 +169,7 @@ pub struct ReceiptRuleSet {
 
 /// An inbound IP filter. The classic API is the only one that exposes
 /// these; SES v2 has no equivalent.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReceiptFilter {
     pub name: String,
     /// `Allow` or `Block`.
@@ -176,14 +177,14 @@ pub struct ReceiptFilter {
     pub cidr: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SuppressedDestination {
     pub email: String,
     pub reason: String,
     pub last_update: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CustomVerificationTemplate {
     pub name: String,
     pub from: String,
@@ -193,7 +194,11 @@ pub struct CustomVerificationTemplate {
     pub failure_url: String,
 }
 
-#[derive(Debug, Default)]
+/// `#[serde(default)]` so a snapshot written before a field existed
+/// still loads: the missing map comes back empty rather than failing the
+/// whole restore.
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SesState {
     pub identities: DashMap<String, EmailIdentity>,
     pub templates: DashMap<String, EmailTemplate>,
@@ -225,6 +230,11 @@ pub struct SesState {
     /// Outbound email persistence. Populated by `SesService` on the
     /// first `get_state()` call so operations can write to it without
     /// holding a service handle.
+    ///
+    /// Left out of snapshots: it is a live handle, not data, and the
+    /// emails it holds already persist in their own file. A restore
+    /// re-attaches it on the next request.
+    #[serde(skip)]
     pub sqlite: OnceLock<Arc<crate::SqliteStore>>,
 }
 

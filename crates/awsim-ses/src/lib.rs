@@ -904,6 +904,22 @@ impl ServiceHandler for SesService {
             _ => Err(AwsError::unknown_operation(operation)),
         }
     }
+
+    /// Snapshot every account/region's SES configuration.
+    ///
+    /// Sent emails are deliberately absent: they live in their own
+    /// SQLite file, which already survives a restart on its own. What
+    /// this carries is the configuration a caller set up and would
+    /// otherwise have to rebuild by hand: verified identities,
+    /// templates, configuration sets, receipt rules and filters, and the
+    /// account-level switches.
+    fn snapshot(&self) -> Option<Vec<u8>> {
+        awsim_core::snapshot_store(&self.store)
+    }
+
+    fn restore(&self, data: &[u8]) -> Result<(), String> {
+        awsim_core::restore_store(&self.store, data)
+    }
 }
 
 struct ParsedSesArn {

@@ -19,7 +19,7 @@ awsim has two distinct persistence layers:
 1. **JSON snapshots** for handler state (table schemas, IAM users, queue metadata, etc.) under `{data_dir}/snapshots/`.
 2. **Per-service SQLite databases** for high-volume row data (DDB items, log events, metrics, kinesis records, SES outbox) — sit alongside the snapshots, not replaced by them.
 
-Most services write and restore JSON snapshots on graceful shutdown / startup. As of the current build, 52 of 61 registered services do.
+Most services write and restore JSON snapshots on graceful shutdown / startup. As of the current build, 53 of 61 registered services do.
 
 Those with behaviour worth calling out:
 
@@ -31,10 +31,11 @@ Those with behaviour worth calling out:
 | EventBridge | `events` | Buses, rules, targets, archives and connections. The recent-events ring is excluded as debugging state |
 | API Gateway | `apigateway` | The authorizer decision cache is excluded, so a stale allow/deny cannot survive a restart |
 | CloudWatch Logs | `logs` | Group and stream metadata only. Events live in SQLite |
+| SES | `ses` | Identities, templates, configuration sets, receipt rules and filters. Sent mail lives in SQLite |
 
 The rest (SQS, S3, IAM, Lambda, ECR, SNS, Secrets Manager, ECS, EC2, EKS, CloudFormation, ELB, CloudFront, CloudTrail, Glue, Organizations, SSM, Batch, DataSync, SSO Admin, ACM, WAF, Scheduler, RDS, Cognito, and others) round-trip their handler state without caveats.
 
-Still not covered: `bedrock`, `bedrock-runtime`, `comprehend`, `kendra`, `execute-api` (API Gateway v2), and `sts`. Kinesis, CloudWatch Metrics and SES keep their row data in SQLite, so the data survives even though their handler metadata is not snapshotted.
+Still not covered: `bedrock`, `bedrock-runtime`, `comprehend`, `kendra`, `execute-api` (API Gateway v2), and `sts`. Kinesis and CloudWatch Metrics keep their row data in SQLite, so the data survives even though their handler metadata is not snapshotted.
 
 The following services persist their primary row data into a SQLite database under `{data_dir}/`:
 
