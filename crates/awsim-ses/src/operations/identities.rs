@@ -51,6 +51,13 @@ pub fn create_email_identity(
         mail_from_domain: None,
         mail_from_behavior_on_mx_failure: None,
         configuration_set_name: None,
+        bounce_topic: None,
+        complaint_topic: None,
+        delivery_topic: None,
+        forwarding_enabled: true,
+        bounce_headers_included: false,
+        complaint_headers_included: false,
+        delivery_headers_included: false,
     };
 
     info!(identity = %identity, "SES: created identity");

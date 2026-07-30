@@ -704,6 +704,11 @@ pub fn list_configuration_sets(
 /// AWS SES configuration-set event-destination `MatchingEventTypes`
 /// enum. Unknown values are rejected at create time so a misspelled
 /// type fails loudly instead of silently swallowing every event.
+///
+/// The two APIs spell the same values differently: v2 uses
+/// `RENDERING_FAILURE`, the classic API uses `renderingFailure`. They
+/// are compared with underscores stripped and case folded, so either
+/// spelling is accepted.
 const VALID_EVENT_TYPES: &[&str] = &[
     "SEND",
     "REJECT",
@@ -717,14 +722,27 @@ const VALID_EVENT_TYPES: &[&str] = &[
     "SUBSCRIPTION",
 ];
 
+fn is_valid_event_type(candidate: &str) -> bool {
+    let normalize = |s: &str| s.replace('_', "").to_ascii_uppercase();
+    let candidate = normalize(candidate);
+    VALID_EVENT_TYPES
+        .iter()
+        .any(|valid| normalize(valid) == candidate)
+}
+
 pub fn create_configuration_set_event_destination(
     state: &SesState,
     input: &Value,
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let cs_name = input["ConfigurationSetName"].as_str().unwrap_or("");
-    let dest_name = input["EventDestinationName"].as_str().unwrap_or("default");
     let event_dest = &input["EventDestination"];
+    // v2 names the destination alongside the body; the classic API puts
+    // it inside `EventDestination.Name`.
+    let dest_name = input["EventDestinationName"]
+        .as_str()
+        .or_else(|| event_dest["Name"].as_str())
+        .unwrap_or("default");
     let event_types: Vec<String> = event_dest["MatchingEventTypes"]
         .as_array()
         .map(|a| {
@@ -734,7 +752,7 @@ pub fn create_configuration_set_event_destination(
         })
         .unwrap_or_default();
     for t in &event_types {
-        if !VALID_EVENT_TYPES.contains(&t.as_str()) {
+        if !is_valid_event_type(t) {
             return Err(AwsError::bad_request(
                 "BadRequestException",
                 format!("Invalid event type: {t}"),
@@ -745,12 +763,16 @@ pub fn create_configuration_set_event_destination(
     // Parse the target sub-object. AWS allows exactly one of these per
     // event destination; we store whichever is present so the send path
     // can fan out to it.
+    // The classic API spells these `SNSDestination.TopicARN` and
+    // `DeliveryStreamARN`, so accept both casings.
     let sns_topic_arn = event_dest["SnsDestination"]["TopicArn"]
         .as_str()
+        .or_else(|| event_dest["SNSDestination"]["TopicARN"].as_str())
         .map(String::from);
     let firehose_delivery_stream_arn =
         event_dest["KinesisFirehoseDestination"]["DeliveryStreamArn"]
             .as_str()
+            .or_else(|| event_dest["KinesisFirehoseDestination"]["DeliveryStreamARN"].as_str())
             .map(String::from);
     let cloudwatch_dimensions = event_dest["CloudWatchDestination"]["DimensionConfigurations"]
         .as_array()
@@ -763,14 +785,25 @@ pub fn create_configuration_set_event_destination(
             format!("Configuration set does not exist: {cs_name}"),
         )
     })?;
-    cs.event_destinations.push(EventDestination {
+    let destination = EventDestination {
         name: dest_name.to_string(),
         enabled: event_dest["Enabled"].as_bool().unwrap_or(true),
         matching_event_types: event_types,
         sns_topic_arn,
         firehose_delivery_stream_arn,
         cloudwatch_dimensions,
-    });
+    };
+    // A repeat of the same name replaces rather than duplicating, which
+    // is what makes UpdateConfigurationSetEventDestination the same code
+    // path as the create.
+    match cs
+        .event_destinations
+        .iter()
+        .position(|d| d.name == destination.name)
+    {
+        Some(pos) => cs.event_destinations[pos] = destination,
+        None => cs.event_destinations.push(destination),
+    }
     Ok(json!({}))
 }
 
@@ -1202,6 +1235,38 @@ pub fn create_custom_verification_email_template(
     state
         .custom_verification_templates
         .insert(name.to_string(), cv);
+    Ok(json!({}))
+}
+
+/// UpdateCustomVerificationEmailTemplate. Every field but the name is
+/// optional, so an omitted one keeps whatever is already stored.
+pub fn update_custom_verification_email_template(
+    state: &SesState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name = input["TemplateName"]
+        .as_str()
+        .ok_or_else(|| AwsError::bad_request("InvalidParameter", "TemplateName is required"))?;
+    let mut cv = state
+        .custom_verification_templates
+        .get_mut(name)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "CustomVerificationEmailTemplateDoesNotExist",
+                format!("Custom verification email template does not exist: {name}"),
+            )
+        })?;
+    let overwrite = |field: &mut String, key: &str| {
+        if let Some(value) = input[key].as_str() {
+            *field = value.to_string();
+        }
+    };
+    overwrite(&mut cv.from, "FromEmailAddress");
+    overwrite(&mut cv.subject, "TemplateSubject");
+    overwrite(&mut cv.content, "TemplateContent");
+    overwrite(&mut cv.success_url, "SuccessRedirectionURL");
+    overwrite(&mut cv.failure_url, "FailureRedirectionURL");
     Ok(json!({}))
 }
 

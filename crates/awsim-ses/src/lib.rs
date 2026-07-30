@@ -681,8 +681,14 @@ impl ServiceHandler for SesService {
                 operations::more::delete_configuration_set(&state, &input, ctx)
             }
             "GetConfigurationSet" => operations::more::get_configuration_set(&state, &input, ctx),
-            "ListConfigurationSets" => {
+            // The two SES APIs disagree on this one response shape, so
+            // pick by the path the request arrived on: v2 routes are all
+            // under `/v2/`, the classic API is `POST /`.
+            "ListConfigurationSets" if ctx.uri.starts_with("/v2/") => {
                 operations::more::list_configuration_sets(&state, &input, ctx)
+            }
+            "ListConfigurationSets" => {
+                operations::classic::list_configuration_sets(&state, &input, ctx)
             }
             "PutConfigurationSetReputationOptions" => {
                 operations::more::put_configuration_set_reputation_options(&state, &input, ctx)
@@ -757,6 +763,114 @@ impl ServiceHandler for SesService {
                 operations::more::put_deliverability_dashboard_option(&state, &input, ctx)
             }
             "GetBlacklistReports" => operations::more::get_blacklist_reports(&state, &input, ctx),
+
+            // SES classic (v1). Same account state as the v2 handlers
+            // above, different wire shape. `aws ses ...` speaks this API.
+            "VerifyEmailIdentity" | "VerifyEmailAddress" => {
+                operations::classic::verify_email_identity(&state, &input, ctx)
+            }
+            "VerifyDomainIdentity" => {
+                operations::classic::verify_domain_identity(&state, &input, ctx)
+            }
+            "ListIdentities" => operations::classic::list_identities(&state, &input, ctx),
+            "ListVerifiedEmailAddresses" => {
+                operations::classic::list_verified_email_addresses(&state, &input, ctx)
+            }
+            "DeleteIdentity" | "DeleteVerifiedEmailAddress" => {
+                operations::classic::delete_identity(&state, &input, ctx)
+            }
+            "GetIdentityVerificationAttributes" => {
+                operations::classic::get_identity_verification_attributes(&state, &input, ctx)
+            }
+            "SetIdentityNotificationTopic" => {
+                operations::classic::set_identity_notification_topic(&state, &input, ctx)
+            }
+            "SetIdentityFeedbackForwardingEnabled" => {
+                operations::classic::set_identity_feedback_forwarding_enabled(&state, &input, ctx)
+            }
+            "SetIdentityHeadersInNotificationsEnabled" => {
+                operations::classic::set_identity_headers_in_notifications_enabled(
+                    &state, &input, ctx,
+                )
+            }
+            "GetIdentityNotificationAttributes" => {
+                operations::classic::get_identity_notification_attributes(&state, &input, ctx)
+            }
+            "SetIdentityMailFromDomain" => {
+                operations::classic::set_identity_mail_from_domain(&state, &input, ctx)
+            }
+            "GetIdentityMailFromDomainAttributes" => {
+                operations::classic::get_identity_mail_from_domain_attributes(&state, &input, ctx)
+            }
+            "PutIdentityPolicy" => operations::classic::put_identity_policy(&state, &input, ctx),
+            "DeleteIdentityPolicy" => {
+                operations::classic::delete_identity_policy(&state, &input, ctx)
+            }
+            "ListIdentityPolicies" => {
+                operations::classic::list_identity_policies(&state, &input, ctx)
+            }
+            "GetIdentityPolicies" => {
+                operations::classic::get_identity_policies(&state, &input, ctx)
+            }
+            "CreateTemplate" => operations::classic::create_template(&state, &input, ctx),
+            "UpdateTemplate" => operations::classic::update_template(&state, &input, ctx),
+            "GetTemplate" => operations::classic::get_template(&state, &input, ctx),
+            "DeleteTemplate" => operations::classic::delete_template(&state, &input, ctx),
+            "ListTemplates" => operations::classic::list_templates(&state, &input, ctx),
+            "TestRenderTemplate" => operations::classic::test_render_template(&state, &input, ctx),
+            "GetSendQuota" => operations::classic::get_send_quota(&state, &input, ctx),
+            "GetSendStatistics" => operations::classic::get_send_statistics(&state, &input, ctx),
+            "GetAccountSendingEnabled" => {
+                operations::classic::get_account_sending_enabled(&state, &input, ctx)
+            }
+            "UpdateAccountSendingEnabled" => {
+                operations::classic::update_account_sending_enabled(&state, &input, ctx)
+            }
+            // Create, Update, and v2's Put are one write.
+            "CreateConfigurationSetTrackingOptions"
+            | "UpdateConfigurationSetTrackingOptions"
+            | "PutConfigurationSetTrackingOptions" => {
+                operations::classic::put_configuration_set_tracking_options(&state, &input, ctx)
+            }
+            "DeleteConfigurationSetTrackingOptions" => {
+                operations::classic::delete_configuration_set_tracking_options(&state, &input, ctx)
+            }
+            "TestRenderEmailTemplate" => {
+                operations::classic::test_render_template(&state, &input, ctx)
+            }
+            "CloneReceiptRuleSet" => {
+                operations::classic::clone_receipt_rule_set(&state, &input, ctx)
+            }
+            "SetReceiptRulePosition" => {
+                operations::classic::set_receipt_rule_position(&state, &input, ctx)
+            }
+            // Create and update share a code path: a repeat of the same
+            // destination name replaces rather than duplicating.
+            "UpdateConfigurationSetEventDestination" => {
+                operations::more::create_configuration_set_event_destination(&state, &input, ctx)
+            }
+            "UpdateCustomVerificationEmailTemplate" => {
+                operations::more::update_custom_verification_email_template(&state, &input, ctx)
+            }
+            "CreateReceiptFilter" => {
+                operations::classic::create_receipt_filter(&state, &input, ctx)
+            }
+            "DeleteReceiptFilter" => {
+                operations::classic::delete_receipt_filter(&state, &input, ctx)
+            }
+            "ListReceiptFilters" => operations::classic::list_receipt_filters(&state, &input, ctx),
+            "DescribeConfigurationSet" => {
+                operations::classic::describe_configuration_set(&state, &input, ctx)
+            }
+            "UpdateConfigurationSetSendingEnabled" => {
+                operations::classic::update_configuration_set_sending_enabled(&state, &input, ctx)
+            }
+            "UpdateConfigurationSetReputationMetricsEnabled" => {
+                operations::classic::update_configuration_set_reputation_metrics_enabled(
+                    &state, &input, ctx,
+                )
+            }
+
             "CreateReceiptRuleSet" => {
                 operations::receipt::create_receipt_rule_set(&state, &input, ctx)
             }

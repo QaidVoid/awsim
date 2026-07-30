@@ -51,6 +51,18 @@ pub struct EmailIdentity {
     /// Default configuration set attached to this identity. Used as a
     /// fallback when a SendEmail call doesn't name one explicitly.
     pub configuration_set_name: Option<String>,
+    /// SNS topics the classic API attaches per notification type. Only
+    /// the v1 `SetIdentityNotificationTopic` writes these.
+    pub bounce_topic: Option<String>,
+    pub complaint_topic: Option<String>,
+    pub delivery_topic: Option<String>,
+    /// Whether bounces and complaints are also emailed to the identity.
+    /// AWS defaults this on, so `true` is the correct initial value.
+    pub forwarding_enabled: bool,
+    /// Per-notification-type "include original headers" toggles.
+    pub bounce_headers_included: bool,
+    pub complaint_headers_included: bool,
+    pub delivery_headers_included: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -85,6 +97,10 @@ pub struct ConfigurationSet {
     /// `GuardianOptions.OptimizedSharedDelivery`, each `ENABLED`/`DISABLED`.
     pub vdm_dashboard_engagement_metrics: Option<String>,
     pub vdm_guardian_optimized_shared_delivery: Option<String>,
+    /// Open/click tracking. `TrackingOptions.CustomRedirectDomain` in
+    /// both APIs, plus v2's `HttpsPolicy`.
+    pub custom_redirect_domain: Option<String>,
+    pub tracking_https_policy: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -150,6 +166,16 @@ pub struct ReceiptRuleSet {
     pub rules: Vec<ReceiptRule>,
 }
 
+/// An inbound IP filter. The classic API is the only one that exposes
+/// these; SES v2 has no equivalent.
+#[derive(Debug, Clone)]
+pub struct ReceiptFilter {
+    pub name: String,
+    /// `Allow` or `Block`.
+    pub policy: String,
+    pub cidr: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct SuppressedDestination {
     pub email: String,
@@ -184,6 +210,11 @@ pub struct SesState {
     /// rest of this state.
     pub receipt_rule_sets: DashMap<String, ReceiptRuleSet>,
     pub active_receipt_rule_set: Mutex<Option<String>>,
+    /// Inbound IP filters, classic API only.
+    pub receipt_filters: DashMap<String, ReceiptFilter>,
+    /// Account-level sending switch. `None` means never set, which AWS
+    /// reports as enabled, so the default of an unset mutex is correct.
+    pub account_sending_enabled: Mutex<Option<bool>>,
     /// Account-level VDM attributes: stored verbatim and returned by
     /// `GetAccount`. AWS shape:
     /// `{ VdmEnabled: ENABLED|DISABLED, DashboardAttributes?: {...}, GuardianAttributes?: {...} }`.

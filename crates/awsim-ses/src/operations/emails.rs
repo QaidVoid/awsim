@@ -119,7 +119,7 @@ fn check_topic_subscription(
 /// Substitute `{{key}}` placeholders in `text` with stringified values
 /// from `data`. Unknown keys collapse to an empty string, matching SES's
 /// behavior when TemplateData omits a referenced variable.
-fn render_template(text: &str, data: &Value) -> String {
+pub(crate) fn render_template(text: &str, data: &Value) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(start) = rest.find("{{") {
@@ -672,8 +672,11 @@ pub fn send_email(
     input: &Value,
     ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
+    // The classic API names the sender `Source` and v2 names it
+    // `FromEmailAddress`. Both reach this handler.
     let from = input["FromEmailAddress"]
         .as_str()
+        .or_else(|| input["Source"].as_str())
         .ok_or_else(|| AwsError::bad_request("InvalidParameter", "FromEmailAddress is required"))?
         .to_string();
 
@@ -781,7 +784,17 @@ pub fn send_email(
     // expands `{{var}}` placeholders within each part. AWS SES is
     // Handlebars-compatible; we cover the common substitution case.
     let content = &input["Content"];
-    let (subject, body_text, body_html, raw) = if !content["Simple"].is_null() {
+    let (subject, body_text, body_html, raw) = if content.is_null() && !input["Message"].is_null() {
+        // The classic API carries the body as a flat `Message` rather
+        // than v2's `Content.Simple` union member.
+        let message = &input["Message"];
+        (
+            message["Subject"]["Data"].as_str().map(String::from),
+            message["Body"]["Text"]["Data"].as_str().map(String::from),
+            message["Body"]["Html"]["Data"].as_str().map(String::from),
+            None,
+        )
+    } else if !content["Simple"].is_null() {
         let simple = &content["Simple"];
         let subject = simple["Subject"]["Data"].as_str().map(String::from);
         let body_text = simple["Body"]["Text"]["Data"].as_str().map(String::from);
@@ -827,7 +840,8 @@ pub fn send_email(
 
     let message_id = Uuid::new_v4().to_string();
 
-    let tags = parse_email_tags(input.get("EmailTags"));
+    // v2 calls them EmailTags; the classic API calls them Tags.
+    let tags = parse_email_tags(input.get("EmailTags").or_else(|| input.get("Tags")));
 
     let email = SentEmail {
         message_id: message_id.clone(),
