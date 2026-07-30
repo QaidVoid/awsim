@@ -238,6 +238,12 @@ impl ServiceHandler for LambdaService {
             },
             RouteDefinition {
                 method: "POST",
+                path_pattern: "/2014-11-13/functions/{FunctionName}/invoke-async",
+                operation: "InvokeAsync",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "POST",
                 path_pattern: "/2015-03-31/functions/{FunctionName}/invocations",
                 operation: "Invoke",
                 required_query_param: None,
@@ -266,6 +272,12 @@ impl ServiceHandler for LambdaService {
                 method: "GET",
                 path_pattern: "/2015-03-31/functions/{FunctionName}/aliases",
                 operation: "ListAliases",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/2015-03-31/functions/{FunctionName}/aliases/{Name}",
+                operation: "UpdateAlias",
                 required_query_param: None,
             },
             RouteDefinition {
@@ -313,6 +325,12 @@ impl ServiceHandler for LambdaService {
             },
             // Layers
             RouteDefinition {
+                method: "GET",
+                path_pattern: "/2018-10-31/layers/{LayerName}/versions/{VersionNumber}",
+                operation: "GetLayerVersion",
+                required_query_param: None,
+            },
+            RouteDefinition {
                 method: "POST",
                 path_pattern: "/2018-10-31/layers/{LayerName}/versions",
                 operation: "PublishLayerVersion",
@@ -341,6 +359,12 @@ impl ServiceHandler for LambdaService {
                 method: "POST",
                 path_pattern: "/2021-10-31/functions/{FunctionName}/url",
                 operation: "CreateFunctionUrlConfig",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/2021-10-31/functions/{FunctionName}/url",
+                operation: "UpdateFunctionUrlConfig",
                 required_query_param: None,
             },
             RouteDefinition {
@@ -575,6 +599,9 @@ impl ServiceHandler for LambdaService {
             }
             "ListFunctionUrlConfigs" => {
                 operations::url_configs::list_function_url_configs(&state, &input, ctx)
+            }
+            "UpdateFunctionUrlConfig" => {
+                operations::url_configs::update_function_url_config(&state, &input, ctx)
             }
 
             // Tags

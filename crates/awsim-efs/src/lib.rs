@@ -107,6 +107,30 @@ impl ServiceHandler for EfsService {
                 operation: "PutBackupPolicy",
                 required_query_param: None,
             },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/2015-02-01/file-systems/{FileSystemId}/policy",
+                operation: "DescribeFileSystemPolicy",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/2015-02-01/file-systems/{FileSystemId}/policy",
+                operation: "PutFileSystemPolicy",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/2015-02-01/file-systems/{FileSystemId}/policy",
+                operation: "DeleteFileSystemPolicy",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/2015-02-01/file-systems/{FileSystemId}/protection",
+                operation: "UpdateFileSystemProtection",
+                required_query_param: None,
+            },
             // Mount targets
             RouteDefinition {
                 method: "POST",

@@ -248,7 +248,7 @@ impl ServiceHandler for AppSyncService {
             },
             // Type update
             RouteDefinition {
-                method: "PUT",
+                method: "POST",
                 path_pattern: "/v1/apis/{apiId}/types/{typeName}",
                 operation: "UpdateType",
                 required_query_param: None,
@@ -282,7 +282,7 @@ impl ServiceHandler for AppSyncService {
             // Source API associations
             RouteDefinition {
                 method: "POST",
-                path_pattern: "/v1/mergedApis/{mergedApiIdentifier}/sourceApiAssociations",
+                path_pattern: "/v1/sourceApis/{sourceApiIdentifier}/mergedApiAssociations",
                 operation: "AssociateMergedGraphqlApi",
                 required_query_param: None,
             },
@@ -300,7 +300,7 @@ impl ServiceHandler for AppSyncService {
             },
             RouteDefinition {
                 method: "DELETE",
-                path_pattern: "/v1/mergedApis/{mergedApiIdentifier}/sourceApiAssociations/{associationId}",
+                path_pattern: "/v1/sourceApis/{sourceApiIdentifier}/mergedApiAssociations/{associationId}",
                 operation: "DisassociateMergedGraphqlApi",
                 required_query_param: None,
             },

@@ -427,6 +427,12 @@ impl ServiceHandler for ApiGatewayV1Service {
                 required_query_param: None,
             },
             RouteDefinition {
+                method: "GET",
+                path_pattern: "/restapis/{restapi_id}/stages/{stage_name}",
+                operation: "GetStage",
+                required_query_param: None,
+            },
+            RouteDefinition {
                 method: "DELETE",
                 path_pattern: "/restapis/{restapi_id}/stages/{stage_name}",
                 operation: "DeleteStage",
@@ -443,6 +449,12 @@ impl ServiceHandler for ApiGatewayV1Service {
                 method: "POST",
                 path_pattern: "/restapis/{restapi_id}/deployments",
                 operation: "CreateDeployment",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/restapis/{restapi_id}/deployments/{deployment_id}",
+                operation: "GetDeployment",
                 required_query_param: None,
             },
             RouteDefinition {
@@ -612,9 +624,11 @@ impl ServiceHandler for ApiGatewayV1Service {
             "PutIntegrationResponse" => put_integration_response(&state, &input),
             "DeleteIntegrationResponse" => delete_integration_response(&state, &input),
             "GetStages" => get_stages(&state, &input),
+            "GetStage" => get_stage(&state, &input),
             "CreateStage" => create_stage(&state, &input),
             "DeleteStage" => delete_stage(&state, &input),
             "GetDeployments" => get_deployments(&state, &input),
+            "GetDeployment" => get_deployment(&state, &input),
             "CreateDeployment" => create_deployment(&state, &input),
             "DeleteDeployment" => delete_deployment(&state, &input),
             "GetAuthorizers" => get_authorizers(&state, &input),
@@ -1076,6 +1090,42 @@ fn get_stages(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsErro
     })?;
     let item: Vec<Value> = api.stages.values().map(stage_to_json).collect();
     Ok(json!({ "item": item }))
+}
+
+/// GetStage. The single-stage read the console and `aws apigateway
+/// get-stage` use; only the list form existed before.
+fn get_stage(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let id = require_str(input, "restapi_id")?;
+    let stage_name = require_str(input, "stage_name")?;
+    let api = state.apis.get(id).ok_or_else(|| {
+        AwsError::not_found("NotFoundException", format!("RestApi {id} not found"))
+    })?;
+    let stage = api.stages.get(stage_name).ok_or_else(|| {
+        AwsError::not_found(
+            "NotFoundException",
+            format!("Stage {stage_name} not found for RestApi {id}"),
+        )
+    })?;
+    Ok(stage_to_json(stage))
+}
+
+fn get_deployment(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {
+    let id = require_str(input, "restapi_id")?;
+    let deployment_id = require_str(input, "deployment_id")?;
+    let api = state.apis.get(id).ok_or_else(|| {
+        AwsError::not_found("NotFoundException", format!("RestApi {id} not found"))
+    })?;
+    let deployment = api
+        .deployments
+        .iter()
+        .find(|d| d.id == deployment_id)
+        .ok_or_else(|| {
+            AwsError::not_found(
+                "NotFoundException",
+                format!("Deployment {deployment_id} not found for RestApi {id}"),
+            )
+        })?;
+    Ok(deployment_to_json(deployment))
 }
 
 fn get_deployments(state: &ApiGatewayV1State, input: &Value) -> Result<Value, AwsError> {

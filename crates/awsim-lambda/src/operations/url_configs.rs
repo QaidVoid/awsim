@@ -92,6 +92,48 @@ pub fn create_function_url_config(
 }
 
 // ---------------------------------------------------------------------------
+// UpdateFunctionUrlConfig
+// ---------------------------------------------------------------------------
+
+/// Change the auth type or CORS rules on an existing config.
+///
+/// Every field but the function name is optional, so an omitted one
+/// keeps whatever is already stored. The URL itself never moves.
+pub fn update_function_url_config(
+    state: &LambdaState,
+    input: &Value,
+    _ctx: &RequestContext,
+) -> Result<Value, AwsError> {
+    let name = require_str(input, "FunctionName")?;
+
+    let mut cfg = state.url_configs.get_mut(name).ok_or_else(|| {
+        AwsError::not_found(
+            "ResourceNotFoundException",
+            format!("No function URL config found for function: {name}"),
+        )
+    })?;
+
+    if let Some(auth_type) = opt_str(input, "AuthType") {
+        cfg.auth_type = auth_type.to_string();
+    }
+    if let Some(cors) = input.get("Cors")
+        && !cors.is_null()
+    {
+        cfg.cors = Some(cors.clone());
+    }
+    cfg.last_modified_time = now_iso8601();
+
+    Ok(json!({
+        "FunctionUrl": cfg.function_url,
+        "FunctionArn": cfg.function_arn,
+        "AuthType": cfg.auth_type,
+        "Cors": cfg.cors,
+        "CreationTime": cfg.creation_time,
+        "LastModifiedTime": cfg.last_modified_time,
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // DeleteFunctionUrlConfig
 // ---------------------------------------------------------------------------
 

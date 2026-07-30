@@ -144,7 +144,7 @@ impl ServiceHandler for BedrockService {
             },
             RouteDefinition {
                 method: "POST",
-                path_pattern: "/model-invocation-jobs",
+                path_pattern: "/model-invocation-job",
                 operation: "CreateModelInvocationJob",
                 required_query_param: None,
             },
@@ -156,13 +156,13 @@ impl ServiceHandler for BedrockService {
             },
             RouteDefinition {
                 method: "GET",
-                path_pattern: "/model-invocation-jobs/{jobIdentifier}",
+                path_pattern: "/model-invocation-job/{jobIdentifier}",
                 operation: "GetModelInvocationJob",
                 required_query_param: None,
             },
             RouteDefinition {
                 method: "POST",
-                path_pattern: "/model-invocation-jobs/{jobIdentifier}/stop",
+                path_pattern: "/model-invocation-job/{jobIdentifier}/stop",
                 operation: "StopModelInvocationJob",
                 required_query_param: None,
             },

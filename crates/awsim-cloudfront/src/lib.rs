@@ -282,7 +282,7 @@ impl ServiceHandler for CloudFrontService {
             },
             RouteDefinition {
                 method: "GET",
-                path_pattern: "/2020-05-31/field-level-encryption/{Id}",
+                path_pattern: "/2020-05-31/field-level-encryption/{Id}/config",
                 operation: "GetFieldLevelEncryptionConfig",
                 required_query_param: None,
             },
@@ -306,13 +306,13 @@ impl ServiceHandler for CloudFrontService {
                 required_query_param: None,
             },
             RouteDefinition {
-                method: "PUT",
-                path_pattern: "/2020-05-31/realtime-log-config",
+                method: "POST",
+                path_pattern: "/2020-05-31/get-realtime-log-config",
                 operation: "GetRealtimeLogConfig",
                 required_query_param: None,
             },
             RouteDefinition {
-                method: "DELETE",
+                method: "POST",
                 path_pattern: "/2020-05-31/delete-realtime-log-config",
                 operation: "DeleteRealtimeLogConfig",
                 required_query_param: None,

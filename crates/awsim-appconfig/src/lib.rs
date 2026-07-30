@@ -187,6 +187,26 @@ impl ServiceHandler for AppConfigService {
                 operation: "ListDeploymentStrategies",
                 required_query_param: None,
             },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/deploymentstrategies/{DeploymentStrategyId}",
+                operation: "GetDeploymentStrategy",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "PATCH",
+                path_pattern: "/deploymentstrategies/{DeploymentStrategyId}",
+                operation: "UpdateDeploymentStrategy",
+                required_query_param: None,
+            },
+            // AWS's own model misspells this path as `deployement`, and
+            // the SDKs send exactly what the model says.
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/deployementstrategies/{DeploymentStrategyId}",
+                operation: "DeleteDeploymentStrategy",
+                required_query_param: None,
+            },
         ]
     }
 
