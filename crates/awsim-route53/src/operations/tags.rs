@@ -30,34 +30,22 @@ pub fn change_tags_for_resource(
         .ok_or_else(|| AwsError::bad_request("InvalidInput", "ResourceId is required"))?;
 
     // Tags to add
-    let add_tags: Vec<(String, String)> = input
-        .get("AddTags")
-        .and_then(|t| t.get("Tag"))
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|tag| {
-                    let k = tag.get("Key").and_then(Value::as_str)?.to_string();
-                    let v = tag.get("Value").and_then(Value::as_str)?.to_string();
-                    Some((k, v))
-                })
-                .collect()
+    let add_tags: Vec<(String, String)> = super::xml_list(input.get("AddTags"), "Tag")
+        .iter()
+        .filter_map(|tag| {
+            let k = tag.get("Key").and_then(Value::as_str)?.to_string();
+            let v = tag.get("Value").and_then(Value::as_str)?.to_string();
+            Some((k, v))
         })
-        .unwrap_or_default();
+        .collect();
 
     validate(&add_tags, &TagOpts::aws_default())?;
 
     // Tags to remove
-    let remove_keys: Vec<String> = input
-        .get("RemoveTagKeys")
-        .and_then(|k| k.get("Key"))
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|k| k.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
+    let remove_keys: Vec<String> = super::xml_list(input.get("RemoveTagKeys"), "Key")
+        .iter()
+        .filter_map(|k| k.as_str().map(String::from))
+        .collect();
     reject_aws_prefix_on_write(&remove_keys)?;
 
     match resource_type {

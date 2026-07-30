@@ -139,17 +139,11 @@ fn parse_record_set(rs: &Value) -> Result<ResourceRecordSet, AwsError> {
 
     validate_routing_policy(rs)?;
 
-    // Resource records may be in ResourceRecords.ResourceRecord (array)
-    let resource_records: Vec<String> = rs
-        .get("ResourceRecords")
-        .and_then(|rr| rr.get("ResourceRecord"))
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|r| r.get("Value").and_then(Value::as_str).map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
+    let resource_records: Vec<String> =
+        super::xml_list(rs.get("ResourceRecords"), "ResourceRecord")
+            .iter()
+            .filter_map(|r| r.get("Value").and_then(Value::as_str).map(String::from))
+            .collect();
 
     let alias_target = rs.get("AliasTarget").map(|at| AliasTarget {
         dns_name: at
@@ -196,14 +190,10 @@ pub fn change_resource_record_sets(
         )
     })?;
 
-    // Changes are in ChangeBatch.Changes.Change (array)
-    let changes = input
-        .get("ChangeBatch")
-        .and_then(|cb| cb.get("Changes"))
-        .and_then(|ch| ch.get("Change"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let changes = super::xml_list(
+        input.get("ChangeBatch").and_then(|cb| cb.get("Changes")),
+        "Change",
+    );
 
     // AWS caps a single ChangeResourceRecordSets call at 1000 changes
     // and 32_000 ResourceRecord values across the batch. Real Route53
@@ -223,10 +213,7 @@ pub fn change_resource_record_sets(
         .iter()
         .filter_map(|c| {
             c.get("ResourceRecordSet")
-                .and_then(|rs| rs.get("ResourceRecords"))
-                .and_then(|rr| rr.get("ResourceRecord"))
-                .and_then(Value::as_array)
-                .map(|v| v.len())
+                .map(|rs| super::xml_list(rs.get("ResourceRecords"), "ResourceRecord").len())
         })
         .sum();
     if total_values > MAX_VALUES_PER_BATCH {

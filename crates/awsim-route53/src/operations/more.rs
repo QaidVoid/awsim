@@ -157,16 +157,10 @@ pub fn list_tags_for_resources(
         .and_then(Value::as_str)
         .ok_or_else(|| AwsError::bad_request("InvalidInput", "ResourceType is required"))?;
 
-    let ids: Vec<String> = input
-        .get("ResourceIds")
-        .and_then(|r| r.get("ResourceId"))
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
+    let ids: Vec<String> = super::xml_list(input.get("ResourceIds"), "ResourceId")
+        .iter()
+        .filter_map(|v| v.as_str().map(String::from))
+        .collect();
 
     let mut sets: Vec<Value> = Vec::new();
     for rid in ids {

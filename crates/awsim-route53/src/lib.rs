@@ -106,6 +106,18 @@ impl ServiceHandler for Route53Service {
                 required_query_param: None,
             },
             // Record Sets
+            //
+            // Route53 models the change path with a trailing slash and
+            // the list path without one, and the SDKs send exactly what
+            // the model says. Registering only the bare form left
+            // `ChangeResourceRecordSets` unreachable from every real
+            // client, so both spellings are accepted.
+            RouteDefinition {
+                method: "POST",
+                path_pattern: "/2013-04-01/hostedzone/{Id}/rrset/",
+                operation: "ChangeResourceRecordSets",
+                required_query_param: None,
+            },
             RouteDefinition {
                 method: "POST",
                 path_pattern: "/2013-04-01/hostedzone/{Id}/rrset",
