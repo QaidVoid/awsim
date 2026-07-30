@@ -1015,3 +1015,47 @@ async fn event_types_are_accepted_in_either_spelling() {
         .expect_err("a misspelled type still has to fail");
     assert_eq!(err.code, "BadRequestException", "{err:?}");
 }
+
+/// The v2 `EmailContent` union member is `Template`. AWSim read
+/// `Templated`, which is not an AWS name, so every templated send from a
+/// real SDK fell through to "Content must include Simple, Raw, or
+/// Template" instead of rendering.
+#[tokio::test]
+async fn v2_templated_send_uses_the_template_union_member() {
+    let svc = service_with_identities().await;
+    svc.handle(
+        "CreateEmailTemplate",
+        json!({
+            "TemplateName": "welcome",
+            "TemplateContent": {
+                "Subject": "Hi {{name}}",
+                "Text": "Hello {{name}}",
+                "Html": "<p>Hello {{name}}</p>",
+            },
+        }),
+        &ctx(),
+    )
+    .await
+    .expect("CreateEmailTemplate");
+
+    svc.handle(
+        "SendEmail",
+        json!({
+            "FromEmailAddress": "dev@example.com",
+            "Destination": { "ToAddresses": ["a@b.c"] },
+            "Content": { "Template": {
+                "TemplateName": "welcome",
+                "TemplateData": r#"{"name":"Ada"}"#,
+            }},
+        }),
+        &ctx(),
+    )
+    .await
+    .expect("SendEmail");
+
+    let sent = svc.list_sent_emails();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].2.subject.as_deref(), Some("Hi Ada"));
+    assert_eq!(sent[0].2.body_text.as_deref(), Some("Hello Ada"));
+    assert_eq!(sent[0].2.body_html.as_deref(), Some("<p>Hello Ada</p>"));
+}

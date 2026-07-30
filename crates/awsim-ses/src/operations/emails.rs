@@ -779,7 +779,7 @@ pub fn send_email(
 
     enforce_configuration_set(state, configuration_set_name.as_deref(), input)?;
 
-    // Content. Simple, Raw, or Templated. The Templated branch loads
+    // Content. Simple, Raw, or Template. The Template branch loads
     // the named template, parses the TemplateData JSON string, and
     // expands `{{var}}` placeholders within each part. AWS SES is
     // Handlebars-compatible; we cover the common substitution case.
@@ -803,13 +803,10 @@ pub fn send_email(
     } else if !content["Raw"].is_null() {
         let raw_data = content["Raw"]["Data"].as_str().map(String::from);
         (None, None, None, raw_data)
-    } else if !content["Templated"].is_null() {
-        let templated = &content["Templated"];
+    } else if !content["Template"].is_null() {
+        let templated = &content["Template"];
         let template_name = templated["TemplateName"].as_str().ok_or_else(|| {
-            AwsError::bad_request(
-                "InvalidParameter",
-                "Content.Templated requires TemplateName",
-            )
+            AwsError::bad_request("InvalidParameter", "Content.Template requires TemplateName")
         })?;
         let template = state.templates.get(template_name).ok_or_else(|| {
             AwsError::not_found(
@@ -821,7 +818,7 @@ pub fn send_email(
         let data: Value = serde_json::from_str(data_str).map_err(|_| {
             AwsError::bad_request(
                 "InvalidParameter",
-                "Content.Templated.TemplateData must be a JSON object string",
+                "Content.Template.TemplateData must be a JSON object string",
             )
         })?;
         let subject = template
@@ -834,7 +831,7 @@ pub fn send_email(
     } else {
         return Err(AwsError::bad_request(
             "InvalidParameter",
-            "Content must include Simple, Raw, or Templated",
+            "Content must include Simple, Raw, or Template",
         ));
     };
 
@@ -1624,7 +1621,7 @@ mod list_management_suppression_tests {
             "FromEmailAddress": "sender@example.com",
             "Destination": { "ToAddresses": ["user@example.com"] },
             "Content": {
-                "Templated": {
+                "Template": {
                     "TemplateName": "welcome",
                     "TemplateData": "{\"name\":\"Alex\",\"code\":\"42\"}",
                 },
@@ -1641,7 +1638,7 @@ mod list_management_suppression_tests {
             "FromEmailAddress": "sender@example.com",
             "Destination": { "ToAddresses": ["user@example.com"] },
             "Content": {
-                "Templated": {
+                "Template": {
                     "TemplateName": "missing",
                     "TemplateData": "{}",
                 },
@@ -1667,7 +1664,7 @@ mod list_management_suppression_tests {
             "FromEmailAddress": "sender@example.com",
             "Destination": { "ToAddresses": ["user@example.com"] },
             "Content": {
-                "Templated": {
+                "Template": {
                     "TemplateName": "welcome",
                     "TemplateData": "{not-json",
                 },
