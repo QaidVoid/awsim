@@ -1371,8 +1371,7 @@ async fn async_main() -> Result<()> {
                 .expect("Failed to create ephemeral opensearch state"),
         ),
     };
-    let opensearch_nested: axum::Router<()> =
-        axum::Router::new().nest("/opensearch", awsim_opensearch::router(opensearch_state));
+    let opensearch_nested: axum::Router<()> = awsim_opensearch::mounted(opensearch_state);
 
     let ecr_router = awsim_ecr::router(ecr_service);
 

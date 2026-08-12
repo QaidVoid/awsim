@@ -22,9 +22,28 @@ use serde_json::{Value, json};
 
 use state::OpenSearchState;
 
+/// Mount the OpenSearch API under `/opensearch`, ready to `.merge()` into the
+/// main server.
+///
+/// Prefer this over nesting [`router`] by hand. `axum`'s `nest("/opensearch",
+/// _)` matches `/opensearch` and `/opensearch/<nonempty>`, but not the bare
+/// trailing-slash root `/opensearch/`, which then falls through to the SigV4
+/// gateway. The gateway reads the signed service from the request (`es` for a
+/// managed domain), finds no handler registered under that name, and answers
+/// `400 UnknownService`. A real OpenSearch domain answers `GET /` with the
+/// cluster-info document, and clients that sign for `es` and probe the root
+/// (the platform readiness check is one) expect that. Route the trailing-slash
+/// root explicitly so it reaches the same handler as `/opensearch`.
+pub fn mounted(state: Arc<OpenSearchState>) -> Router {
+    Router::new()
+        .route("/opensearch/", get(cluster_info))
+        .nest("/opensearch", router(state))
+}
+
 /// Build an Axum router for the OpenSearch Elasticsearch-compatible API.
 ///
-/// Mount this at `/opensearch` in the main server.
+/// Mount this at `/opensearch` in the main server, or use [`mounted`] which
+/// also handles the trailing-slash root.
 pub fn router(state: Arc<OpenSearchState>) -> Router {
     Router::new()
         // Cluster info
