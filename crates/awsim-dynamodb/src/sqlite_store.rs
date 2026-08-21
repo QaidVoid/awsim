@@ -565,6 +565,7 @@ impl SqliteStore {
         pk: &str,
         forward: bool,
         resume: Option<GsiResume<'_>>,
+        sk_bound: Option<&SkBound>,
         mut visit: F,
     ) -> Result<(), AwsError>
     where
@@ -586,39 +587,55 @@ impl SqliteStore {
         let order = if forward { "ASC" } else { "DESC" };
         let cmp = if forward { ">" } else { "<" };
 
-        let sql = match &resume {
+        // Bind in build order so the optional resume and range clauses
+        // can each be present or absent without renumbering.
+        let mut bound: Vec<&dyn ToSql> = vec![&account, &region, &table, &pk];
+        let mut sql = format!(
+            "SELECT pk, sk, {sk_col}, attrs_json FROM items
+             WHERE account = ?1 AND region = ?2 AND table_name = ?3
+               AND {pk_col} = ?4"
+        );
+
+        let resume_sk = resume.as_ref().map(|r| r.gsi_sk.unwrap_or(""));
+        if let Some(r) = &resume {
             // Lexicographic "strictly after" on the (gsi_sk, pk, sk) triple.
-            Some(_) => format!(
-                "SELECT pk, sk, {sk_col}, attrs_json FROM items
-                 WHERE account = ?1 AND region = ?2 AND table_name = ?3
-                   AND {pk_col} = ?4
-                   AND ( {sk_expr} {cmp} ?5
-                         OR ( {sk_expr} = ?5
-                              AND ( pk {cmp} ?6 OR ( pk = ?6 AND sk {cmp} ?7 ) ) ) )
-                 ORDER BY {sk_expr} {order}, pk {order}, sk {order}"
-            ),
-            None => format!(
-                "SELECT pk, sk, {sk_col}, attrs_json FROM items
-                 WHERE account = ?1 AND region = ?2 AND table_name = ?3
-                   AND {pk_col} = ?4
-                 ORDER BY {sk_expr} {order}, pk {order}, sk {order}"
-            ),
-        };
+            let n = bound.len();
+            sql.push_str(&format!(
+                " AND ( {sk_expr} {cmp} ?{sk_p}
+                        OR ( {sk_expr} = ?{sk_p}
+                             AND ( pk {cmp} ?{pk_p} OR ( pk = ?{pk_p} AND sk {cmp} ?{base_p} ) ) ) )",
+                sk_p = n + 1,
+                pk_p = n + 2,
+                base_p = n + 3,
+            ));
+            bound.push(&resume_sk);
+            bound.push(&r.base_pk);
+            bound.push(&r.base_sk);
+        }
+
+        // Index sort-key range pushdown, against the same COALESCE
+        // expression the ORDER BY uses so it can share that index. An
+        // item with no index sort key coalesces to '' and correctly
+        // falls outside any non-empty lower bound.
+        if let Some(b) = sk_bound {
+            if let Some((lo, inclusive)) = &b.lower {
+                let op = if *inclusive { ">=" } else { ">" };
+                sql.push_str(&format!(" AND {sk_expr} {op} ?{}", bound.len() + 1));
+                bound.push(lo);
+            }
+            if let Some((hi, inclusive)) = &b.upper {
+                let op = if *inclusive { "<=" } else { "<" };
+                sql.push_str(&format!(" AND {sk_expr} {op} ?{}", bound.len() + 1));
+                bound.push(hi);
+            }
+        }
+
+        sql.push_str(&format!(
+            " ORDER BY {sk_expr} {order}, pk {order}, sk {order}"
+        ));
 
         let mut stmt = conn.prepare(&sql).map_err(sqlite_err)?;
-        let mut rows = match &resume {
-            Some(r) => stmt.query(params![
-                account,
-                region,
-                table,
-                pk,
-                r.gsi_sk.unwrap_or(""),
-                r.base_pk,
-                r.base_sk
-            ]),
-            None => stmt.query(params![account, region, table, pk]),
-        }
-        .map_err(sqlite_err)?;
+        let mut rows = stmt.query(params_from_iter(bound)).map_err(sqlite_err)?;
 
         while let Some(row) = rows.next().map_err(sqlite_err)? {
             let base_pk: String = row.get(0).map_err(sqlite_err)?;
@@ -1603,6 +1620,7 @@ mod tests {
                 "tenant-a",
                 true,
                 None,
+                None,
                 |_pk, _sk, _gsi_sk, _attrs| {
                     hit_count += 1;
                     Ok(true)
@@ -1641,6 +1659,7 @@ mod tests {
                 last,
                 "partition",
                 true,
+                None,
                 None,
                 |_pk, _sk, _gsi_sk, _attrs| {
                     found += 1;

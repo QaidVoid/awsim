@@ -504,14 +504,20 @@ pub fn query(
             .map(|s| s.to_string())
     });
 
-    // Sort-key pushdown applies only to a plain base-table query, where
-    // the condition's sort key IS the stored `sk` column. A GSI reads
-    // its own `gsi{n}_sk` column, and an LSI constrains a different
-    // attribute while still streaming the base partition ordered by the
-    // base sort key. Pushing a bound down in either case would filter on
-    // the wrong column and silently drop matching items.
-    let sk_pushdown = match (index_name, range_key_name.as_deref()) {
-        (None, Some(sk_name)) => {
+    // Sort-key pushdown, routed to whichever column actually holds the
+    // sort key this query constrains:
+    //
+    //   * base table (no IndexName) -> the `sk` column
+    //   * GSI                       -> that slot's `gsi{n}_sk` column
+    //   * LSI                       -> nothing
+    //
+    // The LSI case is the trap: it constrains its own range attribute
+    // while still streaming the base partition ordered by the *base*
+    // sort key, so a bound would filter the wrong column and silently
+    // drop matching items. `gsi_slot` is `None` for an LSI, which is
+    // what distinguishes it from a base-table query here.
+    let sk_pushdown = match (index_name, gsi_slot, range_key_name.as_deref()) {
+        (None, _, Some(sk_name)) | (Some(_), Some(_), Some(sk_name)) => {
             sk_bound_from_condition(&key_condition, sk_name, &expr_attr_names, &expr_attr_values)
                 .filter(|b| !b.is_unbounded())
         }
@@ -608,6 +614,7 @@ pub fn query(
                 pk,
                 scan_index_forward,
                 resume,
+                sk_pushdown.as_ref(),
                 |_base_pk, _base_sk, _gsi_sk, attrs| {
                     let item = storage_value_to_item(attrs).ok_or_else(|| {
                         AwsError::internal("DynamoDB stored attrs is not an object")
