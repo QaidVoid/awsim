@@ -1258,6 +1258,12 @@ async fn authorize_post(
     };
     let username = resolved_username.expect("user lookup matched, so resolution succeeded");
 
+    // Everything from here on reads the cloned `user`, so release the pool
+    // guard before the bcrypt comparison. Holding it would block every
+    // writer on that pool for the length of a hash.
+    let policy_for_change = pool_ref.policies.clone();
+    drop(pool_ref);
+
     if !crate::password::verify(password, &user.password_hash) {
         return login_page_html(
             &pool_id,
@@ -1330,9 +1336,6 @@ async fn authorize_post(
             &idps,
         );
     }
-
-    let policy_for_change = pool_ref.policies.clone();
-    drop(pool_ref);
 
     let mut user = user;
     if user.status == "FORCE_CHANGE_PASSWORD" {

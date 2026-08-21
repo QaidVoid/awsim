@@ -1211,33 +1211,48 @@ pub fn initiate_auth(
                 }
             }
 
-            // Lockout / password check / risk evaluation inside a tight
-            // mutable scope so the remainder of the flow keeps its existing
-            // immutable borrows.
+            // Lockout / password check / risk evaluation. Split into three
+            // phases so the bcrypt comparison runs with no pool guard held.
             {
+                let (password_hash, compromised, block_action) = {
+                    let mut pool = state.user_pools.get_mut(&pool_id).ok_or_else(|| {
+                        AwsError::service_not_found(
+                            "ResourceNotFoundException",
+                            "User pool not found",
+                        )
+                    })?;
+                    let block_action = super::auth_policy::compromised_credentials_action_for(
+                        &pool,
+                        Some(client_id),
+                        "SIGN_IN",
+                    );
+                    let compromised = super::auth_policy::is_compromised_password(password);
+
+                    let user = pool
+                        .users
+                        .get_mut(username)
+                        .ok_or_else(|| user_lookup_error(masks))?;
+                    if !user.enabled {
+                        return Err(AwsError::bad_request(
+                            "NotAuthorizedException",
+                            "User is disabled.",
+                        ));
+                    }
+                    super::auth_policy::check_not_locked(user)?;
+                    (user.password_hash.clone(), compromised, block_action)
+                };
+
+                let verified = crate::password::verify(password, &password_hash);
+
                 let mut pool = state.user_pools.get_mut(&pool_id).ok_or_else(|| {
                     AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
                 })?;
-                let block_action = super::auth_policy::compromised_credentials_action_for(
-                    &pool,
-                    Some(client_id),
-                    "SIGN_IN",
-                );
-                let compromised = super::auth_policy::is_compromised_password(password);
-
                 let user = pool
                     .users
                     .get_mut(username)
                     .ok_or_else(|| user_lookup_error(masks))?;
-                if !user.enabled {
-                    return Err(AwsError::bad_request(
-                        "NotAuthorizedException",
-                        "User is disabled.",
-                    ));
-                }
-                super::auth_policy::check_not_locked(user)?;
 
-                if !crate::password::verify(password, &user.password_hash) {
+                if !verified {
                     super::auth_policy::record_attempt(user, false);
                     super::auth_policy::record_auth_event(
                         user,
@@ -1595,32 +1610,46 @@ pub fn admin_initiate_auth(
                 }
             }
 
-            // Lockout / password check / risk evaluation inside a tight
-            // mutable scope; the rest of the flow re-acquires an immutable
-            // borrow without overlapping with the &mut user.
+            // Lockout / password check / risk evaluation. Split into three
+            // phases so the bcrypt comparison runs with no pool guard held.
             {
+                let (password_hash, compromised, block_action) = {
+                    let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
+                        AwsError::service_not_found(
+                            "ResourceNotFoundException",
+                            "User pool not found",
+                        )
+                    })?;
+                    let block_action = super::auth_policy::compromised_credentials_action_for(
+                        &pool,
+                        Some(client_id),
+                        "SIGN_IN",
+                    );
+                    let compromised = super::auth_policy::is_compromised_password(password);
+
+                    let user = pool.users.get_mut(username).ok_or_else(|| {
+                        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
+                    })?;
+                    if !user.enabled {
+                        return Err(AwsError::bad_request(
+                            "NotAuthorizedException",
+                            "User is disabled.",
+                        ));
+                    }
+                    super::auth_policy::check_not_locked(user)?;
+                    (user.password_hash.clone(), compromised, block_action)
+                };
+
+                let verified = crate::password::verify(password, &password_hash);
+
                 let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
                     AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
                 })?;
-                let block_action = super::auth_policy::compromised_credentials_action_for(
-                    &pool,
-                    Some(client_id),
-                    "SIGN_IN",
-                );
-                let compromised = super::auth_policy::is_compromised_password(password);
-
                 let user = pool.users.get_mut(username).ok_or_else(|| {
                     AwsError::service_not_found("UserNotFoundException", "User does not exist.")
                 })?;
-                if !user.enabled {
-                    return Err(AwsError::bad_request(
-                        "NotAuthorizedException",
-                        "User is disabled.",
-                    ));
-                }
-                super::auth_policy::check_not_locked(user)?;
 
-                if !crate::password::verify(password, &user.password_hash) {
+                if !verified {
                     super::auth_policy::record_attempt(user, false);
                     super::auth_policy::record_auth_event(
                         user,

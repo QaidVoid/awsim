@@ -1433,34 +1433,49 @@ pub fn change_password(
     let username = crate::jwt::extract_username_from_access_token(access_token)
         .ok_or_else(|| AwsError::bad_request("NotAuthorizedException", "Invalid Access Token"))?;
 
-    for mut pool_entry in state.user_pools.iter_mut() {
-        if pool_entry.users.contains_key(&username) {
-            super::auth_policy::validate_password(&pool_entry.policies, proposed)?;
-            let pool_id = pool_entry.id.clone();
-            let user = pool_entry.users.get_mut(&username).ok_or_else(|| {
-                AwsError::service_not_found("UserNotFoundException", "User does not exist.")
-            })?;
-            if !crate::password::verify(previous, &user.password_hash) {
-                return Err(AwsError::bad_request(
-                    "NotAuthorizedException",
-                    "Incorrect username or password.",
-                ));
-            }
-            user.password_hash = crate::password::hash(proposed)?;
-            let (s, v) = crate::password::srp_material(&pool_id, &username, proposed);
-            user.srp_salt = Some(s);
-            user.srp_verifier = Some(v);
-            user.failed_login_attempts = 0;
-            user.locked_until_secs = None;
-            user.last_modified_date = now_epoch();
-            return Ok(json!({}));
-        }
-    }
+    // Locate the owning pool and copy out everything the password work
+    // needs, so the guard is released before any bcrypt or SRP maths. The
+    // iterator temporary is dropped at the end of this statement, which
+    // also makes the `get_mut` below safe against self-deadlock.
+    let found = state.user_pools.iter().find_map(|entry| {
+        entry.users.get(&username).map(|user| {
+            (
+                entry.id.clone(),
+                entry.policies.clone(),
+                user.password_hash.clone(),
+            )
+        })
+    });
+    let Some((pool_id, policies, password_hash)) = found else {
+        return Err(AwsError::service_not_found(
+            "UserNotFoundException",
+            "User does not exist.",
+        ));
+    };
 
-    Err(AwsError::service_not_found(
-        "UserNotFoundException",
-        "User does not exist.",
-    ))
+    super::auth_policy::validate_password(&policies, proposed)?;
+    if !crate::password::verify(previous, &password_hash) {
+        return Err(AwsError::bad_request(
+            "NotAuthorizedException",
+            "Incorrect username or password.",
+        ));
+    }
+    let new_hash = crate::password::hash(proposed)?;
+    let (s, v) = crate::password::srp_material(&pool_id, &username, proposed);
+
+    let mut pool = state.user_pools.get_mut(&pool_id).ok_or_else(|| {
+        AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
+    })?;
+    let user = pool.users.get_mut(&username).ok_or_else(|| {
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
+    })?;
+    user.password_hash = new_hash;
+    user.srp_salt = Some(s);
+    user.srp_verifier = Some(v);
+    user.failed_login_attempts = 0;
+    user.locked_until_secs = None;
+    user.last_modified_date = now_epoch();
+    Ok(json!({}))
 }
 
 // ---------------------------------------------------------------------------

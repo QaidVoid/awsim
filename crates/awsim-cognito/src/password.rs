@@ -32,6 +32,13 @@ pub fn hash(plain: &str) -> Result<String, AwsError> {
 /// Returns `false` for any verification failure, including malformed hashes
 /// (which can happen if state was hand-edited or restored from a legacy
 /// snapshot containing plaintext).
+///
+/// **Never call this while holding a `user_pools` guard.** bcrypt is
+/// deliberately slow (milliseconds of CPU, even at [`COST`]), and a
+/// DashMap guard on a pool is exclusive across every user in that pool.
+/// Holding one across a hash serialises every sign-in for the pool
+/// behind a single core. Clone the hash out, drop the guard, verify,
+/// then re-acquire to record the outcome.
 pub fn verify(plain: &str, hashed: &str) -> bool {
     bcrypt::verify(plain, hashed).unwrap_or(false)
 }

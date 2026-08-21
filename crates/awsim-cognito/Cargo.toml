@@ -31,3 +31,4 @@ hkdf = { workspace = true }
 quick-xml = { workspace = true }
 flate2 = { workspace = true }
 chrono = { workspace = true }
+tokio = { workspace = true }
