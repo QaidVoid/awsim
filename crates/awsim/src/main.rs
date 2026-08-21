@@ -42,6 +42,10 @@ mod snapshot_cli;
 mod tls;
 mod ui;
 
+/// Default ceiling on tokio's blocking pool. See
+/// [`Cli::max_blocking_threads`] for the measurements behind the value.
+const DEFAULT_MAX_BLOCKING_THREADS: usize = 128;
+
 #[derive(Parser)]
 #[command(
     name = "awsim",
@@ -170,12 +174,35 @@ struct Cli {
     #[arg(long, env = "AWSIM_CONN_IDLE_TIMEOUT_SECS", default_value_t = 90)]
     conn_idle_timeout_secs: u64,
 
-    /// Cap on tokio's blocking-pool threads (the pool that runs sync
-    /// SQLite calls via `spawn_blocking`). Each thread reserves ~2 MiB
-    /// of stack, so this directly bounds RSS contribution from
-    /// blocking work. Set lower (e.g. 8) to clamp memory during bulk
-    /// imports; raise for higher write throughput.
-    #[arg(long, env = "AWSIM_MAX_BLOCKING_THREADS", default_value_t = 32)]
+    /// Cap on tokio's blocking-pool threads. Every service that does
+    /// sync work off the runtime shares this pool: DynamoDB's SQLite
+    /// calls, which take microseconds, and Cognito's password and token
+    /// crypto, which takes tens of milliseconds. They queue together,
+    /// so the cap decides whether a burst of sign-ins can bury every
+    /// DynamoDB call behind it.
+    ///
+    /// 128 is where mixed-workload throughput saturates. Measured on 16
+    /// cores, DynamoDB `GetItem` served during a 64-concurrent Cognito
+    /// auth load:
+    ///
+    /// ```text
+    ///   cap  32 ->     935 rps   (p50 34 ms)
+    ///   cap  64 ->  30,760 rps   (p50 1.0 ms)
+    ///   cap 128 ->  83,578 rps   (p50 0.3 ms)
+    ///   cap 512 ->  82,484 rps   (p50 0.3 ms)
+    /// ```
+    ///
+    /// The cost is paid by write-saturating workloads, where the extra
+    /// threads only pile up on the single SQLite writer. Under a
+    /// 400-concurrent 60 KiB `PutItem` firehose, going from 32 to 128
+    /// costs about 9% write throughput and roughly 200 MiB of peak RSS;
+    /// going all the way to tokio's own default of 512 costs 17% and
+    /// spawns 433 threads for no gain. Lower this for bulk-import runs.
+    #[arg(
+        long,
+        env = "AWSIM_MAX_BLOCKING_THREADS",
+        default_value_t = DEFAULT_MAX_BLOCKING_THREADS
+    )]
     max_blocking_threads: usize,
 
     /// Per-request body size cap in bytes for non-S3-upload routes.
@@ -413,13 +440,11 @@ enum ChaosPresetCommand {
 
 fn main() -> Result<()> {
     // Peek at the CLI just to size the runtime. Full parse happens
-    // inside `async_main`. The tokio default of 512 blocking threads
-    // x 2 MiB stack ~= 1 GiB ceiling for `spawn_blocking` is easy to
-    // hit during a bulk DDB import that fans out across many sync
-    // SQLite calls. Keep it tight by default and let users override.
+    // inside `async_main`; a parse failure here falls back to the same
+    // default the flag declares, so the two can't drift.
     let max_blocking = Cli::try_parse()
         .map(|c| c.max_blocking_threads)
-        .unwrap_or(32);
+        .unwrap_or(DEFAULT_MAX_BLOCKING_THREADS);
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .max_blocking_threads(max_blocking)
