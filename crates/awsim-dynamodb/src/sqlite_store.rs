@@ -9,16 +9,31 @@
 //! Concurrency model: rusqlite is sync. Every public method here is
 //! itself sync; callers cross the async boundary by wrapping calls
 //! in `tokio::task::spawn_blocking` at the operation handler layer.
-//! Each call takes a fresh `Connection` from the internal pool.
-//! WAL mode means readers never block each other.
+//!
+//! Reads and writes take separate paths, because SQLite's WAL mode
+//! allows unlimited concurrent readers but exactly one writer:
+//!
+//!   * Reads draw a connection from a read-only pool sized to the
+//!     machine. Readers never block each other or the writer.
+//!   * Writes serialise through one dedicated write connection behind
+//!     a `Mutex`.
+//!
+//! Funnelling writes through a single connection is deliberate. When
+//! several connections race to write, the losers land in SQLite's
+//! busy handler, which *sleeps* in escalating steps up to 100 ms while
+//! still holding its connection. A userspace mutex instead hands the
+//! writer off in microseconds, and readers never get caught behind a
+//! sleeping writer. Contention shows up as a short queue rather than
+//! as a latency cliff.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
 use r2d2::PooledConnection;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{
-    Connection, OptionalExtension, ToSql, TransactionBehavior, params, params_from_iter,
+    Connection, OpenFlags, OptionalExtension, ToSql, TransactionBehavior, params, params_from_iter,
 };
 use serde_json::Value;
 
@@ -81,16 +96,44 @@ fn gsi_excluded_assignments() -> String {
     parts.join(", ")
 }
 
-/// Connection pool ceiling. Lazy: only `MIN_IDLE` connections are
-/// kept warm, the pool grows on demand and shrinks back. WAL gives
-/// unlimited concurrent readers and one writer, so a 4-connection
-/// cap is plenty for typical workloads.
-const POOL_MAX: u32 = 4;
+/// Reader-pool floor and ceiling. The pool is sized to the machine
+/// because WAL readers never block each other, so the only real cost
+/// of another reader is its page cache. The floor keeps a
+/// single-core container from serialising every read; the ceiling
+/// keeps a 128-core box from pinning 128 caches.
+const READER_POOL_MIN: u32 = 4;
+const READER_POOL_MAX: u32 = 32;
 
-/// Idle-connection floor. One warm connection per service keeps
-/// the cache warm for hot reads without pinning POOL_MAX x cache
-/// memory at idle.
-const POOL_MIN_IDLE: u32 = 1;
+/// Idle-connection floor for the reader pool. The pool grows on
+/// demand up to [`reader_pool_size`] and shrinks back when traffic
+/// subsides, so idle RSS stays close to one connection's worth.
+const READER_POOL_MIN_IDLE: u32 = 1;
+
+/// How long a caller waits for a free reader before giving up. Only
+/// reachable if every pooled reader is mid-query, which means the
+/// disk is the bottleneck and queueing further is pointless. Well
+/// below r2d2's 30 s default so a pathological case surfaces as a
+/// retryable error rather than a request that hangs for half a
+/// minute.
+const READER_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Busy timeout for the write connection. In-process writes are
+/// already serialised by the writer mutex, so this only covers an
+/// external process holding the database file (a `sqlite3` shell, a
+/// second awsim against the same `--data-dir`).
+const WRITER_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Busy timeout applied to readers. WAL readers do not contend with
+/// the writer, so this only covers the brief `-shm` recovery window
+/// after an unclean shutdown.
+const READER_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Busy timeout used only for the duration of a TRUNCATE checkpoint.
+/// The checkpoint waits for readers to drain while holding the writer
+/// mutex, so a long timeout would stall every write behind it. Keeping
+/// it short turns "readers are still busy" into a fast `busy` result
+/// that the checkpointer retries on its next tick.
+const CHECKPOINT_BUSY_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Per-connection cache size in KiB (negative = absolute KiB
 /// rather than pages). 2 MiB per connection. Small caches are
@@ -102,14 +145,24 @@ const CACHE_SIZE_KIB: i64 = -2 * 1024;
 /// the mapping toward RSS so we keep it tight.
 const MMAP_SIZE_BYTES: i64 = 16 * 1024 * 1024;
 
-/// WAL auto-checkpoint threshold in pages. The default 1000 pages
-/// (~4 MiB) is fine for throughput but means the WAL holds that
-/// much memory between checkpoints. 256 pages (~1 MiB) keeps the
-/// WAL bounded for a small write-throughput hit.
-const WAL_AUTOCHECKPOINT_PAGES: i64 = 256;
+/// WAL auto-checkpoint threshold in pages, matching SQLite's own
+/// default. Every checkpoint is a write-back plus fsync that stalls
+/// the writer, so checkpointing more eagerly than this costs write
+/// throughput under load. `spawn_wal_checkpointer`'s periodic
+/// TRUNCATE pass is what actually bounds `-wal` growth.
+const WAL_AUTOCHECKPOINT_PAGES: i64 = 1000;
 
 type Pool = r2d2::Pool<SqliteConnectionManager>;
-pub(crate) type Conn = PooledConnection<SqliteConnectionManager>;
+type Reader = PooledConnection<SqliteConnectionManager>;
+
+/// Reader-pool size for this machine, clamped to
+/// `[READER_POOL_MIN, READER_POOL_MAX]`.
+fn reader_pool_size() -> u32 {
+    std::thread::available_parallelism()
+        .map(|n| n.get() as u32)
+        .unwrap_or(READER_POOL_MIN)
+        .clamp(READER_POOL_MIN, READER_POOL_MAX)
+}
 
 /// Outcome of a `PRAGMA wal_checkpoint(TRUNCATE)`.
 #[derive(Debug, Clone, Copy)]
@@ -127,7 +180,8 @@ pub struct WalCheckpoint {
 
 /// One sqlite-backed store per AWSim instance. All accounts/regions/
 /// tables share the same database, partitioned by columns. Cheap to
-/// clone. Backed by an Arc'd r2d2 connection pool.
+/// clone. Backed by an Arc'd reader pool plus a single write
+/// connection.
 #[derive(Clone)]
 pub struct SqliteStore {
     inner: Arc<Inner>,
@@ -136,37 +190,55 @@ pub struct SqliteStore {
 struct Inner {
     /// Path to the sqlite file. Kept for diagnostics + VACUUM.
     db_path: PathBuf,
-    /// Pooled SQLite connections. Readers never block each other in
-    /// WAL mode, and we keep the pool small so per-connection memory
-    /// (cache + mmap) stays bounded.
-    pool: Pool,
+    /// Read-only pooled connections. WAL lets these run fully
+    /// concurrently with each other and with the writer.
+    readers: Pool,
+    /// The one connection allowed to write. SQLite permits a single
+    /// writer regardless, so serialising here costs nothing and
+    /// avoids the busy-handler sleep storm that concurrent writers
+    /// would otherwise produce.
+    writer: Mutex<Connection>,
 }
 
 impl SqliteStore {
     /// Open (or create) the sqlite file at `path` and run pending
-    /// migrations. Pre-builds the connection pool so PRAGMAs are
-    /// applied once per long-lived connection rather than per query.
+    /// migrations.
+    ///
+    /// The write connection is established and migrated first so the
+    /// database, its `-wal`, and its `-shm` all exist before the
+    /// read-only pool opens: a read-only connection cannot create
+    /// those files itself.
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, AwsError> {
         let db_path = path.into();
-        let manager = SqliteConnectionManager::file(&db_path).with_init(apply_pragmas);
-        let pool = r2d2::Pool::builder()
-            .max_size(POOL_MAX)
-            .min_idle(Some(POOL_MIN_IDLE))
+
+        let mut writer = Connection::open(&db_path)
+            .map_err(|e| AwsError::internal(format!("DynamoDB writer open failed: {e}")))?;
+        apply_writer_pragmas(&mut writer)
+            .map_err(|e| AwsError::internal(format!("DynamoDB writer pragma failed: {e}")))?;
+        embedded_migrations::migrations::runner()
+            .run(&mut writer)
+            .map_err(|e| AwsError::internal(format!("DynamoDB migration failed: {e}")))?;
+
+        let manager = SqliteConnectionManager::file(&db_path)
+            .with_flags(
+                OpenFlags::SQLITE_OPEN_READ_ONLY
+                    | OpenFlags::SQLITE_OPEN_NO_MUTEX
+                    | OpenFlags::SQLITE_OPEN_URI,
+            )
+            .with_init(apply_reader_pragmas);
+        let readers = r2d2::Pool::builder()
+            .max_size(reader_pool_size())
+            .min_idle(Some(READER_POOL_MIN_IDLE))
+            .connection_timeout(READER_ACQUIRE_TIMEOUT)
             .build(manager)
-            .map_err(|e| AwsError::internal(format!("DynamoDB pool init failed: {e}")))?;
-        // Migrations need a fresh `&mut Connection`. Pull one from the
-        // pool, run the runner, then drop it back so the rest of the
-        // pool inherits the post-migration schema.
-        {
-            let mut conn = pool
-                .get()
-                .map_err(|e| AwsError::internal(format!("DynamoDB pool acquire failed: {e}")))?;
-            embedded_migrations::migrations::runner()
-                .run(&mut *conn)
-                .map_err(|e| AwsError::internal(format!("DynamoDB migration failed: {e}")))?;
-        }
+            .map_err(|e| AwsError::internal(format!("DynamoDB reader pool init failed: {e}")))?;
+
         Ok(Self {
-            inner: Arc::new(Inner { db_path, pool }),
+            inner: Arc::new(Inner {
+                db_path,
+                readers,
+                writer: Mutex::new(writer),
+            }),
         })
     }
 
@@ -198,7 +270,7 @@ impl SqliteStore {
     /// expose this as an explicit admin operation rather than running
     /// it on every shutdown.
     pub fn vacuum(&self) -> Result<(), AwsError> {
-        let conn = self.conn()?;
+        let conn = self.writer();
         conn.execute("VACUUM", []).map_err(sqlite_err)?;
         Ok(())
     }
@@ -217,16 +289,24 @@ impl SqliteStore {
     /// truncated; that is expected mid-burst and the caller simply
     /// retries on its next tick.
     pub fn checkpoint_truncate(&self) -> Result<WalCheckpoint, AwsError> {
-        let conn = self.conn()?;
-        let (busy, log_frames, checkpointed_frames) = conn
-            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, i64>(2)?,
-                ))
-            })
+        let conn = self.writer();
+        // Shrink the busy window for the checkpoint only. TRUNCATE
+        // waits for readers to drain, and it holds the writer mutex
+        // while it waits, so the full `WRITER_BUSY_TIMEOUT` here would
+        // stall every write behind a busy WAL.
+        conn.busy_timeout(CHECKPOINT_BUSY_TIMEOUT)
             .map_err(sqlite_err)?;
+        let row = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        });
+        // Restore before propagating, so a failed checkpoint doesn't
+        // leave the writer with a 250 ms busy window for good.
+        conn.busy_timeout(WRITER_BUSY_TIMEOUT).map_err(sqlite_err)?;
+        let (busy, log_frames, checkpointed_frames) = row.map_err(sqlite_err)?;
         Ok(WalCheckpoint {
             busy: busy != 0,
             log_frames,
@@ -234,11 +314,26 @@ impl SqliteStore {
         })
     }
 
-    fn conn(&self) -> Result<Conn, AwsError> {
+    /// Take a read-only connection from the pool.
+    fn reader(&self) -> Result<Reader, AwsError> {
         self.inner
-            .pool
+            .readers
             .get()
-            .map_err(|e| AwsError::internal(format!("DynamoDB pool acquire failed: {e}")))
+            .map_err(|e| AwsError::internal(format!("DynamoDB reader acquire failed: {e}")))
+    }
+
+    /// Take the write connection, blocking until it is free.
+    ///
+    /// A poisoned mutex is recovered rather than propagated: the only
+    /// way to poison it is a panic inside a write, and rusqlite's
+    /// `Transaction` rolls back on unwind, so the connection is left
+    /// consistent. Failing every subsequent write because one
+    /// operation panicked would be strictly worse.
+    fn writer(&self) -> MutexGuard<'_, Connection> {
+        self.inner
+            .writer
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     // -----------------------------------------------------------------
@@ -257,7 +352,7 @@ impl SqliteStore {
         pk: &str,
         sk: &str,
     ) -> Result<Option<Value>, AwsError> {
-        let conn = self.conn()?;
+        let conn = self.reader()?;
         let row: Option<String> = conn
             .query_row(
                 "SELECT attrs_json FROM items
@@ -287,7 +382,7 @@ impl SqliteStore {
         attrs: &Value,
         gsi_keys: &[(Option<String>, Option<String>); MAX_GSI_SLOTS],
     ) -> Result<(), AwsError> {
-        let conn = self.conn()?;
+        let conn = self.writer();
         let attrs_json = serde_json::to_string(attrs).map_err(json_err)?;
         // Build the SQL once per call. Could be cached behind OnceLock.
         // The column count never changes. But `format!` is cheap relative
@@ -333,7 +428,7 @@ impl SqliteStore {
         pk: &str,
         sk: &str,
     ) -> Result<bool, AwsError> {
-        let conn = self.conn()?;
+        let conn = self.writer();
         let n = conn
             .execute(
                 "DELETE FROM items
@@ -399,7 +494,7 @@ impl SqliteStore {
 
     /// Row count for a table (cheap. Covered by the PRIMARY KEY index).
     pub fn count_items(&self, account: &str, region: &str, table: &str) -> Result<u64, AwsError> {
-        let conn = self.conn()?;
+        let conn = self.reader()?;
         let n: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM items
@@ -458,7 +553,7 @@ impl SqliteStore {
         // Coalesce NULL (hash-only GSI) to '' so ORDER BY and the resume
         // predicate share one total order over the index sort key.
         let sk_expr = format!("COALESCE({sk_col}, '')");
-        let conn = self.conn()?;
+        let conn = self.reader()?;
         let order = if forward { "ASC" } else { "DESC" };
         let cmp = if forward { ">" } else { "<" };
 
@@ -523,7 +618,7 @@ impl SqliteStore {
     where
         F: FnMut(&str, Value) -> Result<bool, AwsError>,
     {
-        let conn = self.conn()?;
+        let conn = self.reader()?;
         let order = if forward { "ASC" } else { "DESC" };
 
         // Two query shapes. With vs. without an exclusive-start sort key.
@@ -583,7 +678,7 @@ impl SqliteStore {
     where
         F: FnMut(&str, &str, Value) -> Result<bool, AwsError>,
     {
-        let conn = self.conn()?;
+        let conn = self.reader()?;
         let sql = match start_after {
             Some(_) => {
                 "SELECT pk, sk, attrs_json FROM items
@@ -629,7 +724,7 @@ impl SqliteStore {
         region: &str,
         table: &str,
     ) -> Result<u64, AwsError> {
-        let conn = self.conn()?;
+        let conn = self.writer();
         let n = conn
             .execute(
                 "DELETE FROM items
@@ -642,7 +737,7 @@ impl SqliteStore {
 
     /// Drop every row for a table. Used by `DeleteTable`.
     pub fn drop_table(&self, account: &str, region: &str, table: &str) -> Result<u64, AwsError> {
-        let conn = self.conn()?;
+        let conn = self.writer();
         let n = conn
             .execute(
                 "DELETE FROM items
@@ -672,7 +767,7 @@ impl SqliteStore {
         table: &str,
         schema: &Value,
     ) -> Result<(), AwsError> {
-        let conn = self.conn()?;
+        let conn = self.writer();
         let schema_json = serde_json::to_string(schema).map_err(json_err)?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -695,7 +790,7 @@ impl SqliteStore {
         region: &str,
         table: &str,
     ) -> Result<Option<Value>, AwsError> {
-        let conn = self.conn()?;
+        let conn = self.reader()?;
         let row: Option<String> = conn
             .query_row(
                 "SELECT schema_json FROM tables
@@ -710,7 +805,7 @@ impl SqliteStore {
     }
 
     pub fn list_table_names(&self, account: &str, region: &str) -> Result<Vec<String>, AwsError> {
-        let conn = self.conn()?;
+        let conn = self.reader()?;
         let mut stmt = conn
             .prepare(
                 "SELECT table_name FROM tables
@@ -741,7 +836,7 @@ impl SqliteStore {
     where
         F: FnOnce(&WriteTx<'_>) -> Result<T, AwsError>,
     {
-        let mut conn = self.conn()?;
+        let mut conn = self.writer();
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sqlite_err)?;
@@ -767,7 +862,7 @@ impl SqliteStore {
     where
         F: FnOnce(&ReadTx<'_>) -> Result<T, AwsError>,
     {
-        let mut conn = self.conn()?;
+        let mut conn = self.reader()?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .map_err(sqlite_err)?;
@@ -915,14 +1010,12 @@ impl<'tx> ReadTx<'tx> {
     }
 }
 
-/// Connection initialiser run by the r2d2 pool whenever it spins up
-/// a new connection. Applies the same PRAGMAs the legacy per-query
-/// `open_conn` did, but with a leaner memory profile. Connections
-/// are long-lived now, so cache + mmap budgets multiply by pool size
-/// rather than concurrent-query count.
-fn apply_pragmas(conn: &mut rusqlite::Connection) -> Result<(), rusqlite::Error> {
-    // WAL mode is sticky on the file, but re-setting per-connection is
-    // cheap and ensures synchronous = NORMAL applies to every reader.
+/// Initialise the single write connection. This is the only place
+/// `journal_mode` and `wal_autocheckpoint` are set: both are
+/// write-side properties, and a read-only connection cannot change
+/// either.
+fn apply_writer_pragmas(conn: &mut Connection) -> Result<(), rusqlite::Error> {
+    conn.busy_timeout(WRITER_BUSY_TIMEOUT)?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.execute_batch(&format!(
@@ -934,8 +1027,53 @@ fn apply_pragmas(conn: &mut rusqlite::Connection) -> Result<(), rusqlite::Error>
     Ok(())
 }
 
+/// Initialiser run by the r2d2 pool whenever it spins up a new
+/// read-only connection. Connections are long-lived, so the cache and
+/// mmap budgets multiply by pool size rather than by concurrent-query
+/// count.
+fn apply_reader_pragmas(conn: &mut Connection) -> Result<(), rusqlite::Error> {
+    conn.busy_timeout(READER_BUSY_TIMEOUT)?;
+    conn.execute_batch(&format!(
+        "PRAGMA temp_store = MEMORY;
+         PRAGMA mmap_size  = {MMAP_SIZE_BYTES};
+         PRAGMA cache_size = {CACHE_SIZE_KIB};"
+    ))?;
+    Ok(())
+}
+
+/// Map a rusqlite failure onto an AWS error.
+///
+/// `SQLITE_BUSY` / `SQLITE_LOCKED` mean the database was momentarily
+/// contended, not that the request was bad. With writes serialised
+/// in-process these should be unreachable, but an external process
+/// holding the file can still produce them. DynamoDB's own transient
+/// failure shape is `InternalServerError`, which every AWS SDK
+/// retries with backoff, so surface that instead of an opaque
+/// internal error the caller would give up on.
 fn sqlite_err(e: rusqlite::Error) -> AwsError {
+    if is_contention(&e) {
+        return AwsError::server_error(
+            "InternalServerError",
+            format!("The storage layer was busy; retry the request. ({e})"),
+        );
+    }
     AwsError::internal(format!("DynamoDB sqlite error: {e}"))
+}
+
+/// True when `e` is a lock-contention failure rather than a real
+/// error. Matches both the plain and extended result codes.
+fn is_contention(e: &rusqlite::Error) -> bool {
+    use rusqlite::ErrorCode;
+    matches!(
+        e,
+        rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error {
+                code: ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked,
+                ..
+            },
+            _
+        )
+    )
 }
 
 fn json_err(e: serde_json::Error) -> AwsError {
@@ -970,6 +1108,58 @@ mod tests {
             .get_item("acct", "us-east-1", "t", "pk1", "sk1")
             .unwrap();
         assert_eq!(got, Some(json!({"x": 1})));
+    }
+
+    /// The reader/writer split exists so that concurrent load produces a
+    /// queue rather than a pile of `SQLITE_BUSY` failures. Sixteen
+    /// threads is comfortably more than the reader pool's floor, so this
+    /// exercises both pool exhaustion and writer hand-off.
+    #[test]
+    fn concurrent_readers_and_writers_never_surface_lock_errors() {
+        let store = SqliteStore::in_memory().unwrap();
+        store
+            .put_item("a", "r", "t", "seed", "", &json!({"v": 0}), &empty_gsi())
+            .unwrap();
+
+        const THREADS: usize = 16;
+        const OPS: usize = 50;
+
+        let handles: Vec<_> = (0..THREADS)
+            .map(|i| {
+                let store = store.clone();
+                std::thread::spawn(move || {
+                    for n in 0..OPS {
+                        store
+                            .put_item(
+                                "a",
+                                "r",
+                                "t",
+                                &format!("p{i}"),
+                                &format!("s{n}"),
+                                &json!({"v": n}),
+                                &empty_gsi(),
+                            )
+                            .expect("write under contention");
+                        // Interleave a read so readers and the writer are
+                        // in flight against each other, not just serialised
+                        // phases.
+                        let seed = store
+                            .get_item("a", "r", "t", "seed", "")
+                            .expect("read under contention");
+                        assert_eq!(seed, Some(json!({"v": 0})));
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().expect("worker thread panicked");
+        }
+
+        assert_eq!(
+            store.count_items("a", "r", "t").unwrap(),
+            (THREADS * OPS) as u64 + 1,
+            "every write landed exactly once"
+        );
     }
 
     #[test]

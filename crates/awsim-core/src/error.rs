@@ -134,6 +134,21 @@ impl AwsError {
         }
     }
 
+    /// A 500 with a caller-chosen error code, for services whose
+    /// Smithy model names its own server-side failure shape (DynamoDB's
+    /// `InternalServerError`, for example). SDK retry classifiers key
+    /// off that code, so returning the service's own spelling is what
+    /// makes the call retryable.
+    pub fn server_error(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            code: code.into(),
+            message: message.into(),
+            error_type: ErrorType::Receiver,
+            extras: None,
+        }
+    }
+
     pub fn not_implemented(operation: &str) -> Self {
         Self {
             status: StatusCode::NOT_IMPLEMENTED,
