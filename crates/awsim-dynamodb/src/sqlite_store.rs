@@ -247,6 +247,7 @@ impl SqliteStore {
         embedded_migrations::migrations::runner()
             .run(&mut writer)
             .map_err(|e| AwsError::internal(format!("DynamoDB migration failed: {e}")))?;
+        backfill_numeric_keys(&mut writer)?;
 
         let manager = SqliteConnectionManager::file(&db_path)
             .with_flags(
@@ -1064,6 +1065,193 @@ impl<'tx> ReadTx<'tx> {
         row.map(|s| serde_json::from_str(&s).map_err(json_err))
             .transpose()
     }
+}
+
+/// `PRAGMA user_version` once numeric key columns hold the
+/// order-preserving encoding. Databases below this are rewritten once
+/// on open.
+const NUMERIC_KEY_SCHEMA_VERSION: i64 = 1;
+
+/// Rewrite `N`-typed key columns written before the order-preserving
+/// encoding existed.
+///
+/// Older databases stored a numeric key as its raw text, which sorts
+/// lexicographically (`"10"` before `"9"`). Leaving those rows alone
+/// would be worse than the original bug: new writes would use the
+/// encoded form, so the two would interleave arbitrarily and a point
+/// lookup for an old row would miss entirely.
+///
+/// Gated on `PRAGMA user_version` so it runs exactly once. Anything it
+/// cannot encode is left untouched, and a row whose new key collides
+/// with an existing one is skipped rather than dropped: a collision
+/// means the table already held two spellings of one DynamoDB key
+/// (`1` and `1.0`), which the encoding correctly unifies.
+fn backfill_numeric_keys(conn: &mut Connection) -> Result<(), AwsError> {
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .map_err(sqlite_err)?;
+    if version >= NUMERIC_KEY_SCHEMA_VERSION {
+        return Ok(());
+    }
+
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(sqlite_err)?;
+
+    // (account, region, table_name, schema_json)
+    let targets: Vec<(String, String, String, String)> = {
+        let mut stmt = tx
+            .prepare("SELECT account, region, table_name, schema_json FROM tables")
+            .map_err(sqlite_err)?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .map_err(sqlite_err)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(sqlite_err)?
+    };
+
+    let mut rewritten = 0u64;
+    for (account, region, table, schema_json) in targets {
+        let Ok(schema) = serde_json::from_str::<Value>(&schema_json) else {
+            continue;
+        };
+
+        if numeric_range_key(&schema, schema.get("key_schema")) {
+            rewritten += rewrite_key_column(&tx, "sk", &account, &region, &table, true)?;
+        }
+        if let Some(gsis) = schema.get("gsi").and_then(Value::as_array) {
+            for (slot, gsi) in gsis.iter().take(MAX_GSI_SLOTS).enumerate() {
+                if numeric_range_key(&schema, gsi.get("key_schema")) {
+                    let col = format!("gsi{}_sk", slot + 1);
+                    rewritten += rewrite_key_column(&tx, &col, &account, &region, &table, false)?;
+                }
+            }
+        }
+    }
+
+    tx.pragma_update(None, "user_version", NUMERIC_KEY_SCHEMA_VERSION)
+        .map_err(sqlite_err)?;
+    tx.commit().map_err(sqlite_err)?;
+
+    if rewritten > 0 {
+        tracing::info!(
+            keys = rewritten,
+            "DynamoDB: re-encoded numeric key columns for ordered comparison"
+        );
+    }
+    Ok(())
+}
+
+/// True when the given key schema's RANGE attribute is declared `N` in
+/// the table's attribute definitions.
+fn numeric_range_key(schema: &Value, key_schema: Option<&Value>) -> bool {
+    let Some(elements) = key_schema.and_then(Value::as_array) else {
+        return false;
+    };
+    let Some(range_name) = elements
+        .iter()
+        .find(|e| e.get("key_type").and_then(Value::as_str) == Some("RANGE"))
+        .and_then(|e| e.get("attribute_name"))
+        .and_then(Value::as_str)
+    else {
+        return false;
+    };
+    schema
+        .get("attribute_definitions")
+        .and_then(Value::as_array)
+        .map(|defs| {
+            defs.iter().any(|d| {
+                d.get("attribute_name").and_then(Value::as_str) == Some(range_name)
+                    && d.get("attribute_type").and_then(Value::as_str) == Some("N")
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Re-encode one key column for one table, returning how many rows were
+/// rewritten.
+///
+/// `items` is `WITHOUT ROWID`, so rows are addressed by their real
+/// primary key `(account, region, table_name, pk, sk)`.
+///
+/// `part_of_primary_key` selects the collision handling: rewriting the
+/// base `sk` moves the row within the primary key, so a clash with an
+/// existing row is skipped rather than failing the whole migration.
+fn rewrite_key_column(
+    tx: &rusqlite::Transaction<'_>,
+    column: &str,
+    account: &str,
+    region: &str,
+    table: &str,
+    part_of_primary_key: bool,
+) -> Result<u64, AwsError> {
+    // (pk, sk, value-to-re-encode)
+    let rows: Vec<(String, String, Option<String>)> = {
+        let mut stmt = tx
+            .prepare(&format!(
+                "SELECT pk, sk, {column} FROM items
+                 WHERE account = ?1 AND region = ?2 AND table_name = ?3"
+            ))
+            .map_err(sqlite_err)?;
+        let mapped = stmt
+            .query_map(params![account, region, table], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .map_err(sqlite_err)?;
+        mapped.collect::<Result<Vec<_>, _>>().map_err(sqlite_err)?
+    };
+
+    let mut n = 0u64;
+    for (pk, sk, current) in rows {
+        let Some(current) = current else { continue };
+        if already_encoded(&current) {
+            continue;
+        }
+        let Some(encoded) = crate::numkey::encode(&current) else {
+            continue;
+        };
+        let updated = tx.execute(
+            &format!(
+                "UPDATE items SET {column} = ?1
+                 WHERE account = ?2 AND region = ?3 AND table_name = ?4
+                   AND pk = ?5 AND sk = ?6"
+            ),
+            params![encoded, account, region, table, pk, sk],
+        );
+        match updated {
+            Ok(_) => n += 1,
+            Err(e) if part_of_primary_key && is_constraint_violation(&e) => {
+                tracing::warn!(
+                    table,
+                    "DynamoDB: two spellings of one numeric key collapsed on re-encode; keeping the first"
+                );
+            }
+            Err(e) => return Err(sqlite_err(e)),
+        }
+    }
+    Ok(n)
+}
+
+/// True when a stored key already carries the order-preserving form.
+///
+/// The encoding is fixed width and all digits. A raw DynamoDB number of
+/// that same length cannot be confused for one: it would need 42
+/// characters of pure digits, which exceeds the 38 significant digits
+/// the validator permits.
+fn already_encoded(value: &str) -> bool {
+    value.len() == crate::numkey::ENCODED_LEN && value.bytes().all(|b| b.is_ascii_digit())
+}
+
+fn is_constraint_violation(e: &rusqlite::Error) -> bool {
+    matches!(
+        e,
+        rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error {
+                code: rusqlite::ErrorCode::ConstraintViolation,
+                ..
+            },
+            _
+        )
+    )
 }
 
 /// Initialise the single write connection. This is the only place

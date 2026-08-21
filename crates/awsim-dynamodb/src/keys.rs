@@ -114,20 +114,38 @@ fn attribute_type_tag(value: &Value) -> Option<&str> {
     value.as_object()?.keys().next().map(|s| s.as_str())
 }
 
+/// Convert a key AttributeValue into the string stored in its key
+/// column.
+///
+/// `N` values are rewritten by [`crate::numkey::encode`] so the TEXT
+/// column orders numerically instead of lexicographically; `S` and `B`
+/// are stored as-is.
+///
+/// Every storage key must flow through here. Writes, point lookups, and
+/// `ExclusiveStartKey` cursors all compare against these columns, so if
+/// any one of them derived the string differently it would look up a
+/// key that does not exist.
+pub fn storage_key(value: &Value) -> Option<String> {
+    if let Some(n) = value.get("N").and_then(Value::as_str) {
+        // An unencodable number means input the validator should
+        // already have rejected. Store it verbatim rather than
+        // inventing a key: worse ordering, but never a lost item.
+        return Some(crate::numkey::encode(n).unwrap_or_else(|| n.to_string()));
+    }
+    extract_scalar_str(value).map(str::to_string)
+}
+
 fn key_value(schema: &[KeySchemaElement], item: &DynamoItem, key_type: &str) -> Option<String> {
     let attr = schema.iter().find(|k| k.key_type == key_type)?;
     let raw = item.get(&attr.attribute_name)?;
-    extract_scalar_str(raw).map(|s| s.to_string())
+    storage_key(raw)
 }
 
 fn gsi_key_pair(idx: &GlobalSecondaryIndex, item: &DynamoItem) -> (Option<String>, Option<String>) {
     let mut pk = None;
     let mut sk = None;
     for ke in &idx.key_schema {
-        let val = item
-            .get(&ke.attribute_name)
-            .and_then(extract_scalar_str)
-            .map(|s| s.to_string());
+        let val = item.get(&ke.attribute_name).and_then(storage_key);
         match ke.key_type.as_str() {
             "HASH" => pk = val,
             "RANGE" => sk = val,

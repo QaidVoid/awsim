@@ -3,6 +3,7 @@
 pub mod error;
 mod expressions;
 mod keys;
+mod numkey;
 mod operations;
 mod sqlite_store;
 mod state;

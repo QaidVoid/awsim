@@ -10,7 +10,7 @@ use crate::{
     },
     keys::storage_value_to_item,
     sqlite_store::{SkBound, SqliteStore},
-    state::{DynamoItem, DynamoState, extract_scalar_str},
+    state::{DynamoItem, DynamoState},
     throttle::BucketKind,
 };
 
@@ -32,17 +32,33 @@ use crate::operations::item::{estimate_item_bytes, item_to_json};
 /// answer still comes from [`evaluate_condition`]. A too-wide bound is
 /// merely slower; a too-narrow one would drop matching items.
 ///
-/// Only `S`-typed values are translated. `sk` is stored as raw text, so
-/// a numeric sort key compares lexicographically in SQL (`"10" < "9"`),
-/// which does not match DynamoDB's numeric ordering.
+/// Values are translated through [`crate::keys::storage_key`], the same
+/// encoder writes use, so `S` and `N` sort keys both compare correctly
+/// as stored text. `B` keys are stored base64, whose text order does not
+/// match binary order, so they get no bound.
 pub(crate) fn sk_bound_from_condition(
     cond: &ConditionExpr,
     sk_name: &str,
     expr_attr_names: &HashMap<String, String>,
     expr_attr_values: &serde_json::Map<String, Value>,
 ) -> Option<SkBound> {
-    // Only the S value of a placeholder is usable; anything else (N, B,
-    // a missing placeholder) means "no bound".
+    // Comparable as stored text: `S` is stored verbatim and its byte
+    // order is DynamoDB's order, and `N` goes through the
+    // order-preserving encoder. `B` is stored base64, whose text order
+    // does not match the underlying binary order, so it gets no bound.
+    let bound_value = |op: &Operand| -> Option<String> {
+        let Operand::Value(name) = op else {
+            return None;
+        };
+        let v = expr_attr_values.get(name)?;
+        if v.get("S").is_some() || v.get("N").is_some() {
+            crate::keys::storage_key(v)
+        } else {
+            None
+        }
+    };
+    // `begins_with` is a string operation; a prefix range is meaningless
+    // over an encoded number.
     let s_value = |op: &Operand| -> Option<String> {
         match op {
             Operand::Value(name) => expr_attr_values
@@ -72,7 +88,7 @@ pub(crate) fn sk_bound_from_condition(
             .iter()
             .find_map(|c| sk_bound_from_condition(c, sk_name, expr_attr_names, expr_attr_values)),
         ConditionExpr::Comparison { left, op, right } if is_sk(left) => {
-            let v = s_value(right)?;
+            let v = bound_value(right)?;
             Some(match op {
                 CompareOp::Eq => SkBound {
                     lower: Some((v.clone(), true)),
@@ -486,21 +502,21 @@ pub fn query(
     // since GSI sort keys repeat.
     let esk_base_pk = exclusive_start_key.as_ref().and_then(|esk| {
         esk.get(&base_hash_name)
-            .and_then(extract_scalar_str)
+            .and_then(crate::keys::storage_key)
             .map(|s| s.to_string())
     });
     let esk_base_sk = exclusive_start_key.as_ref().and_then(|esk| {
         base_range_name
             .as_deref()
             .and_then(|br| esk.get(br))
-            .and_then(extract_scalar_str)
+            .and_then(crate::keys::storage_key)
             .map(|s| s.to_string())
     });
     let esk_index_sk = exclusive_start_key.as_ref().and_then(|esk| {
         range_key_name
             .as_deref()
             .and_then(|rk| esk.get(rk))
-            .and_then(extract_scalar_str)
+            .and_then(crate::keys::storage_key)
             .map(|s| s.to_string())
     });
 
@@ -647,12 +663,14 @@ pub fn query(
         // table scan (matches the legacy in-memory behaviour). Resume on the
         // base primary key, which is what scan_table orders by.
         let scan_start = exclusive_start_key.as_ref().and_then(|esk| {
-            let pk = esk.get(&base_hash_name).and_then(extract_scalar_str)?;
+            let pk = esk
+                .get(&base_hash_name)
+                .and_then(crate::keys::storage_key)?;
             let sk = base_range_name
                 .as_deref()
                 .and_then(|rk| esk.get(rk))
-                .and_then(extract_scalar_str)
-                .unwrap_or("");
+                .and_then(crate::keys::storage_key)
+                .unwrap_or_default();
             Some((pk.to_string(), sk.to_string()))
         });
         let scan_start_ref = scan_start.as_ref().map(|(p, s)| (p.as_str(), s.as_str()));
@@ -792,12 +810,12 @@ pub fn scan(
     // Translate ExclusiveStartKey -> (pk, sk) tuple SQLite uses for
     // resume. Tables with no sort key encode sk as the empty string.
     let scan_start = exclusive_start_key.as_ref().and_then(|esk| {
-        let pk = esk.get(&hash_key_name).and_then(extract_scalar_str)?;
+        let pk = esk.get(&hash_key_name).and_then(crate::keys::storage_key)?;
         let sk = range_key_name
             .as_deref()
             .and_then(|rk| esk.get(rk))
-            .and_then(extract_scalar_str)
-            .unwrap_or("");
+            .and_then(crate::keys::storage_key)
+            .unwrap_or_default();
         Some((pk.to_string(), sk.to_string()))
     });
 
