@@ -406,7 +406,7 @@ async fn dispatch_aws_non_proxy(
 
     let result = match invoke_lambda_raw(state, method, uri, &m.integration_uri, payload).await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let upstream_body = match &result {
         serde_json::Value::String(s) => s.clone(),
@@ -464,7 +464,7 @@ async fn dispatch_http_non_proxy(
     .await
     {
         Ok(resp) => resp,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     let upstream_body = String::from_utf8_lossy(&upstream_resp.body).into_owned();
@@ -599,7 +599,7 @@ async fn perform_http(
     headers: &HeaderMap,
     body: &Bytes,
     query_string: &str,
-) -> Result<UpstreamResponse, Response<Body>> {
+) -> Result<UpstreamResponse, Box<Response<Body>>> {
     let target_url = if query_string.is_empty() {
         integration_uri.to_string()
     } else if integration_uri.contains('?') {
@@ -611,10 +611,10 @@ async fn perform_http(
     let reqwest_method = match reqwest::Method::from_bytes(method.as_str().as_bytes()) {
         Ok(m) => m,
         Err(e) => {
-            return Err(error_response(
+            return Err(Box::new(error_response(
                 StatusCode::BAD_GATEWAY,
                 &format!("Invalid method for upstream: {e}"),
-            ));
+            )));
         }
     };
 
@@ -677,15 +677,15 @@ async fn invoke_lambda_raw(
     uri: &Uri,
     integration_uri: &str,
     payload: serde_json::Value,
-) -> Result<serde_json::Value, Response<Body>> {
+) -> Result<serde_json::Value, Box<Response<Body>>> {
     let lambda_handler = match &state.lambda {
         Some(h) => Arc::clone(h),
         None => {
             warn!("Lambda service not registered. Cannot invoke function");
-            return Err(error_response(
+            return Err(Box::new(error_response(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "Lambda service not registered",
-            ));
+            )));
         }
     };
     let function_name = extract_function_name(integration_uri);
@@ -719,10 +719,10 @@ async fn invoke_lambda_raw(
                 error = %e.message,
                 "Lambda invocation failed"
             );
-            error_response(
+            Box::new(error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 &format!("Lambda invocation error: {}", e.message),
-            )
+            ))
         })
 }
 
