@@ -14,8 +14,41 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  check-changes:
+    name: Check for new commits
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare HEAD with the nightly tag
+        id: check
+        shell: bash
+        run: |
+          # A manual run always rebuilds, so a broken nightly can be
+          # re-cut without having to push an empty commit first.
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The publish job force-pushes `nightly` onto the commit it
+          # built, so the tag pointing at HEAD means main has not moved
+          # since. Fetch it explicitly: the checkout above is shallow
+          # and carries no tags.
+          git fetch origin tag nightly --no-tags || true
+          tag_commit=$(git rev-parse -q --verify 'nightly^{commit}' || true)
+          if [ -n "$tag_commit" ] && [ "$tag_commit" = "$(git rev-parse HEAD)" ]; then
+            echo "No new commits since the last nightly; skipping"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
     name: Build (${{ matrix.target }})
+    needs: check-changes
+    if: ${{ needs.check-changes.outputs.changed == 'true' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -91,8 +124,11 @@ jobs:
 
   publish:
     name: Republish nightly release
-    needs: build
-    if: ${{ !cancelled() }}
+    needs: [check-changes, build]
+    # `!cancelled()` lets the release go out when only some targets
+    # built, so it has to re-assert the changed check too. Without it
+    # this job would still publish on a night where `build` was skipped.
+    if: ${{ !cancelled() && needs.check-changes.outputs.changed == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -159,6 +195,8 @@ jobs:
 
   docker:
     name: Build container image (${{ matrix.arch }})
+    needs: check-changes
+    if: ${{ needs.check-changes.outputs.changed == 'true' }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
