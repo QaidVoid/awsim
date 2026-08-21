@@ -1729,22 +1729,33 @@ mod tests {
         let sqlite = SqliteStore::in_memory().unwrap();
         let ctx = ctx();
 
-        // Each item is well under 1 KiB, so each PutItem charges 1
-        // WCU. 300 succeed, 301st throttles.
-        for i in 0..300 {
+        // Each item is well under 1 KiB, so each PutItem charges 1 WCU
+        // against the 300-token burst.
+        //
+        // Deliberately loop until a write is actually refused rather
+        // than asserting that exactly the 301st fails. The bucket
+        // refills on wall-clock time, so on a loaded machine the drain
+        // loop hands a few tokens back mid-flight and a fixed count is
+        // a race. At 1 WCU/s refill, 2000 attempts cannot outrun the
+        // drain, so this still fails loudly if throttling is broken.
+        let mut refusal = None;
+        for i in 0..2000 {
             let input = json!({
                 "TableName": "t",
                 "Item": { "pk": {"S": "p"}, "sk": {"S": format!("{i}")} }
             });
-            put_item(&state, &sqlite, &input, &ctx)
-                .unwrap_or_else(|e| panic!("put {i} failed: {}", e.message));
+            if let Err(e) = put_item(&state, &sqlite, &input, &ctx) {
+                refusal = Some((i, e));
+                break;
+            }
         }
-        let input = json!({
-            "TableName": "t",
-            "Item": { "pk": {"S": "p"}, "sk": {"S": "exhausted"} }
-        });
-        let err = put_item(&state, &sqlite, &input, &ctx).unwrap_err();
+        let (i, err) =
+            refusal.expect("a PROVISIONED table must refuse a write once the burst is spent");
         assert_eq!(err.code, "ProvisionedThroughputExceededException");
+        assert!(
+            i >= 300,
+            "burst window is 300 tokens, so the first {i} writes should have been allowed"
+        );
     }
 
     /// PAY_PER_REQUEST is the documented "no throttling" path: the
