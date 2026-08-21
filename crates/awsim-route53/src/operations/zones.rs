@@ -22,9 +22,10 @@ fn default_records(name: &str) -> Vec<ResourceRecordSet> {
             name: name.to_string(),
             r#type: "SOA".to_string(),
             ttl: Some(900),
-            resource_records: vec![format!(
+            resource_records: vec![
                 "ns-1.awsim.invalid. awsdns-hostmaster.amazon.com. 1 7200 900 1209600 86400"
-            )],
+                    .to_string(),
+            ],
             alias_target: None,
         },
         ResourceRecordSet {
