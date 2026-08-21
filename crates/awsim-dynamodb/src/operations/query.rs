@@ -587,9 +587,14 @@ pub fn query(
             // non-key attribute even if the caller asks for it. The index
             // view is also what the 1 MiB cap is charged against. Examined
             // bytes, not just matched bytes.
-            let after_index = match &index_projection {
-                Some(p) => p.filter(&item),
-                None => item.clone(),
+            // Borrowed on the base-table path: there is no index view to
+            // apply, so the "after index" item is the item itself. Under
+            // a FilterExpression most examined items never reach the
+            // response, and deep-cloning each one just to measure it was
+            // the dominant cost of a scan.
+            let after_index: std::borrow::Cow<'_, DynamoItem> = match &index_projection {
+                Some(p) => std::borrow::Cow::Owned(p.filter(&item)),
+                None => std::borrow::Cow::Borrowed(&item),
             };
             if passes_filter {
                 let projected =

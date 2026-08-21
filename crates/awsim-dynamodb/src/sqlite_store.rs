@@ -164,15 +164,25 @@ const READER_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// that the checkpointer retries on its next tick.
 const CHECKPOINT_BUSY_TIMEOUT: Duration = Duration::from_millis(250);
 
-/// Per-connection cache size in KiB (negative = absolute KiB
-/// rather than pages). 2 MiB per connection. Small caches are
-/// fine because the OS page cache backs unmapped pages.
-const CACHE_SIZE_KIB: i64 = -2 * 1024;
+/// Per-connection cache size in KiB (negative = absolute KiB rather
+/// than pages).
+///
+/// Multiplied by the reader pool, so this is the one knob here that
+/// costs real memory per connection. Kept modest because `mmap_size`
+/// below lets the OS page cache do most of the caching, shared across
+/// every connection instead of duplicated per connection.
+const CACHE_SIZE_KIB: i64 = -8 * 1024;
 
-/// Per-connection mmap window cap. Lazy mapping. Only resident
-/// as the DB grows AND pages get touched, but the OS still bills
-/// the mapping toward RSS so we keep it tight.
-const MMAP_SIZE_BYTES: i64 = 16 * 1024 * 1024;
+/// Per-connection mmap window cap.
+///
+/// Generous on purpose. Mapping is lazy: pages count toward RSS only
+/// once touched, so a large window costs nothing on a small database
+/// and keeps a large one out of `pread` syscalls. The previous 16 MiB
+/// was sized for a toy dataset and quietly became a cliff. A database
+/// that outgrew it served nearly every page through a syscall, which
+/// showed up as scans running an order of magnitude slower than the
+/// same query on a small file.
+const MMAP_SIZE_BYTES: i64 = 1024 * 1024 * 1024;
 
 /// WAL auto-checkpoint threshold in pages, matching SQLite's own
 /// default. Every checkpoint is a write-back plus fsync that stalls
