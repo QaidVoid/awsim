@@ -439,34 +439,43 @@ pub async fn dispatch_request(
         )
     });
 
-    let event = RequestEvent {
-        id: request_id.clone(),
-        ts,
-        method: method.to_string(),
-        path: uri.path().to_string(),
-        service: meta.service.clone(),
-        operation: operation.clone(),
-        account_id: meta.account_id.clone(),
-        region: meta.region.clone(),
-        principal_arn: principal_arn.clone(),
-        status_code,
-        duration_ms,
-        request_size,
-        response_size,
-        error_code: error_code.clone(),
-        memory_mb,
-        state_transitions,
-        character_count,
-        read_units,
-        write_units,
-    };
-    state.events.publish(event);
+    // Only built when a live SSE client is attached. With no subscriber
+    // the broadcast drops the event, so the dozen string clones below
+    // would be pure waste on every request.
+    if state.events.subscriber_count() > 0 {
+        let event = RequestEvent {
+            id: request_id.clone(),
+            ts,
+            method: method.to_string(),
+            path: uri.path().to_string(),
+            service: meta.service.clone(),
+            operation: operation.clone(),
+            account_id: meta.account_id.clone(),
+            region: meta.region.clone(),
+            principal_arn: principal_arn.clone(),
+            status_code,
+            duration_ms,
+            request_size,
+            response_size,
+            error_code: error_code.clone(),
+            memory_mb,
+            state_transitions,
+            character_count,
+            read_units,
+            write_units,
+        };
+        state.events.publish(event);
+    }
 
     // Per-API-call event on the cross-service bus, in the canonical
     // shape CloudTrail / EventBridge / AWS Config consumers expect.
     // Empty service name happens for malformed requests that never
     // resolved a handler; skip those - they're not API calls.
-    if !meta.service.is_empty() {
+    //
+    // Skipped entirely when nothing is listening: `publish` would drop
+    // the event anyway, and building the envelope costs a `to_value`
+    // plus a string clone per field on every single request.
+    if !meta.service.is_empty() && state.event_bus.subscriber_count() > 0 {
         let user_agent = headers
             .get(axum::http::header::USER_AGENT)
             .and_then(|v| v.to_str().ok())
@@ -476,15 +485,10 @@ pub async fn dispatch_request(
             event_source: format!("{}.amazonaws.com", meta.service),
             event_name: operation.clone().unwrap_or_default(),
             event_time_epoch: ts,
-            source_ip: state.request_details.get(&request_id).and_then(|d| {
-                d.request_headers.iter().find_map(|h| {
-                    if h.name.eq_ignore_ascii_case("x-forwarded-for") {
-                        Some(h.value.clone())
-                    } else {
-                        None
-                    }
-                })
-            }),
+            source_ip: headers
+                .get("x-forwarded-for")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string),
             user_agent,
             user_identity_arn: principal_arn,
             user_identity_account: Some(meta.account_id.clone()),

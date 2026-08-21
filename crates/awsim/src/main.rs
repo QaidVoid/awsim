@@ -1824,6 +1824,14 @@ async fn serve_with_limits(
             drop(permit);
             continue;
         }
+        // AWS API traffic is small request / small response over a
+        // keep-alive socket, which is exactly the shape Nagle delays.
+        // Left on, a response can sit in the kernel waiting for the
+        // peer's delayed ACK, adding tens of milliseconds to calls that
+        // take microseconds to serve.
+        if let Err(e) = stream.set_nodelay(true) {
+            debug!(error = %e, "could not set TCP_NODELAY on accepted socket");
+        }
         let app = app.clone();
         let tls = tls.clone();
         tokio::spawn(async move {

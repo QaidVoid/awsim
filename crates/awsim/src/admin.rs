@@ -4,8 +4,6 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Json, Response};
-use base64::Engine;
-use bytes::Bytes;
 use serde_json::{Value, json};
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -262,19 +260,9 @@ pub async fn replay_request(State(state): State<AppState>, Path(id): Path<String
         }
     }
 
-    let body_bytes = match &detail.request_body.data_b64 {
-        Some(b64) => match base64::engine::general_purpose::STANDARD.decode(b64) {
-            Ok(b) => Bytes::from(b),
-            Err(e) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({"error": "InvalidBody", "message": e.to_string()})),
-                )
-                    .into_response();
-            }
-        },
-        None => Bytes::new(),
-    };
+    // The capture holds the raw bytes, so replay skips the base64
+    // round-trip (and the decode failure it used to have to handle).
+    let body_bytes = detail.request_body.data().cloned().unwrap_or_default();
 
     let (response, new_id) =
         awsim_core::gateway::dispatch_request(&state, method, uri, headers, body_bytes).await;

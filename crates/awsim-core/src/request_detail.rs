@@ -24,11 +24,17 @@ pub struct CapturedHeader {
     pub value: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct CapturedBody {
-    /// `Some` when the body fit the cap (or was truncated to it). `None`
-    /// when capture was skipped entirely (e.g. empty body).
-    pub data_b64: Option<String>,
+    /// The captured slice, or `None` when capture was skipped entirely
+    /// (e.g. empty body).
+    ///
+    /// Held as raw [`Bytes`] and base64-encoded only when the entry is
+    /// serialized. Capture happens on every request; serialization
+    /// happens when somebody actually opens the inspect drawer, which
+    /// is rare. Encoding eagerly would charge every request for a
+    /// payload almost none of them ever display.
+    data: Option<Bytes>,
     /// Total size of the original body before truncation.
     pub size: u64,
     /// True if the captured slice is shorter than `size`.
@@ -42,13 +48,37 @@ impl CapturedBody {
     /// renders the message as the body so users see *why* there's
     /// no data.
     pub fn placeholder(message: &str) -> Self {
-        use base64::Engine;
-        let encoded = base64::engine::general_purpose::STANDARD.encode(message.as_bytes());
         Self {
-            data_b64: Some(encoded),
+            data: Some(Bytes::copy_from_slice(message.as_bytes())),
             size: message.len() as u64,
             truncated: false,
         }
+    }
+
+    /// The captured bytes, or `None` when the body was empty.
+    ///
+    /// In-process consumers (request replay) should use this rather
+    /// than round-tripping through the serialized base64 form.
+    pub fn data(&self) -> Option<&Bytes> {
+        self.data.as_ref()
+    }
+}
+
+/// Serialized shape is unchanged from when the bytes were held
+/// pre-encoded: a `data_b64` string field, null for an empty body. The
+/// admin API and the UI both key off that name.
+impl Serialize for CapturedBody {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut out = serializer.serialize_struct("CapturedBody", 3)?;
+        let encoded = self
+            .data
+            .as_ref()
+            .map(|b| base64::engine::general_purpose::STANDARD.encode(b));
+        out.serialize_field("data_b64", &encoded)?;
+        out.serialize_field("size", &self.size)?;
+        out.serialize_field("truncated", &self.truncated)?;
+        out.end()
     }
 }
 
@@ -149,22 +179,29 @@ pub fn capture_headers(headers: &HeaderMap) -> Vec<CapturedHeader> {
         .collect()
 }
 
-/// Capture a body slice with a hard cap, base64-encoding the bytes so the
-/// store works for both text and binary payloads.
+/// Capture a body slice with a hard cap.
+///
+/// Cheap by construction: [`Bytes::slice`] is a refcount bump plus a
+/// range, so capture copies no payload bytes at all. The base64 encode
+/// that makes the capture work for binary payloads is deferred to
+/// serialization time.
 pub fn capture_body(body: &Bytes, cap: usize) -> CapturedBody {
     let size = body.len() as u64;
     if body.is_empty() {
         return CapturedBody {
-            data_b64: None,
+            data: None,
             size: 0,
             truncated: false,
         };
     }
     let truncated = body.len() > cap;
-    let slice = if truncated { &body[..cap] } else { &body[..] };
-    let data_b64 = base64::engine::general_purpose::STANDARD.encode(slice);
+    let data = if truncated {
+        body.slice(0..cap)
+    } else {
+        body.clone()
+    };
     CapturedBody {
-        data_b64: Some(data_b64),
+        data: Some(data),
         size,
         truncated,
     }
@@ -188,16 +225,8 @@ mod tests {
                 status_code: 200,
                 request_headers: vec![],
                 response_headers: vec![],
-                request_body: CapturedBody {
-                    data_b64: None,
-                    size: 0,
-                    truncated: false,
-                },
-                response_body: CapturedBody {
-                    data_b64: None,
-                    size: 0,
-                    truncated: false,
-                },
+                request_body: capture_body(&Bytes::new(), 32),
+                response_body: capture_body(&Bytes::new(), 32),
             });
         }
         assert!(store.get("r0").is_none(), "oldest evicted");
@@ -211,16 +240,29 @@ mod tests {
         let captured = capture_body(&body, 40);
         assert!(captured.truncated);
         assert_eq!(captured.size, 100);
-        let decoded = base64::engine::general_purpose::STANDARD
-            .decode(captured.data_b64.unwrap())
-            .unwrap();
-        assert_eq!(decoded.len(), 40);
+        assert_eq!(captured.data().unwrap().len(), 40);
     }
 
     #[test]
     fn empty_body_yields_none() {
         let captured = capture_body(&Bytes::new(), 64);
-        assert!(captured.data_b64.is_none());
+        assert!(captured.data().is_none());
         assert!(!captured.truncated);
+    }
+
+    /// The UI and the admin replay endpoint both read `data_b64` off the
+    /// serialized form. Deferring the encode must not change the wire
+    /// shape.
+    #[test]
+    fn serialized_shape_stays_base64() {
+        let captured = capture_body(&Bytes::from_static(b"hello"), 64);
+        let json = serde_json::to_value(&captured).unwrap();
+        assert_eq!(json["data_b64"], "aGVsbG8=");
+        assert_eq!(json["size"], 5);
+        assert_eq!(json["truncated"], false);
+
+        let empty = serde_json::to_value(capture_body(&Bytes::new(), 64)).unwrap();
+        assert!(empty["data_b64"].is_null());
+        assert_eq!(empty["size"], 0);
     }
 }
