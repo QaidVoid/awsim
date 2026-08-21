@@ -288,6 +288,7 @@ fn run_select(
         &ctx.region,
         &table_name,
         None,
+        None,
         |_pk, _sk, attrs| {
             let item = decode_row(attrs)?;
             let keep = match (&where_key, &where_val) {

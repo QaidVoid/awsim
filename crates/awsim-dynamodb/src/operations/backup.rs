@@ -47,6 +47,7 @@ pub fn create_backup(
         &ctx.region,
         table_name,
         None,
+        None,
         |pk, sk, attrs| {
             items.push(BackupItem {
                 pk: pk.to_string(),
@@ -442,6 +443,7 @@ pub fn restore_table_to_point_in_time(
         &ctx.account_id,
         &ctx.region,
         &source_key,
+        None,
         None,
         |pk, sk, attrs| {
             rows.push((pk.to_string(), sk.to_string(), attrs));

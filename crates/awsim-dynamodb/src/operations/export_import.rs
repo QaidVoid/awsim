@@ -132,6 +132,7 @@ fn write_export_objects(
         &ctx.region,
         table_name,
         None,
+        None,
         |_pk, _sk, attrs| {
             data.push_str(&json!({ "Item": attrs }).to_string());
             data.push('\n');

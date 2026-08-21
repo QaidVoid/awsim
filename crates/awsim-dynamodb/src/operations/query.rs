@@ -20,6 +20,17 @@ use super::{
 };
 use crate::operations::item::{estimate_item_bytes, item_to_json};
 
+/// Split an index key schema into its `(hash, range)` attribute names.
+fn index_key_names(schema: &[crate::state::KeySchemaElement]) -> (Option<String>, Option<String>) {
+    let find = |kind: &str| {
+        schema
+            .iter()
+            .find(|k| k.key_type == kind)
+            .map(|k| k.attribute_name.clone())
+    };
+    (find("HASH"), find("RANGE"))
+}
+
 /// Derive an index-friendly `sk` range from a Query's key condition.
 ///
 /// Without this, a Query fetches and JSON-decodes every item in the
@@ -33,25 +44,23 @@ use crate::operations::item::{estimate_item_bytes, item_to_json};
 /// merely slower; a too-narrow one would drop matching items.
 ///
 /// Values are translated through [`crate::keys::storage_key`], the same
-/// encoder writes use, so `S` and `N` sort keys both compare correctly
-/// as stored text. `B` keys are stored base64, whose text order does not
-/// match binary order, so they get no bound.
+/// encoder writes use, so the bound is expressed in exactly the form the
+/// column holds.
 pub(crate) fn sk_bound_from_condition(
     cond: &ConditionExpr,
     sk_name: &str,
     expr_attr_names: &HashMap<String, String>,
     expr_attr_values: &serde_json::Map<String, Value>,
 ) -> Option<SkBound> {
-    // Comparable as stored text: `S` is stored verbatim and its byte
-    // order is DynamoDB's order, and `N` goes through the
-    // order-preserving encoder. `B` is stored base64, whose text order
-    // does not match the underlying binary order, so it gets no bound.
+    // Every scalar key type is now stored in a form whose byte order
+    // matches DynamoDB's, so all three can be compared directly against
+    // the stored column. Non-scalar placeholders get no bound.
     let bound_value = |op: &Operand| -> Option<String> {
         let Operand::Value(name) = op else {
             return None;
         };
         let v = expr_attr_values.get(name)?;
-        if v.get("S").is_some() || v.get("N").is_some() {
+        if v.get("S").is_some() || v.get("N").is_some() || v.get("B").is_some() {
             crate::keys::storage_key(v)
         } else {
             None
@@ -679,6 +688,7 @@ pub fn query(
             &ctx.region,
             table_name,
             scan_start_ref,
+            None,
             |_pk, _sk, attrs| {
                 let item = storage_value_to_item(attrs)
                     .ok_or_else(|| AwsError::internal("DynamoDB stored attrs is not an object"))?;
@@ -771,10 +781,64 @@ pub fn scan(
     // ConsumedCapacity breakdown can be attributed correctly. Computed
     // while `table` is still borrowed since the Ref is dropped below.
     let scan_index_name = opt_str(input, "IndexName").map(|s| s.to_string());
-    let scan_index_is_gsi = scan_index_name
-        .as_deref()
-        .map(|n| table.gsi.iter().any(|g| g.index_name == n))
-        .unwrap_or(false);
+    let scan_gsi_slot = scan_index_name.as_deref().and_then(|n| {
+        table
+            .gsi
+            .iter()
+            .position(|g| g.index_name == n)
+            .filter(|slot| *slot < crate::sqlite_store::MAX_GSI_SLOTS)
+    });
+    let scan_index_is_gsi = scan_gsi_slot.is_some();
+
+    // Scanning an index is not the same as scanning the table. Only items
+    // that actually materialise into the index are visible (sparse
+    // semantics), and each is seen through the index's Projection. The
+    // membership test is pushed into SQL below for a GSI; an LSI has no
+    // dedicated column, so it is checked per item here.
+    let scan_index_projection = scan_index_name.as_deref().and_then(|n| {
+        table
+            .gsi
+            .iter()
+            .find(|g| g.index_name == n)
+            .map(|g| {
+                let (hk, rk) = index_key_names(&g.key_schema);
+                IndexProjection::from_index(
+                    &g.projection,
+                    table.hash_key().map(str::to_string),
+                    table.range_key().map(str::to_string),
+                    hk,
+                    rk,
+                )
+            })
+            .or_else(|| {
+                table.lsi.iter().find(|l| l.index_name == n).map(|l| {
+                    let (_, rk) = index_key_names(&l.key_schema);
+                    IndexProjection::from_index(
+                        &l.projection,
+                        table.hash_key().map(str::to_string),
+                        table.range_key().map(str::to_string),
+                        table.hash_key().map(str::to_string),
+                        rk,
+                    )
+                })
+            })
+    });
+    // Attribute an item must carry to be in the index at all.
+    let scan_index_membership_attr = scan_index_name.as_deref().and_then(|n| {
+        table
+            .gsi
+            .iter()
+            .find(|g| g.index_name == n)
+            .map(|g| index_key_names(&g.key_schema).0)
+            .or_else(|| {
+                table
+                    .lsi
+                    .iter()
+                    .find(|l| l.index_name == n)
+                    .map(|l| index_key_names(&l.key_schema).1)
+            })
+            .flatten()
+    });
 
     drop(table);
 
@@ -831,6 +895,7 @@ pub fn scan(
         &ctx.region,
         table_name,
         scan_start_ref,
+        scan_gsi_slot,
         |pk, sk, attrs| {
             // Skip rows that don't belong to this segment so the worker
             // only sees its slice. We don't count skipped rows toward
@@ -843,9 +908,25 @@ pub fn scan(
             let item = storage_value_to_item(attrs)
                 .ok_or_else(|| AwsError::internal("DynamoDB stored attrs is not an object"))?;
 
+            // An LSI has no dedicated key column, so its sparse-index
+            // membership is checked here. A GSI was already filtered in
+            // SQL, and re-checking it costs nothing.
+            if let Some(attr) = &scan_index_membership_attr
+                && !item.contains_key(attr)
+            {
+                return Ok(true);
+            }
+
             // Every row in this segment is "evaluated": it counts toward
             // ScannedCount and the Limit before the FilterExpression runs.
             scanned_count += 1;
+
+            // An index scan sees the item through the index's Projection,
+            // exactly as Query does, before any request-level projection.
+            let item = match &scan_index_projection {
+                Some(p) => p.filter(&item),
+                None => item,
+            };
 
             let passes_filter = match &filter_condition {
                 Some(filter) => {

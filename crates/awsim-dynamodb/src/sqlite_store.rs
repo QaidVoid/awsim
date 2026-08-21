@@ -247,7 +247,7 @@ impl SqliteStore {
         embedded_migrations::migrations::runner()
             .run(&mut writer)
             .map_err(|e| AwsError::internal(format!("DynamoDB migration failed: {e}")))?;
-        backfill_numeric_keys(&mut writer)?;
+        backfill_key_encodings(&mut writer)?;
 
         let manager = SqliteConnectionManager::file(&db_path)
             .with_flags(
@@ -498,7 +498,7 @@ impl SqliteStore {
     ) -> Result<u64, AwsError> {
         let cutoff = now_secs.saturating_sub(grace_secs as i64);
         let mut victims: Vec<(String, String)> = Vec::new();
-        self.scan_table(account, region, table, None, |pk, sk, attrs| {
+        self.scan_table(account, region, table, None, None, |pk, sk, attrs| {
             // DynamoDB attribute values are wire-shaped: { "N": "123" }.
             let expired = attrs
                 .get(ttl_attribute)
@@ -730,33 +730,47 @@ impl SqliteStore {
         region: &str,
         table: &str,
         start_after: Option<(&str, &str)>,
+        gsi_slot: Option<usize>,
         mut visit: F,
     ) -> Result<(), AwsError>
     where
         F: FnMut(&str, &str, Value) -> Result<bool, AwsError>,
     {
         let conn = self.reader()?;
-        let sql = match start_after {
-            Some(_) => {
-                "SELECT pk, sk, attrs_json FROM items
-                 WHERE account = ?1 AND region = ?2 AND table_name = ?3
-                   AND (pk > ?4 OR (pk = ?4 AND sk > ?5))
-                 ORDER BY pk ASC, sk ASC"
-            }
-            None => {
-                "SELECT pk, sk, attrs_json FROM items
-                 WHERE account = ?1 AND region = ?2 AND table_name = ?3
-                 ORDER BY pk ASC, sk ASC"
-            }
-        };
+        let mut bound: Vec<&dyn ToSql> = vec![&account, &region, &table];
+        let mut sql = String::from(
+            "SELECT pk, sk, attrs_json FROM items
+             WHERE account = ?1 AND region = ?2 AND table_name = ?3",
+        );
 
-        let mut stmt = conn.prepare(sql).map_err(sqlite_err)?;
-        let mut rows = if let Some((spk, ssk)) = start_after {
-            stmt.query(params![account, region, table, spk, ssk])
-        } else {
-            stmt.query(params![account, region, table])
+        if let Some((spk, ssk)) = &start_after {
+            sql.push_str(&format!(
+                " AND (pk > ?{p} OR (pk = ?{p} AND sk > ?{s}))",
+                p = bound.len() + 1,
+                s = bound.len() + 2,
+            ));
+            bound.push(spk);
+            bound.push(ssk);
         }
-        .map_err(sqlite_err)?;
+
+        // Scanning a GSI sees only items that materialise into it. The
+        // slot's partial index is exactly `WHERE gsi{n}_pk IS NOT NULL`,
+        // so this both fixes sparse-index semantics and lets SQLite skip
+        // the non-member rows instead of handing every one of them to
+        // the caller to discard.
+        if let Some(slot) = gsi_slot {
+            if slot >= MAX_GSI_SLOTS {
+                return Err(AwsError::validation(format!(
+                    "GSI slot {slot} exceeds the {MAX_GSI_SLOTS}-slot maximum"
+                )));
+            }
+            sql.push_str(&format!(" AND gsi{}_pk IS NOT NULL", slot + 1));
+        }
+
+        sql.push_str(" ORDER BY pk ASC, sk ASC");
+
+        let mut stmt = conn.prepare(&sql).map_err(sqlite_err)?;
+        let mut rows = stmt.query(params_from_iter(bound)).map_err(sqlite_err)?;
 
         while let Some(row) = rows.next().map_err(sqlite_err)? {
             let pk: String = row.get(0).map_err(sqlite_err)?;
@@ -1067,30 +1081,45 @@ impl<'tx> ReadTx<'tx> {
     }
 }
 
-/// `PRAGMA user_version` once numeric key columns hold the
+/// `PRAGMA user_version` once every key column holds its
 /// order-preserving encoding. Databases below this are rewritten once
 /// on open.
-const NUMERIC_KEY_SCHEMA_VERSION: i64 = 1;
+///
+/// Version 1 covered numeric sort keys; version 2 adds numeric
+/// partition keys (which the encoder always wrote but the first pass
+/// forgot to migrate) and binary keys.
+const KEY_ENCODING_SCHEMA_VERSION: i64 = 2;
 
-/// Rewrite `N`-typed key columns written before the order-preserving
-/// encoding existed.
+/// How a key column's values must be stored for byte comparison to
+/// match DynamoDB's ordering.
+#[derive(Clone, Copy, PartialEq)]
+enum KeyEncoding {
+    /// `N`: order-preserving decimal encoding.
+    Numeric,
+    /// `B`: hex, because base64 does not preserve byte order.
+    Binary,
+}
+
+/// Rewrite key columns written before the order-preserving encodings
+/// existed.
 ///
-/// Older databases stored a numeric key as its raw text, which sorts
-/// lexicographically (`"10"` before `"9"`). Leaving those rows alone
-/// would be worse than the original bug: new writes would use the
-/// encoded form, so the two would interleave arbitrarily and a point
-/// lookup for an old row would miss entirely.
+/// Older databases stored a numeric key as raw text (`"10"` sorting
+/// before `"9"`) and a binary key as base64 (whose alphabet is not in
+/// byte order). Leaving those rows alone would be worse than the
+/// original bug: new writes use the encoded form, so the two would
+/// interleave arbitrarily and a point lookup for an old row would miss
+/// entirely.
 ///
-/// Gated on `PRAGMA user_version` so it runs exactly once. Anything it
-/// cannot encode is left untouched, and a row whose new key collides
-/// with an existing one is skipped rather than dropped: a collision
-/// means the table already held two spellings of one DynamoDB key
-/// (`1` and `1.0`), which the encoding correctly unifies.
-fn backfill_numeric_keys(conn: &mut Connection) -> Result<(), AwsError> {
+/// Gated on `PRAGMA user_version`. Anything that cannot be re-encoded is
+/// left untouched, and a row whose new key collides with an existing one
+/// is skipped rather than dropped: a collision means the table already
+/// held two spellings of one DynamoDB key (`1` and `1.0`), which the
+/// encoding correctly unifies.
+fn backfill_key_encodings(conn: &mut Connection) -> Result<(), AwsError> {
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(sqlite_err)?;
-    if version >= NUMERIC_KEY_SCHEMA_VERSION {
+    if version >= KEY_ENCODING_SCHEMA_VERSION {
         return Ok(());
     }
 
@@ -1115,56 +1144,60 @@ fn backfill_numeric_keys(conn: &mut Connection) -> Result<(), AwsError> {
             continue;
         };
 
-        if numeric_range_key(&schema, schema.get("key_schema")) {
-            rewritten += rewrite_key_column(&tx, "sk", &account, &region, &table, true)?;
+        // Base table. `pk` and `sk` both participate in the PRIMARY KEY.
+        for (column, key_type) in [("pk", "HASH"), ("sk", "RANGE")] {
+            if let Some(enc) = key_encoding(&schema, schema.get("key_schema"), key_type) {
+                rewritten += rewrite_key_column(&tx, column, enc, &account, &region, &table, true)?;
+            }
         }
+
         if let Some(gsis) = schema.get("gsi").and_then(Value::as_array) {
             for (slot, gsi) in gsis.iter().take(MAX_GSI_SLOTS).enumerate() {
-                if numeric_range_key(&schema, gsi.get("key_schema")) {
-                    let col = format!("gsi{}_sk", slot + 1);
-                    rewritten += rewrite_key_column(&tx, &col, &account, &region, &table, false)?;
+                for (suffix, key_type) in [("pk", "HASH"), ("sk", "RANGE")] {
+                    if let Some(enc) = key_encoding(&schema, gsi.get("key_schema"), key_type) {
+                        let col = format!("gsi{}_{suffix}", slot + 1);
+                        rewritten +=
+                            rewrite_key_column(&tx, &col, enc, &account, &region, &table, false)?;
+                    }
                 }
             }
         }
     }
 
-    tx.pragma_update(None, "user_version", NUMERIC_KEY_SCHEMA_VERSION)
+    tx.pragma_update(None, "user_version", KEY_ENCODING_SCHEMA_VERSION)
         .map_err(sqlite_err)?;
     tx.commit().map_err(sqlite_err)?;
 
     if rewritten > 0 {
         tracing::info!(
             keys = rewritten,
-            "DynamoDB: re-encoded numeric key columns for ordered comparison"
+            "DynamoDB: re-encoded key columns for ordered comparison"
         );
     }
     Ok(())
 }
 
-/// True when the given key schema's RANGE attribute is declared `N` in
-/// the table's attribute definitions.
-fn numeric_range_key(schema: &Value, key_schema: Option<&Value>) -> bool {
-    let Some(elements) = key_schema.and_then(Value::as_array) else {
-        return false;
-    };
-    let Some(range_name) = elements
+/// The encoding a key column needs, or `None` when the attribute is a
+/// string (stored verbatim) or the schema does not describe it.
+fn key_encoding(schema: &Value, key_schema: Option<&Value>, key_type: &str) -> Option<KeyEncoding> {
+    let elements = key_schema.and_then(Value::as_array)?;
+    let name = elements
         .iter()
-        .find(|e| e.get("key_type").and_then(Value::as_str) == Some("RANGE"))
+        .find(|e| e.get("key_type").and_then(Value::as_str) == Some(key_type))
         .and_then(|e| e.get("attribute_name"))
-        .and_then(Value::as_str)
-    else {
-        return false;
-    };
-    schema
+        .and_then(Value::as_str)?;
+    let declared = schema
         .get("attribute_definitions")
-        .and_then(Value::as_array)
-        .map(|defs| {
-            defs.iter().any(|d| {
-                d.get("attribute_name").and_then(Value::as_str) == Some(range_name)
-                    && d.get("attribute_type").and_then(Value::as_str) == Some("N")
-            })
-        })
-        .unwrap_or(false)
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|d| d.get("attribute_name").and_then(Value::as_str) == Some(name))
+        .and_then(|d| d.get("attribute_type"))
+        .and_then(Value::as_str)?;
+    match declared {
+        "N" => Some(KeyEncoding::Numeric),
+        "B" => Some(KeyEncoding::Binary),
+        _ => None,
+    }
 }
 
 /// Re-encode one key column for one table, returning how many rows were
@@ -1173,12 +1206,13 @@ fn numeric_range_key(schema: &Value, key_schema: Option<&Value>) -> bool {
 /// `items` is `WITHOUT ROWID`, so rows are addressed by their real
 /// primary key `(account, region, table_name, pk, sk)`.
 ///
-/// `part_of_primary_key` selects the collision handling: rewriting the
-/// base `sk` moves the row within the primary key, so a clash with an
+/// `part_of_primary_key` selects the collision handling: rewriting `pk`
+/// or `sk` moves the row within the primary key, so a clash with an
 /// existing row is skipped rather than failing the whole migration.
 fn rewrite_key_column(
     tx: &rusqlite::Transaction<'_>,
     column: &str,
+    encoding: KeyEncoding,
     account: &str,
     region: &str,
     table: &str,
@@ -1203,12 +1237,12 @@ fn rewrite_key_column(
     let mut n = 0u64;
     for (pk, sk, current) in rows {
         let Some(current) = current else { continue };
-        if already_encoded(&current) {
-            continue;
-        }
-        let Some(encoded) = crate::numkey::encode(&current) else {
+        let Some(encoded) = reencode(encoding, &current) else {
             continue;
         };
+        if encoded == current {
+            continue;
+        }
         let updated = tx.execute(
             &format!(
                 "UPDATE items SET {column} = ?1
@@ -1222,7 +1256,8 @@ fn rewrite_key_column(
             Err(e) if part_of_primary_key && is_constraint_violation(&e) => {
                 tracing::warn!(
                     table,
-                    "DynamoDB: two spellings of one numeric key collapsed on re-encode; keeping the first"
+                    column,
+                    "DynamoDB: two spellings of one key collapsed on re-encode; keeping the first"
                 );
             }
             Err(e) => return Err(sqlite_err(e)),
@@ -1231,14 +1266,25 @@ fn rewrite_key_column(
     Ok(n)
 }
 
-/// True when a stored key already carries the order-preserving form.
-///
-/// The encoding is fixed width and all digits. A raw DynamoDB number of
-/// that same length cannot be confused for one: it would need 42
-/// characters of pure digits, which exceeds the 38 significant digits
-/// the validator permits.
-fn already_encoded(value: &str) -> bool {
-    value.len() == crate::numkey::ENCODED_LEN && value.bytes().all(|b| b.is_ascii_digit())
+/// Produce the stored form of an already-stored key value, or `None`
+/// when it is already encoded or cannot be converted.
+fn reencode(encoding: KeyEncoding, current: &str) -> Option<String> {
+    match encoding {
+        KeyEncoding::Numeric => {
+            // The encoding is fixed width and all digits. A raw number
+            // of that length cannot be mistaken for one: it would need
+            // 42 digits, past the 38 the validator permits.
+            if current.len() == crate::numkey::ENCODED_LEN
+                && current.bytes().all(|b| b.is_ascii_digit())
+            {
+                return None;
+            }
+            crate::numkey::encode(current)
+        }
+        // Version 1 never touched binary columns, so anything reached
+        // here on a version < 2 database is still base64.
+        KeyEncoding::Binary => crate::keys::binary_to_hex(current),
+    }
 }
 
 fn is_constraint_violation(e: &rusqlite::Error) -> bool {
@@ -1602,7 +1648,7 @@ mod tests {
         }
         let mut got: Vec<(String, String)> = vec![];
         store
-            .scan_table("a", "r", "t", None, |pk, sk, _v| {
+            .scan_table("a", "r", "t", None, None, |pk, sk, _v| {
                 got.push((pk.to_string(), sk.to_string()));
                 Ok(true)
             })
@@ -1620,7 +1666,7 @@ mod tests {
         // Resume after (p1, s2): expect (p2, s1), (p2, s2).
         let mut resumed: Vec<(String, String)> = vec![];
         store
-            .scan_table("a", "r", "t", Some(("p1", "s2")), |pk, sk, _v| {
+            .scan_table("a", "r", "t", Some(("p1", "s2")), None, |pk, sk, _v| {
                 resumed.push((pk.to_string(), sk.to_string()));
                 Ok(true)
             })

@@ -117,9 +117,19 @@ fn attribute_type_tag(value: &Value) -> Option<&str> {
 /// Convert a key AttributeValue into the string stored in its key
 /// column.
 ///
-/// `N` values are rewritten by [`crate::numkey::encode`] so the TEXT
-/// column orders numerically instead of lexicographically; `S` and `B`
-/// are stored as-is.
+/// Key columns are TEXT and SQLite compares TEXT byte-wise, so each type
+/// has to be stored in a form whose byte order is DynamoDB's order:
+///
+/// * `S` is stored as-is. DynamoDB compares strings by UTF-8 bytes,
+///   which is what SQLite already does.
+/// * `N` goes through [`crate::numkey::encode`], because raw decimal
+///   text sorts `"10"` before `"9"`.
+/// * `B` is stored as hex. DynamoDB compares binary as unsigned bytes,
+///   and the base64 the wire format uses does not preserve that order:
+///   its alphabet runs `A-Za-z0-9+/`, so byte `0x00` encodes to `'A'`
+///   while `0xF8` encodes to `'+'`, which sorts earlier. Hex digits are
+///   monotonic in ASCII, and hex is fixed-width per byte, so it
+///   preserves both the ordering and the shorter-is-a-prefix rule.
 ///
 /// Every storage key must flow through here. Writes, point lookups, and
 /// `ExclusiveStartKey` cursors all compare against these columns, so if
@@ -127,12 +137,32 @@ fn attribute_type_tag(value: &Value) -> Option<&str> {
 /// key that does not exist.
 pub fn storage_key(value: &Value) -> Option<String> {
     if let Some(n) = value.get("N").and_then(Value::as_str) {
-        // An unencodable number means input the validator should
-        // already have rejected. Store it verbatim rather than
-        // inventing a key: worse ordering, but never a lost item.
+        // Unencodable input is something the validator should already
+        // have rejected. Store it verbatim rather than inventing a key:
+        // worse ordering, but never a lost item.
         return Some(crate::numkey::encode(n).unwrap_or_else(|| n.to_string()));
     }
+    if let Some(b) = value.get("B").and_then(Value::as_str) {
+        return Some(binary_to_hex(b).unwrap_or_else(|| b.to_string()));
+    }
     extract_scalar_str(value).map(str::to_string)
+}
+
+/// Decode a base64 binary value and re-encode it as lowercase hex.
+///
+/// Returns `None` for input that is not valid base64, so the caller can
+/// fall back to storing it verbatim.
+pub(crate) fn binary_to_hex(base64_value: &str) -> Option<String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(base64_value)
+        .ok()?;
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        use std::fmt::Write;
+        let _ = write!(out, "{b:02x}");
+    }
+    Some(out)
 }
 
 fn key_value(schema: &[KeySchemaElement], item: &DynamoItem, key_type: &str) -> Option<String> {
@@ -270,5 +300,78 @@ mod tests {
         let back = storage_value_to_item(stored).expect("round-trip");
         assert_eq!(back.len(), 2);
         assert_eq!(back.get("a"), Some(&json!({"S": "1"})));
+    }
+}
+
+#[cfg(test)]
+mod storage_key_tests {
+    use super::*;
+    use base64::Engine;
+    use serde_json::json;
+
+    fn b64(bytes: &[u8]) -> String {
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
+    /// DynamoDB compares binary as unsigned bytes. Base64 does not
+    /// preserve that order, which is the whole reason for hex.
+    #[test]
+    fn binary_keys_sort_by_byte_value() {
+        let ordered: Vec<Vec<u8>> = vec![
+            vec![0x00],
+            vec![0x00, 0x01],
+            vec![0x01],
+            vec![0x7f],
+            vec![0x80],
+            vec![0xf8],
+            vec![0xff],
+            vec![0xff, 0x00],
+        ];
+        let encoded: Vec<String> = ordered
+            .iter()
+            .map(|b| storage_key(&json!({ "B": b64(b) })).unwrap())
+            .collect();
+        let mut sorted = encoded.clone();
+        sorted.sort();
+        assert_eq!(sorted, encoded, "hex encoding must preserve byte order");
+
+        // The raw base64 really would have got it wrong.
+        let raw: Vec<String> = ordered.iter().map(|b| b64(b)).collect();
+        let mut raw_sorted = raw.clone();
+        raw_sorted.sort();
+        assert_ne!(raw_sorted, raw, "base64 order differs, as expected");
+    }
+
+    #[test]
+    fn shorter_binary_sorts_before_its_extension() {
+        let short = storage_key(&json!({ "B": b64(&[0x41]) })).unwrap();
+        let long = storage_key(&json!({ "B": b64(&[0x41, 0x00]) })).unwrap();
+        assert!(short < long);
+    }
+
+    #[test]
+    fn string_keys_are_stored_verbatim() {
+        assert_eq!(
+            storage_key(&json!({ "S": "item#1" })).unwrap(),
+            "item#1".to_string()
+        );
+    }
+
+    #[test]
+    fn numeric_keys_are_encoded_not_verbatim() {
+        let ten = storage_key(&json!({ "N": "10" })).unwrap();
+        let nine = storage_key(&json!({ "N": "9" })).unwrap();
+        assert!(nine < ten, "9 must sort before 10");
+        assert_ne!(ten, "10");
+    }
+
+    /// Malformed input must still produce a key so the item is
+    /// reachable, even if its ordering is not meaningful.
+    #[test]
+    fn undecodable_binary_falls_back_to_verbatim() {
+        assert_eq!(
+            storage_key(&json!({ "B": "not!valid!base64" })).unwrap(),
+            "not!valid!base64".to_string()
+        );
     }
 }

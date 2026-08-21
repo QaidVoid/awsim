@@ -894,6 +894,7 @@ fn reproject_gsi_columns(
         &ctx.region,
         &table.name,
         None,
+        None,
         |pk, sk, attrs| {
             rows.push((pk.to_string(), sk.to_string(), attrs));
             Ok(true)
