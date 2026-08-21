@@ -9,7 +9,7 @@ use crate::{
         parser::{CompareOp, ConditionExpr, LogicalOp, Operand, resolve_path},
     },
     keys::storage_value_to_item,
-    sqlite_store::SqliteStore,
+    sqlite_store::{SkBound, SqliteStore},
     state::{DynamoItem, DynamoState, extract_scalar_str},
     throttle::BucketKind,
 };
@@ -19,6 +19,125 @@ use super::{
     read_capacity_units, require_str, validate_expr_attr_values,
 };
 use crate::operations::item::{estimate_item_bytes, item_to_json};
+
+/// Derive an index-friendly `sk` range from a Query's key condition.
+///
+/// Without this, a Query fetches and JSON-decodes every item in the
+/// partition and then discards non-matching ones in Rust, making a
+/// 10-item read cost O(partition). Pushing the sort-key range into the
+/// SQL `WHERE` turns it into an index seek.
+///
+/// Returns `None` whenever the clause cannot be translated *exactly*,
+/// because the bound only narrows what SQLite returns while the real
+/// answer still comes from [`evaluate_condition`]. A too-wide bound is
+/// merely slower; a too-narrow one would drop matching items.
+///
+/// Only `S`-typed values are translated. `sk` is stored as raw text, so
+/// a numeric sort key compares lexicographically in SQL (`"10" < "9"`),
+/// which does not match DynamoDB's numeric ordering.
+pub(crate) fn sk_bound_from_condition(
+    cond: &ConditionExpr,
+    sk_name: &str,
+    expr_attr_names: &HashMap<String, String>,
+    expr_attr_values: &serde_json::Map<String, Value>,
+) -> Option<SkBound> {
+    // Only the S value of a placeholder is usable; anything else (N, B,
+    // a missing placeholder) means "no bound".
+    let s_value = |op: &Operand| -> Option<String> {
+        match op {
+            Operand::Value(name) => expr_attr_values
+                .get(name)
+                .and_then(|v| v.get("S"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            Operand::Path(_) => None,
+        }
+    };
+    let is_sk = |op: &Operand| -> bool {
+        match op {
+            Operand::Path(p) => resolve_path(p, expr_attr_names)
+                .map(|r| r == sk_name)
+                .unwrap_or(false),
+            Operand::Value(_) => false,
+        }
+    };
+
+    match cond {
+        // A KeyConditionExpression is `pk = :v AND <sk clause>`, so walk
+        // the AND children and take the first translatable sort-key one.
+        ConditionExpr::Logical {
+            op: LogicalOp::And,
+            children,
+        } => children
+            .iter()
+            .find_map(|c| sk_bound_from_condition(c, sk_name, expr_attr_names, expr_attr_values)),
+        ConditionExpr::Comparison { left, op, right } if is_sk(left) => {
+            let v = s_value(right)?;
+            Some(match op {
+                CompareOp::Eq => SkBound {
+                    lower: Some((v.clone(), true)),
+                    upper: Some((v, true)),
+                },
+                CompareOp::Lt => SkBound {
+                    upper: Some((v, false)),
+                    ..Default::default()
+                },
+                CompareOp::Le => SkBound {
+                    upper: Some((v, true)),
+                    ..Default::default()
+                },
+                CompareOp::Gt => SkBound {
+                    lower: Some((v, false)),
+                    ..Default::default()
+                },
+                CompareOp::Ge => SkBound {
+                    lower: Some((v, true)),
+                    ..Default::default()
+                },
+                // `<>` is not a valid sort-key operator and does not
+                // describe a range anyway.
+                CompareOp::Ne => return None,
+            })
+        }
+        ConditionExpr::Between { operand, low, high } if is_sk(operand) => Some(SkBound {
+            lower: Some((s_value(low)?, true)),
+            upper: Some((s_value(high)?, true)),
+        }),
+        ConditionExpr::BeginsWith(path, prefix) if is_sk(path) => {
+            let p = s_value(prefix)?;
+            // Every string with prefix `p` sorts in [p, next_prefix(p)).
+            // If no successor exists the lower bound alone is still a
+            // correct, if wider, narrowing.
+            Some(SkBound {
+                upper: next_prefix(&p).map(|u| (u, false)),
+                lower: Some((p, true)),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Smallest string strictly greater than every string starting with
+/// `prefix`, for use as an exclusive upper bound.
+///
+/// SQLite compares TEXT byte-wise, and UTF-8 byte order matches code
+/// point order, so incrementing the last code point is sound. Returns
+/// `None` when the prefix is all-maximal and no successor exists.
+fn next_prefix(prefix: &str) -> Option<String> {
+    let mut chars: Vec<char> = prefix.chars().collect();
+    while let Some(last) = chars.pop() {
+        // Step over the UTF-16 surrogate gap, which holds no scalars.
+        let next = match last as u32 + 1 {
+            0xD800 => 0xE000,
+            n => n,
+        };
+        if let Some(c) = char::from_u32(next) {
+            chars.push(c);
+            return Some(chars.into_iter().collect());
+        }
+    }
+    None
+}
 
 /// AWS DynamoDB caps `Query` / `Scan` responses at 1 MiB regardless of
 /// `Limit`. Real clients are written to handle pagination via
@@ -385,6 +504,20 @@ pub fn query(
             .map(|s| s.to_string())
     });
 
+    // Sort-key pushdown applies only to a plain base-table query, where
+    // the condition's sort key IS the stored `sk` column. A GSI reads
+    // its own `gsi{n}_sk` column, and an LSI constrains a different
+    // attribute while still streaming the base partition ordered by the
+    // base sort key. Pushing a bound down in either case would filter on
+    // the wrong column and silently drop matching items.
+    let sk_pushdown = match (index_name, range_key_name.as_deref()) {
+        (None, Some(sk_name)) => {
+            sk_bound_from_condition(&key_condition, sk_name, &expr_attr_names, &expr_attr_values)
+                .filter(|b| !b.is_unbounded())
+        }
+        _ => None,
+    };
+
     let mut scanned_count = 0usize;
     let mut items: Vec<DynamoItem> = Vec::new();
     let mut response_bytes = 0usize;
@@ -493,6 +626,7 @@ pub fn query(
                 pk,
                 scan_index_forward,
                 esk_base_sk.as_deref(),
+                sk_pushdown.as_ref(),
                 |_sk, attrs| {
                     let item = storage_value_to_item(attrs).ok_or_else(|| {
                         AwsError::internal("DynamoDB stored attrs is not an object")
@@ -2515,5 +2649,97 @@ mod tests {
         )
         .unwrap();
         assert_eq!(resp["Items"].as_array().unwrap().len(), 1);
+    }
+
+    /// The bound only narrows what SQLite returns; the typed condition
+    /// still decides. So these assertions are about it never being
+    /// *narrower* than the real clause.
+    mod sk_pushdown {
+        use super::*;
+        use crate::expressions::parse_condition;
+
+        fn bound(expr: &str, values: serde_json::Value) -> Option<SkBound> {
+            let cond = parse_condition(expr).unwrap();
+            let names = HashMap::new();
+            let vals = values.as_object().unwrap().clone();
+            sk_bound_from_condition(&cond, "sk", &names, &vals)
+        }
+
+        #[test]
+        fn between_maps_to_an_inclusive_range() {
+            let b = bound(
+                "pk = :p AND sk BETWEEN :a AND :b",
+                json!({":p": {"S": "p"}, ":a": {"S": "b"}, ":b": {"S": "y"}}),
+            )
+            .expect("bound");
+            assert_eq!(b.lower, Some(("b".to_string(), true)));
+            assert_eq!(b.upper, Some(("y".to_string(), true)));
+        }
+
+        #[test]
+        fn begins_with_maps_to_a_half_open_prefix_range() {
+            let b = bound(
+                "pk = :p AND begins_with(sk, :v)",
+                json!({":p": {"S": "p"}, ":v": {"S": "item#"}}),
+            )
+            .expect("bound");
+            assert_eq!(b.lower, Some(("item#".to_string(), true)));
+            // '#' + 1 == '$', exclusive: covers every "item#..." string.
+            assert_eq!(b.upper, Some(("item$".to_string(), false)));
+        }
+
+        #[test]
+        fn comparisons_map_to_one_sided_bounds() {
+            let gt = bound(
+                "pk = :p AND sk > :v",
+                json!({":p": {"S": "p"}, ":v": {"S": "m"}}),
+            )
+            .unwrap();
+            assert_eq!(gt.lower, Some(("m".to_string(), false)));
+            assert!(gt.upper.is_none());
+
+            let le = bound(
+                "pk = :p AND sk <= :v",
+                json!({":p": {"S": "p"}, ":v": {"S": "m"}}),
+            )
+            .unwrap();
+            assert_eq!(le.upper, Some(("m".to_string(), true)));
+            assert!(le.lower.is_none());
+        }
+
+        /// `sk` is stored as raw text, so "10" < "9". Pushing a numeric
+        /// range into SQL would drop matching items.
+        #[test]
+        fn numeric_sort_keys_are_never_pushed_down() {
+            let b = bound(
+                "pk = :p AND sk BETWEEN :a AND :b",
+                json!({":p": {"S": "p"}, ":a": {"N": "2"}, ":b": {"N": "10"}}),
+            );
+            assert!(b.is_none(), "numeric sort key must not push down");
+        }
+
+        #[test]
+        fn partition_key_only_yields_no_bound() {
+            let b = bound("pk = :p", json!({":p": {"S": "p"}}));
+            assert!(b.is_none());
+        }
+
+        #[test]
+        fn next_prefix_steps_over_the_surrogate_gap() {
+            // U+D7FF + 1 lands in the surrogate range, which holds no
+            // scalar values, so it must jump to U+E000.
+            let p = format!("a{}", char::from_u32(0xD7FF).unwrap());
+            let up = next_prefix(&p).unwrap();
+            assert!(up > p, "successor must sort after the prefix");
+            assert_eq!(up.chars().last().unwrap() as u32, 0xE000);
+        }
+
+        #[test]
+        fn next_prefix_carries_when_last_char_is_maximal() {
+            let p = format!("a{}", char::MAX);
+            let up = next_prefix(&p).expect("carry to the previous char");
+            assert_eq!(up, "b");
+            assert!(up > p);
+        }
     }
 }

@@ -49,6 +49,35 @@ mod embedded_migrations {
 /// slot; raising this further would mean another schema migration.
 pub const MAX_GSI_SLOTS: usize = 20;
 
+/// An index-friendly range on the stored `sk` column, derived from a
+/// Query's `KeyConditionExpression`.
+///
+/// **This is a narrowing hint, never the source of truth.** The full key
+/// condition is still evaluated per item against typed AttributeValues,
+/// so a bound that is *wider* than the real condition costs a little
+/// speed and nothing else. A bound that is *narrower* would silently
+/// drop matching items. When in doubt, emit no bound.
+///
+/// Bounds are plain string comparisons because that is how `sk` is
+/// stored. They are therefore only safe for `S`-typed sort keys: a
+/// numeric sort key stores `"10"` and `"9"` as text, where `"10" < "9"`.
+/// [`crate::operations::query::sk_bound_from_condition`] enforces that.
+#[derive(Debug, Default, Clone)]
+pub struct SkBound {
+    /// `(value, inclusive)` lower bound.
+    pub lower: Option<(String, bool)>,
+    /// `(value, inclusive)` upper bound.
+    pub upper: Option<(String, bool)>,
+}
+
+impl SkBound {
+    /// True when neither end is constrained, so the caller can skip
+    /// threading a useless bound through.
+    pub fn is_unbounded(&self) -> bool {
+        self.lower.is_none() && self.upper.is_none()
+    }
+}
+
 /// Resume cursor for a GSI page: the prior page's last item expressed as
 /// its index sort key plus the base table primary key. The base key is the
 /// tiebreaker that keeps the cursor unique even when the GSI sort key
@@ -613,6 +642,7 @@ impl SqliteStore {
         pk: &str,
         forward: bool,
         start_after_sk: Option<&str>,
+        sk_bound: Option<&SkBound>,
         mut visit: F,
     ) -> Result<(), AwsError>
     where
@@ -621,33 +651,42 @@ impl SqliteStore {
         let conn = self.reader()?;
         let order = if forward { "ASC" } else { "DESC" };
 
-        // Two query shapes. With vs. without an exclusive-start sort key.
-        // Splitting the SQL keeps the parameter list straightforward and
-        // avoids fiddling with NULL bindings on the comparator branch.
-        let sql = match start_after_sk {
-            Some(_) => {
-                let cmp = if forward { ">" } else { "<" };
-                format!(
-                    "SELECT sk, attrs_json FROM items
-                     WHERE account = ?1 AND region = ?2 AND table_name = ?3
-                       AND pk = ?4 AND sk {cmp} ?5
-                     ORDER BY sk {order}"
-                )
+        // Bind positionally in build order so the optional clauses below
+        // can come and go without renumbering anything.
+        let mut bound: Vec<&dyn ToSql> = vec![&account, &region, &table, &pk];
+        let mut sql = String::from(
+            "SELECT sk, attrs_json FROM items
+             WHERE account = ?1 AND region = ?2 AND table_name = ?3
+               AND pk = ?4",
+        );
+
+        if start_after_sk.is_some() {
+            let cmp = if forward { ">" } else { "<" };
+            sql.push_str(&format!(" AND sk {cmp} ?{}", bound.len() + 1));
+            bound.push(&start_after_sk);
+        }
+
+        // Sort-key range pushdown. The primary key is
+        // (account, region, table_name, pk, sk), so a range on `sk`
+        // turns a whole-partition scan into an index seek plus a walk of
+        // just the matching rows.
+        if let Some(b) = sk_bound {
+            if let Some((lo, inclusive)) = &b.lower {
+                let cmp = if *inclusive { ">=" } else { ">" };
+                sql.push_str(&format!(" AND sk {cmp} ?{}", bound.len() + 1));
+                bound.push(lo);
             }
-            None => format!(
-                "SELECT sk, attrs_json FROM items
-                 WHERE account = ?1 AND region = ?2 AND table_name = ?3
-                   AND pk = ?4
-                 ORDER BY sk {order}"
-            ),
-        };
+            if let Some((hi, inclusive)) = &b.upper {
+                let cmp = if *inclusive { "<=" } else { "<" };
+                sql.push_str(&format!(" AND sk {cmp} ?{}", bound.len() + 1));
+                bound.push(hi);
+            }
+        }
+
+        sql.push_str(&format!(" ORDER BY sk {order}"));
 
         let mut stmt = conn.prepare(&sql).map_err(sqlite_err)?;
-        let mut rows = match start_after_sk {
-            Some(start) => stmt.query(params![account, region, table, pk, start]),
-            None => stmt.query(params![account, region, table, pk]),
-        }
-        .map_err(sqlite_err)?;
+        let mut rows = stmt.query(params_from_iter(bound)).map_err(sqlite_err)?;
 
         while let Some(row) = rows.next().map_err(sqlite_err)? {
             let sk: String = row.get(0).map_err(sqlite_err)?;
@@ -1318,7 +1357,7 @@ mod tests {
         // Forward, no start: all 5 in ascending order.
         let mut got: Vec<String> = vec![];
         store
-            .query_partition("a", "r", "t", "p", true, None, |sk, _v| {
+            .query_partition("a", "r", "t", "p", true, None, None, |sk, _v| {
                 got.push(sk.to_string());
                 Ok(true)
             })
@@ -1328,7 +1367,7 @@ mod tests {
         // Reverse, start after sk2: returns sk1, sk0.
         let mut rev: Vec<String> = vec![];
         store
-            .query_partition("a", "r", "t", "p", false, Some("sk2"), |sk, _v| {
+            .query_partition("a", "r", "t", "p", false, Some("sk2"), None, |sk, _v| {
                 rev.push(sk.to_string());
                 Ok(true)
             })
@@ -1338,7 +1377,7 @@ mod tests {
         // Visitor early-stops after collecting 2 forward.
         let mut limited: Vec<String> = vec![];
         store
-            .query_partition("a", "r", "t", "p", true, None, |sk, _v| {
+            .query_partition("a", "r", "t", "p", true, None, None, |sk, _v| {
                 limited.push(sk.to_string());
                 Ok(limited.len() < 2)
             })
