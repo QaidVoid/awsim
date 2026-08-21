@@ -1883,19 +1883,33 @@ pub fn respond_to_auth_challenge(
                 )
             })?;
 
+            let policy = {
+                let pool = state.user_pools.get(&pool_id).ok_or_else(|| {
+                    AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
+                })?;
+                if !pool.users.contains_key(username) {
+                    return Err(AwsError::service_not_found(
+                        "UserNotFoundException",
+                        "User does not exist.",
+                    ));
+                }
+                pool.policies.clone()
+            };
+            super::auth_policy::validate_password(&policy, new_password)?;
+            // Derive before taking the write guard: bcrypt plus an SRP
+            // modexp would otherwise block the whole pool.
+            let creds =
+                crate::password::PasswordCredentials::derive(&pool_id, username, new_password)?;
+
             let mut pool = state.user_pools.get_mut(&pool_id).ok_or_else(|| {
                 AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
             })?;
-            let policy = pool.policies.clone();
             let user = pool.users.get_mut(username).ok_or_else(|| {
                 AwsError::service_not_found("UserNotFoundException", "User does not exist.")
             })?;
-
-            super::auth_policy::validate_password(&policy, new_password)?;
-            user.password_hash = crate::password::hash(new_password)?;
-            let (s, v) = crate::password::srp_material(&pool_id, username, new_password);
-            user.srp_salt = Some(s);
-            user.srp_verifier = Some(v);
+            user.password_hash = creds.hash;
+            user.srp_salt = Some(creds.srp_salt);
+            user.srp_verifier = Some(creds.srp_verifier);
             user.status = "CONFIRMED".to_string();
 
             // Collect needed values before releasing the mutable borrow on users.
@@ -2062,7 +2076,7 @@ pub fn admin_respond_to_auth_challenge(
                 )
             })?;
 
-            let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
+            let pool = state.user_pools.get(pool_id).ok_or_else(|| {
                 AwsError::service_not_found(
                     "ResourceNotFoundException",
                     format!("User pool {pool_id} does not exist."),
@@ -2077,15 +2091,29 @@ pub fn admin_respond_to_auth_challenge(
             }
 
             let policy = pool.policies.clone();
+            if !pool.users.contains_key(username) {
+                return Err(AwsError::service_not_found(
+                    "UserNotFoundException",
+                    "User does not exist.",
+                ));
+            }
+
+            super::auth_policy::validate_password(&policy, new_password)?;
+            // Derive off-lock; see the same split in the InitiateAuth
+            // NEW_PASSWORD_REQUIRED path above.
+            drop(pool);
+            let creds =
+                crate::password::PasswordCredentials::derive(pool_id, username, new_password)?;
+
+            let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
+                AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
+            })?;
             let user = pool.users.get_mut(username).ok_or_else(|| {
                 AwsError::service_not_found("UserNotFoundException", "User does not exist.")
             })?;
-
-            super::auth_policy::validate_password(&policy, new_password)?;
-            user.password_hash = crate::password::hash(new_password)?;
-            let (s, v) = crate::password::srp_material(pool_id, username, new_password);
-            user.srp_salt = Some(s);
-            user.srp_verifier = Some(v);
+            user.password_hash = creds.hash;
+            user.srp_salt = Some(creds.srp_salt);
+            user.srp_verifier = Some(creds.srp_verifier);
             user.status = "CONFIRMED".to_string();
 
             // Collect needed values before releasing the mutable borrow on users.

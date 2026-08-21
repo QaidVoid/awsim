@@ -49,6 +49,34 @@ pub fn pool_short_name(pool_id: &str) -> &str {
     pool_id.split_once('_').map(|(_, s)| s).unwrap_or(pool_id)
 }
 
+/// Everything derived from a plaintext password before it can be stored:
+/// the bcrypt hash plus the SRP salt/verifier pair.
+///
+/// This exists to keep the slow part separable from the write. Deriving
+/// it costs a bcrypt hash plus a 2048-bit modular exponentiation, which
+/// together run to tens of milliseconds, while applying it is three
+/// moves. Callers derive first, then take the `user_pools` guard, then
+/// [`apply`](Self::apply). Doing it in the other order serialises every
+/// sign-up and password change in a pool behind one core.
+pub struct PasswordCredentials {
+    pub hash: String,
+    pub srp_salt: String,
+    pub srp_verifier: String,
+}
+
+impl PasswordCredentials {
+    /// Derive the storable material for `password`. Slow by design;
+    /// never call this while holding a lock.
+    pub fn derive(pool_id: &str, username: &str, password: &str) -> Result<Self, AwsError> {
+        let (srp_salt, srp_verifier) = srp_material(pool_id, username, password);
+        Ok(Self {
+            hash: hash(password)?,
+            srp_salt,
+            srp_verifier,
+        })
+    }
+}
+
 /// Compute and return `(salt_hex, verifier_hex)` for `password` so the
 /// USER_SRP_AUTH flow can verify a future client without ever storing the
 /// plaintext. Both sides depend on `pool_short_name(pool_id)` so the

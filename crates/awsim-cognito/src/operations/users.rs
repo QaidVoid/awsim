@@ -10,6 +10,7 @@ use crate::operations::schema_validation::{
     validate_attribute_values, validate_deletable_names, validate_mutability,
     validate_required_present,
 };
+use crate::password::PasswordCredentials;
 use crate::state::{CognitoState, CognitoUser, UserPool};
 
 /// Fire-and-forget Lambda trigger via the event bus.
@@ -229,23 +230,26 @@ pub fn user_to_value(user: &CognitoUser) -> Value {
     })
 }
 
+/// Build a user record from already-derived password material.
+///
+/// Takes [`PasswordCredentials`] rather than a plaintext password so the
+/// bcrypt and SRP work happens before the caller takes a `user_pools`
+/// guard. This function itself is pure assembly and holds nothing.
 fn make_user(
-    pool_id: &str,
     username: &str,
-    password: &str,
+    creds: PasswordCredentials,
     attributes: HashMap<String, String>,
     status: &str,
-) -> Result<CognitoUser, AwsError> {
+) -> CognitoUser {
     let sub = Uuid::new_v4().to_string();
     let mut attrs = attributes;
     attrs.insert("sub".to_string(), sub.clone());
-    let (salt_hex, verifier_hex) = crate::password::srp_material(pool_id, username, password);
-    Ok(CognitoUser {
+    CognitoUser {
         username: username.to_string(),
         sub,
-        password_hash: crate::password::hash(password)?,
-        srp_salt: Some(salt_hex),
-        srp_verifier: Some(verifier_hex),
+        password_hash: creds.hash,
+        srp_salt: Some(creds.srp_salt),
+        srp_verifier: Some(creds.srp_verifier),
         attributes: attrs,
         status: status.to_string(),
         enabled: true,
@@ -271,7 +275,7 @@ fn make_user(
         failed_login_attempts: 0,
         locked_until_secs: None,
         auth_events: Vec::new(),
-    })
+    }
 }
 
 /// Parse `UserAttributes` (or similar) in either of the two shapes
@@ -528,11 +532,11 @@ pub fn sign_up(
         .iter()
         .find(|e| e.clients.contains_key(client_id));
 
-    let mut pool = match pool_entry {
+    let pool = match pool_entry {
         Some(e) => {
             let pool_id = e.id.clone();
             drop(e);
-            state.user_pools.get_mut(&pool_id).ok_or_else(|| {
+            state.user_pools.get(&pool_id).ok_or_else(|| {
                 AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
             })?
         }
@@ -544,21 +548,41 @@ pub fn sign_up(
         }
     };
 
+    // Validate everything that needs the pool, then release the guard
+    // before deriving the password material: that step is a bcrypt hash
+    // plus an SRP modular exponentiation, and the guard is exclusive
+    // across every user in the pool.
+    let (pool_id, attributes) = {
+        if pool.users.contains_key(username) {
+            return Err(AwsError::bad_request(
+                "UsernameExistsException",
+                "User already exists",
+            ));
+        }
+        super::auth_policy::validate_password(&pool.policies, password)?;
+        let raw_attrs = parse_user_attributes(input, "UserAttributes");
+        validate_attribute_values(&pool.schema, &raw_attrs)?;
+        validate_required_present(&pool.schema, &raw_attrs)?;
+        let attributes = prepare_user_attributes(&pool, username, raw_attrs)?;
+        (pool.id.clone(), attributes)
+    };
+    drop(pool);
+
+    let creds = PasswordCredentials::derive(&pool_id, username, password)?;
+    let user = make_user(username, creds, attributes, "UNCONFIRMED");
+    let sub = user.sub.clone();
+
+    let mut pool = state.user_pools.get_mut(&pool_id).ok_or_else(|| {
+        AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
+    })?;
+    // The guard was open while the password hashed, so a concurrent
+    // sign-up for the same username could have landed in between.
     if pool.users.contains_key(username) {
         return Err(AwsError::bad_request(
             "UsernameExistsException",
             "User already exists",
         ));
     }
-
-    super::auth_policy::validate_password(&pool.policies, password)?;
-
-    let raw_attrs = parse_user_attributes(input, "UserAttributes");
-    validate_attribute_values(&pool.schema, &raw_attrs)?;
-    validate_required_present(&pool.schema, &raw_attrs)?;
-    let attributes = prepare_user_attributes(&pool, username, raw_attrs)?;
-    let user = make_user(&pool.id, username, password, attributes, "UNCONFIRMED")?;
-    let sub = user.sub.clone();
 
     // Pre Sign-Up trigger (fire-and-forget). Carry the user's real attributes.
     if let Some(arn) = pool.lambda_config.get("PreSignUp") {
@@ -837,7 +861,7 @@ pub fn admin_create_user(
         }
     };
 
-    let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
+    let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool {pool_id} does not exist."),
@@ -874,13 +898,21 @@ pub fn admin_create_user(
     validate_attribute_values(&pool.schema, &raw_attrs)?;
     validate_required_present(&pool.schema, &raw_attrs)?;
     let attributes = prepare_user_attributes(&pool, username, raw_attrs)?;
-    let user = make_user(
-        &pool.id,
-        username,
-        password,
-        attributes,
-        "FORCE_CHANGE_PASSWORD",
-    )?;
+    // Release the guard across the bcrypt + SRP derivation, then take it
+    // again to insert. See `sign_up` for the same split.
+    let owned_pool_id = pool.id.clone();
+    drop(pool);
+    let creds = PasswordCredentials::derive(&owned_pool_id, username, password)?;
+    let user = make_user(username, creds, attributes, "FORCE_CHANGE_PASSWORD");
+    let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
+        AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
+    })?;
+    if pool.users.contains_key(username) {
+        return Err(AwsError::bad_request(
+            "UsernameExistsException",
+            "User already exists",
+        ));
+    }
     let user_value = user_to_value(&user);
     // Unless suppressed, send the invitation (username + temporary password)
     // to the user's email via SES.
@@ -997,7 +1029,7 @@ pub fn admin_set_user_password(
     // password that the user must change on next sign-in.
     let permanent = input["Permanent"].as_bool().unwrap_or(false);
 
-    let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
+    let pool = state.user_pools.get(pool_id).ok_or_else(|| {
         AwsError::service_not_found(
             "ResourceNotFoundException",
             format!("User pool {pool_id} does not exist."),
@@ -1009,14 +1041,30 @@ pub fn admin_set_user_password(
     let username = resolve_username(&pool, username).ok_or_else(|| {
         AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
+    if !pool.users.contains_key(&username) {
+        return Err(AwsError::service_not_found(
+            "UserNotFoundException",
+            "User does not exist.",
+        ));
+    }
+    // Derive off-lock: bcrypt plus an SRP modexp is tens of milliseconds,
+    // and this guard blocks every other user in the pool.
+    drop(pool);
+    let creds = PasswordCredentials::derive(pool_id, &username, password)?;
+
+    let mut pool = state.user_pools.get_mut(pool_id).ok_or_else(|| {
+        AwsError::service_not_found(
+            "ResourceNotFoundException",
+            format!("User pool {pool_id} does not exist."),
+        )
+    })?;
     let user = pool.users.get_mut(&username).ok_or_else(|| {
         AwsError::service_not_found("UserNotFoundException", "User does not exist.")
     })?;
 
-    user.password_hash = crate::password::hash(password)?;
-    let (s, v) = crate::password::srp_material(pool_id, &username, password);
-    user.srp_salt = Some(s);
-    user.srp_verifier = Some(v);
+    user.password_hash = creds.hash;
+    user.srp_salt = Some(creds.srp_salt);
+    user.srp_verifier = Some(creds.srp_verifier);
     // AWS semantics: Permanent=true => CONFIRMED, Permanent=false => the
     // password is treated as temporary and the user must change it on
     // next sign-in. We were previously only flipping to CONFIRMED on
@@ -1387,14 +1435,25 @@ pub fn confirm_forgot_password(
         ));
     }
 
+    // Consume the code under the guard so it can't be replayed, then
+    // release it: the derivation below is bcrypt plus an SRP modexp.
     record_code_success(user);
     user.pending_verifications.remove(FORGOT_PASSWORD_KEY);
     user.pending_verifications_issued
         .remove(FORGOT_PASSWORD_KEY);
-    user.password_hash = crate::password::hash(password)?;
-    let (s, v) = crate::password::srp_material(&pool_id, &username, password);
-    user.srp_salt = Some(s);
-    user.srp_verifier = Some(v);
+    drop(pool);
+
+    let creds = PasswordCredentials::derive(&pool_id, &username, password)?;
+
+    let mut pool = state.user_pools.get_mut(&pool_id).ok_or_else(|| {
+        AwsError::service_not_found("ResourceNotFoundException", "User pool not found")
+    })?;
+    let user = pool.users.get_mut(&username).ok_or_else(|| {
+        AwsError::service_not_found("UserNotFoundException", "User does not exist.")
+    })?;
+    user.password_hash = creds.hash;
+    user.srp_salt = Some(creds.srp_salt);
+    user.srp_verifier = Some(creds.srp_verifier);
     user.status = "CONFIRMED".to_string();
     user.last_modified_date = now_epoch();
     user.failed_login_attempts = 0;
