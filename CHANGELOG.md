@@ -1,4 +1,94 @@
 
+## 0.7.0 — 2026-08-24
+
+### Bug Fixes
+
+- **dynamodb:** Scan indexes as indexes, and order binary keys
+- **dynamodb:** Order numeric keys numerically, not as text
+- **proxy:** Box the large Err variant on two integrations
+- **route53:** Drop a useless format! in the default SOA record
+- **opensearch:** Route the trailing-slash root /opensearch/
+- **ui:** Stop long content overflowing cards and tab strips
+- **pagination:** Honor list limits that were accepted and ignored
+- **routes:** Reach operations the SDKs could not
+- **router:** Match routes whose model path ends in a slash
+- **ui:** Confirm before deleting a DNS record
+- **route53:** Apply single-element record changes
+- **ui:** Stop number fields silently killing more submits
+- **ui:** Name the action on create buttons
+- **ui:** Stop number fields silently killing Cognito submits
+- **ui:** Stop probing credentials in loginless mode
+- **kinesis:** Report the stream capacity mode
+- **ses:** Read the v2 Content.Template union member
+- **xml:** Escape text nodes in query responses
+- **xml:** Give every list item its own element
+- **ui:** Call the origin the UI was served from
+- **mq:** Use the camelCase wire names AWS MQ expects
+- **apigateway:** Return v1 collections under item
+- **route53:** Nest restXml list members in their own tags
+- **query:** Match AWS wire shapes for SNS and EC2
+- **dynamodb:** Stop tests unlinking each other's sqlite file
+- Close behavior divergences in S3 and Lambda
+- Clear pre-existing clippy failures
+- **conformance:** Make the harness able to fail
+- **docs:** Correct Lambda and memory claims, test first request
+- **admin:** Accept the documented chaos body and 404 unknown paths
+- **iam:** Make enforcement bootstrappable
+- **snapshots:** Report what was restored instead of claiming success
+- Reject invalid input instead of returning empty success
+- **core:** Derive resource URLs from the reachable endpoint
+- **lambda:** Contain deployment package extraction
+- **server:** Reap idle keep-alive connections to cap fd use
+- **s3:** Parse and validate aws-chunked trailer checksums
+- **dynamodb:** Match AWS capacity-unit accounting rules
+- **dynamodb:** Charge consistent-read RCU in BatchGetItem
+
+### Documentation
+
+- Correct the allocator sections, which still claimed jemalloc
+- Correct persistence claims and cover the SES classic API
+
+### Features
+
+- **ui:** Manage EventBridge targets and custom event buses
+- **ui:** Add encryption and tags to the ECR create form
+- **ui:** Expand the Cognito user pool create form
+- **ui:** Expand KMS, Kinesis, and Lambda create forms
+- **kms:** Accept Tags on CreateKey
+- **ses:** Snapshot and restore configuration state
+- **ses:** Implement the classic v1 API surface
+- **ui:** Expand SQS, S3, and SNS create forms
+- **s3:** Honor Object Lock at bucket creation
+- **sqs:** Implement long polling
+- **core:** Accept CBOR request and response bodies
+- **security:** Run the container non-root and document the trust model
+- **persistence:** Cover 52 of 61 services, up from 34
+- **persistence:** Snapshot KMS, Step Functions and EventBridge
+- **billing:** Complete DynamoDB cost model
+- **billing:** Bill DynamoDB by consumed request units
+
+### Performance
+
+- **dynamodb:** Stop cloning every examined item on Query
+- **dynamodb:** Push the GSI Query sort-key range into SQL
+- **dynamodb:** Push the Query sort-key range into SQL
+- **cognito:** Derive password material off the pool lock
+- Raise the blocking-pool default from 32 to 128
+- **gateway:** Stop doing per-request work nobody reads
+- **cognito:** Hash passwords off the pool lock, off the runtime
+- **dynamodb:** Split sqlite reads and writes across pools
+- **dynamodb:** Index the GSI ORDER BY expression
+- **musl:** Use mimalloc so throughput holds under load
+
+### Refactor
+
+- **route53:** Drop the duplicate rrset route
+
+### Tests
+
+- **dynamodb:** Stop the WCU throttle test racing the refill
+- Add SDK model wire-name checker
+
 ## 0.6.0 — 2026-07-03
 
 ### Bug Fixes
