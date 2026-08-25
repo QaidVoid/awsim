@@ -12,7 +12,7 @@ use crate::{
 
 use super::item::{
     ITEM_MAX_BYTES, estimate_item_bytes, estimate_value_bytes, item_to_json, parse_item,
-    reject_empty_key_values, validate_item,
+    validate_item, validate_key_attribute_values,
 };
 use super::{
     item_collection_metrics, push_item_collection, read_capacity_units, write_capacity_units,
@@ -265,7 +265,7 @@ pub fn batch_write_item(
                     )));
                 }
                 validate_item(&item)?;
-                reject_empty_key_values(&table, &item)?;
+                validate_key_attribute_values(&table, &item)?;
                 if let Some(keys) = extract_item_keys(&table, &item) {
                     let attrs = item_to_storage_value(&item);
                     *write_units_by_table.entry(table_name.clone()).or_default() +=

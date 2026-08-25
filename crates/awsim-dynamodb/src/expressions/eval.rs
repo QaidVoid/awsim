@@ -351,7 +351,10 @@ fn extract_number_from_dynamo(val: &Value) -> Option<i64> {
         .and_then(|d| <i64 as TryFrom<rust_decimal::Decimal>>::try_from(d).ok())
 }
 
-fn dynamo_size(val: &Value) -> usize {
+/// Size of an attribute value as DynamoDB's `size()` function reports it:
+/// UTF-8 bytes for a string, decoded bytes for binary, element count for a
+/// collection. Also what the key size limits are measured against.
+pub(crate) fn dynamo_size(val: &Value) -> usize {
     if let Some(s) = val.get("S").and_then(|v| v.as_str()) {
         return s.len();
     }

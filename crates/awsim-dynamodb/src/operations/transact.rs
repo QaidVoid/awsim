@@ -16,8 +16,8 @@ use crate::{
 use super::{
     build_consumed_capacity, get_expr_attr_names, get_expr_attr_values,
     item::{
-        estimate_item_bytes, estimate_value_bytes, item_to_json, parse_item,
-        reject_empty_key_values, validate_item,
+        estimate_item_bytes, estimate_value_bytes, item_to_json, parse_item, validate_item,
+        validate_key_attribute_values,
     },
     item_collection_metrics, opt_str, push_item_collection, read_capacity_units,
     validate_expr_attr_values, write_capacity_units,
@@ -306,7 +306,7 @@ pub fn transact_write_items(
                         format!("Table not found: {table_name}"),
                     )
                 })?;
-                reject_empty_key_values(&table, &item)?;
+                validate_key_attribute_values(&table, &item)?;
                 if let Some(icm) = item_collection_metrics(input, &table, &item) {
                     push_item_collection(&mut item_collections, &table_name, icm);
                 }

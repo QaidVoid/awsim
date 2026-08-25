@@ -312,25 +312,88 @@ pub(crate) fn validate_item(item: &DynamoItem) -> Result<(), AwsError> {
     Ok(())
 }
 
-/// Reject empty string / binary values for the table's key attributes. AWS
-/// permits empty strings for non-key attributes but not for partition or sort
-/// keys. `key_source` may be a full item or just a key map.
-pub(crate) fn reject_empty_key_values(
+/// Maximum size of a partition key value, in bytes of the decoded value.
+pub(crate) const MAX_HASH_KEY_BYTES: usize = 2048;
+/// Maximum size of a sort key value, in bytes of the decoded value.
+pub(crate) const MAX_RANGE_KEY_BYTES: usize = 1024;
+
+/// Validate the *value* of a single key attribute. AWS permits empty strings
+/// for non-key attributes but not for key attributes, and caps a partition key
+/// at 2048 bytes and a sort key at 1024. `index` names the index the attribute
+/// is a key of, or None for the base table's primary key.
+///
+/// Shared by the write paths and by `ExclusiveStartKey` validation, which must
+/// agree: a key we accept into storage has to be one we accept back as a
+/// resume cursor.
+pub(crate) fn validate_key_value(
+    name: &str,
+    value: &Value,
+    is_hash: bool,
+    index: Option<&str>,
+) -> Result<(), AwsError> {
+    let location = match index {
+        Some(idx) => format!("IndexName: {idx}, IndexKey: {name}"),
+        None => format!("Key: {name}"),
+    };
+
+    let is_empty = ["S", "B"]
+        .iter()
+        .any(|t| value.get(t).and_then(Value::as_str) == Some(""));
+    if is_empty {
+        return Err(AwsError::validation(format!(
+            "One or more parameter values were invalid: \
+             The AttributeValue for a key attribute cannot contain an \
+             empty string value. {location}"
+        )));
+    }
+
+    let (limit, kind) = if is_hash {
+        (MAX_HASH_KEY_BYTES, "hashkey")
+    } else {
+        (MAX_RANGE_KEY_BYTES, "rangekey")
+    };
+    if crate::expressions::eval::dynamo_size(value) > limit {
+        return Err(AwsError::validation(format!(
+            "One or more parameter values were invalid: Size of {kind} has \
+             exceeded the maximum size limit of {limit} bytes"
+        )));
+    }
+    Ok(())
+}
+
+/// Run [`validate_key_value`] over every key attribute `key_source` carries,
+/// for the base table and for each index. `key_source` may be a full item or
+/// just a key map, in which case the index attributes are simply absent.
+pub(crate) fn validate_key_attribute_values(
     table: &crate::state::Table,
     key_source: &DynamoItem,
 ) -> Result<(), AwsError> {
-    for key in [table.hash_key(), table.range_key()].into_iter().flatten() {
-        if let Some(v) = key_source.get(key) {
-            let is_empty = ["S", "B"]
-                .iter()
-                .any(|t| v.get(t).and_then(Value::as_str) == Some(""));
-            if is_empty {
-                return Err(AwsError::validation(format!(
-                    "One or more parameter values were invalid: \
-                     The AttributeValue for a key attribute cannot contain an \
-                     empty string value. Key: {key}"
-                )));
-            }
+    let check = |name: &str, is_hash: bool, index: Option<&str>| match key_source.get(name) {
+        Some(v) => validate_key_value(name, v, is_hash, index),
+        None => Ok(()),
+    };
+
+    for (name, is_hash) in [(table.hash_key(), true), (table.range_key(), false)] {
+        if let Some(name) = name {
+            check(name, is_hash, None)?;
+        }
+    }
+    for gsi in &table.gsi {
+        for ke in &gsi.key_schema {
+            check(
+                &ke.attribute_name,
+                ke.key_type == "HASH",
+                Some(&gsi.index_name),
+            )?;
+        }
+    }
+    for lsi in &table.lsi {
+        for ke in &lsi.key_schema {
+            check(
+                &ke.attribute_name,
+                ke.key_type == "HASH",
+                Some(&lsi.index_name),
+            )?;
         }
     }
     Ok(())
@@ -460,7 +523,7 @@ pub fn put_item(
                 "One or more parameter values were invalid: Missing the key {rk} in the item"
             )));
         }
-        reject_empty_key_values(&table, &item)?;
+        validate_key_attribute_values(&table, &item)?;
 
         let sqlite_keys = extract_item_keys(&table, &item)
             .ok_or_else(|| AwsError::validation("Could not extract SQLite keys"))?;
@@ -608,7 +671,7 @@ pub fn delete_item(
             )
         })?;
 
-        reject_empty_key_values(&table, &key)?;
+        validate_key_attribute_values(&table, &key)?;
         let sqlite_pk_sk = resolve_key(&table, &key).map_err(AwsError::validation)?;
 
         let mut keys_item = DynamoItem::new();
@@ -699,7 +762,7 @@ pub fn update_item(
             )
         })?;
 
-        reject_empty_key_values(&table, &key)?;
+        validate_key_attribute_values(&table, &key)?;
         let sqlite_pk_sk = resolve_key(&table, &key).map_err(AwsError::validation)?;
 
         let mut keys_item = DynamoItem::new();
@@ -750,7 +813,9 @@ pub fn update_item(
     validate_item(&new_item)?;
 
     // Re-extract SQLite keys from the merged item. UpdateExpression may
-    // have introduced or changed GSI key attributes.
+    // have introduced or changed GSI key attributes, which have to clear the
+    // same value rules a PutItem would have applied: an update must not be a
+    // way to smuggle an empty or oversized key into an index.
     let sqlite_keys = {
         let table = state.tables.get(&table_name).ok_or_else(|| {
             AwsError::service_not_found(
@@ -758,6 +823,7 @@ pub fn update_item(
                 format!("Cannot do operations on a non-existent table: {table_name}"),
             )
         })?;
+        validate_key_attribute_values(&table, &new_item)?;
         extract_item_keys(&table, &new_item)
             .ok_or_else(|| AwsError::validation("Could not extract SQLite keys"))?
     };

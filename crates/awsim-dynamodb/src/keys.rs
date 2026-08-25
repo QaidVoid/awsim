@@ -174,13 +174,25 @@ fn key_value(schema: &[KeySchemaElement], item: &DynamoItem, key_type: &str) -> 
 fn gsi_key_pair(idx: &GlobalSecondaryIndex, item: &DynamoItem) -> (Option<String>, Option<String>) {
     let mut pk = None;
     let mut sk = None;
+    let mut has_range = false;
     for ke in &idx.key_schema {
         let val = item.get(&ke.attribute_name).and_then(storage_key);
         match ke.key_type.as_str() {
             "HASH" => pk = val,
-            "RANGE" => sk = val,
+            "RANGE" => {
+                has_range = true;
+                sk = val;
+            }
             _ => {}
         }
+    }
+    // An index with a composite key materialises an item only when BOTH key
+    // attributes are present. Half a key is not a sparse entry, it is no
+    // entry: the item is invisible to that index. Storing the hash alone
+    // would surface it in index reads and hand back a LastEvaluatedKey with
+    // no sort key in it.
+    if pk.is_none() || (has_range && sk.is_none()) {
+        return (None, None);
     }
     (pk, sk)
 }
@@ -284,6 +296,23 @@ mod tests {
         let item = dyn_item(json!({"pk": {"S": "x"}, "sk": {"S": "y"}}));
         let keys = extract_item_keys(&table, &item).expect("keys");
         assert!(keys.gsi[0].0.is_none() && keys.gsi[0].1.is_none());
+    }
+
+    #[test]
+    fn partial_gsi_key_does_not_materialise() {
+        // GSI1 is (g1pk, g1sk). An item carrying only the hash half is not
+        // in the index at all, so neither column is stored.
+        let table = make_table();
+        for partial in [
+            json!({"pk": {"S": "x"}, "sk": {"S": "y"}, "g1pk": {"S": "tenant-a"}}),
+            json!({"pk": {"S": "x"}, "sk": {"S": "y"}, "g1sk": {"S": "2024-01-01"}}),
+        ] {
+            let keys = extract_item_keys(&table, &dyn_item(partial)).expect("keys");
+            assert!(
+                keys.gsi[0].0.is_none() && keys.gsi[0].1.is_none(),
+                "half a composite index key must not materialise"
+            );
+        }
     }
 
     #[test]

@@ -291,21 +291,44 @@ fn last_evaluated_key(
 }
 
 /// Validate a caller-supplied `ExclusiveStartKey` against the key schema the
-/// operation resumes on. Real DynamoDB rejects a starting key that is missing
-/// any required attribute, including an empty `{}`, with a ValidationException.
-/// Without this the simulator would silently treat a malformed cursor as a
-/// request to start from the beginning, masking client bugs that fail against
-/// real AWS. `required` is the set of key attribute names the resume needs
-/// (the index keys plus the base primary key). Empty names and duplicates are
-/// ignored.
+/// operation resumes on. Without this the simulator would silently treat a
+/// malformed cursor as a request to start from the beginning, masking client
+/// bugs that fail against real AWS. `required` is the set of key attribute
+/// names the resume needs (the index keys plus the base primary key). Empty
+/// names and duplicates are ignored.
+///
+/// DynamoDB checks the cursor's shape before its contents, and the failures
+/// carry different messages. A wrong attribute *count*, which is what an empty
+/// `{}` and a cursor with extra attributes both are, is rejected on size
+/// alone. Only a correctly sized cursor is checked attribute by attribute, and
+/// only a cursor naming the right attributes has its values validated.
+///
+/// `required` pairs each key attribute name with whether it is a hash key,
+/// which is what decides its size limit. The value rules are the ones the
+/// write paths enforce, so a key that can be stored is always a key that can
+/// be handed back as a cursor.
 fn validate_exclusive_start_key(
     esk: &serde_json::Map<String, Value>,
-    required: &[&str],
+    required: &[(&str, bool)],
 ) -> Result<(), AwsError> {
-    for name in required {
-        if !name.is_empty() && !esk.contains_key(*name) {
+    let mut expected: Vec<(&str, bool)> = required
+        .iter()
+        .copied()
+        .filter(|(n, _)| !n.is_empty())
+        .collect();
+    expected.sort_unstable();
+    expected.dedup_by_key(|(n, _)| *n);
+
+    if esk.len() != expected.len() {
+        return Err(AwsError::validation(
+            "Exclusive Start Key must have same size as table's key schema",
+        ));
+    }
+    for (name, is_hash) in &expected {
+        let Some(value) = esk.get(*name) else {
             return Err(AwsError::validation("The provided starting key is invalid"));
-        }
+        };
+        super::item::validate_key_value(name, value, *is_hash, None)?;
     }
     Ok(())
 }
@@ -337,10 +360,7 @@ pub fn query(
     let filter_expr = opt_str(input, "FilterExpression");
     let key_condition_expr = opt_str(input, "KeyConditionExpression")
         .ok_or_else(|| AwsError::validation("KeyConditionExpression is required for Query"))?;
-    let limit = input
-        .get("Limit")
-        .and_then(|v| v.as_u64())
-        .map(|v| v as usize);
+    let limit = parse_limit(input)?;
     let scan_index_forward = input
         .get("ScanIndexForward")
         .and_then(|v| v.as_bool())
@@ -420,14 +440,12 @@ pub fn query(
                     .iter()
                     .find(|k| k.key_type == "RANGE")
                     .map(|k| k.attribute_name.clone());
-                let proj = IndexProjection::from_index(
-                    &lsi.projection,
-                    table.hash_key().map(str::to_string),
-                    table.range_key().map(str::to_string),
-                    Some(hk.clone()),
-                    rk.clone(),
-                );
-                (hk, rk, None, Some(proj)) // LSI uses base table's pk column -> no slot
+                // No index view for an LSI. An LSI lives in the same partition
+                // as the base item, so AWS transparently fetches non-projected
+                // attributes from the base table (at extra read cost) instead
+                // of hiding them. A GSI cannot do that, which is why only the
+                // GSI arm above carries an IndexProjection.
+                (hk, rk, None, None) // LSI uses base table's pk column -> no slot
             } else {
                 return Err(AwsError::validation(format!(
                     "The table does not have the specified index: {idx}"
@@ -496,10 +514,10 @@ pub fn query(
         validate_exclusive_start_key(
             esk,
             &[
-                &hash_key_name,
-                range_key_name.as_deref().unwrap_or(""),
-                &base_hash_name,
-                base_range_name.as_deref().unwrap_or(""),
+                (&hash_key_name, true),
+                (range_key_name.as_deref().unwrap_or(""), false),
+                (&base_hash_name, true),
+                (base_range_name.as_deref().unwrap_or(""), false),
             ],
         )?;
     }
@@ -572,8 +590,27 @@ pub fn query(
         // FilterExpression only AFTER that accounting.
         scanned_count += 1;
 
+        // AWS applies the GSI Projection BEFORE anything the request asks
+        // for: a KEYS_ONLY index can never surface a non-key attribute, so
+        // neither the FilterExpression nor the ProjectionExpression can see
+        // one. A filter on an unprojected attribute therefore matches
+        // nothing rather than falling back to the base item. The index view
+        // is also what the 1 MiB cap is charged against. Examined bytes, not
+        // just matched bytes.
+        // Borrowed on the base-table and LSI paths: there is no index view to
+        // apply, so the "after index" item is the item itself. Under a
+        // FilterExpression most examined items never reach the response, and
+        // deep-cloning each one just to measure it was the dominant cost of
+        // a scan.
+        let after_index: std::borrow::Cow<'_, DynamoItem> = match &index_projection {
+            Some(p) => std::borrow::Cow::Owned(p.filter(&item)),
+            None => std::borrow::Cow::Borrowed(&item),
+        };
+
         let passes_filter = match &filter_condition {
-            Some(filter) => evaluate_condition(filter, &item, &expr_attr_names, &expr_attr_values)?,
+            Some(filter) => {
+                evaluate_condition(filter, &after_index, &expr_attr_names, &expr_attr_values)?
+            }
             None => true,
         };
 
@@ -582,20 +619,6 @@ pub fn query(
                 items.push(DynamoItem::new());
             }
         } else {
-            // AWS applies the GSI/LSI Projection BEFORE the request's own
-            // ProjectionExpression: a KEYS_ONLY index can never surface a
-            // non-key attribute even if the caller asks for it. The index
-            // view is also what the 1 MiB cap is charged against. Examined
-            // bytes, not just matched bytes.
-            // Borrowed on the base-table path: there is no index view to
-            // apply, so the "after index" item is the item itself. Under
-            // a FilterExpression most examined items never reach the
-            // response, and deep-cloning each one just to measure it was
-            // the dominant cost of a scan.
-            let after_index: std::borrow::Cow<'_, DynamoItem> = match &index_projection {
-                Some(p) => std::borrow::Cow::Owned(p.filter(&item)),
-                None => std::borrow::Cow::Borrowed(&item),
-            };
             if passes_filter {
                 let projected =
                     apply_projection_to_item(&after_index, &projection_paths, &expr_attr_names)?;
@@ -763,10 +786,7 @@ pub fn scan(
     let projection_expr = opt_str(input, "ProjectionExpression");
     super::reject_attrs_to_get_with_projection(input, projection_expr)?;
     let filter_expr = opt_str(input, "FilterExpression");
-    let limit = input
-        .get("Limit")
-        .and_then(|v| v.as_u64())
-        .map(|v| v as usize);
+    let limit = parse_limit(input)?;
     let select = opt_str(input, "Select").unwrap_or("ALL_ATTRIBUTES");
     let exclusive_start_key = input
         .get("ExclusiveStartKey")
@@ -797,33 +817,39 @@ pub fn scan(
 
     // Scanning an index is not the same as scanning the table. Only items
     // that actually materialise into the index are visible (sparse
-    // semantics), and each is seen through the index's Projection. The
+    // semantics), and a GSI's items are seen through its Projection. The
     // membership test is pushed into SQL below for a GSI; an LSI has no
     // dedicated column, so it is checked per item here.
+    //
+    // Only a GSI gets an index view. An LSI can fetch non-projected
+    // attributes back from the base item in its own partition, so it sees
+    // the whole item. See the same split on the [`query`] path.
     let scan_index_projection = scan_index_name.as_deref().and_then(|n| {
+        table.gsi.iter().find(|g| g.index_name == n).map(|g| {
+            let (hk, rk) = index_key_names(&g.key_schema);
+            IndexProjection::from_index(
+                &g.projection,
+                table.hash_key().map(str::to_string),
+                table.range_key().map(str::to_string),
+                hk,
+                rk,
+            )
+        })
+    });
+    // The index's own key names, needed for the LastEvaluatedKey: AWS keys a
+    // resume cursor on the index keys plus the base primary key, since index
+    // keys are not unique on their own. An LSI's hash key is the base table's.
+    let scan_index_keys = scan_index_name.as_deref().and_then(|n| {
         table
             .gsi
             .iter()
             .find(|g| g.index_name == n)
-            .map(|g| {
-                let (hk, rk) = index_key_names(&g.key_schema);
-                IndexProjection::from_index(
-                    &g.projection,
-                    table.hash_key().map(str::to_string),
-                    table.range_key().map(str::to_string),
-                    hk,
-                    rk,
-                )
-            })
+            .map(|g| index_key_names(&g.key_schema))
             .or_else(|| {
                 table.lsi.iter().find(|l| l.index_name == n).map(|l| {
-                    let (_, rk) = index_key_names(&l.key_schema);
-                    IndexProjection::from_index(
-                        &l.projection,
+                    (
                         table.hash_key().map(str::to_string),
-                        table.range_key().map(str::to_string),
-                        table.hash_key().map(str::to_string),
-                        rk,
+                        index_key_names(&l.key_schema).1,
                     )
                 })
             })
@@ -870,9 +896,18 @@ pub fn scan(
     // A supplied ExclusiveStartKey must carry the base primary key. Reject
     // `{}` and partial cursors the way real DynamoDB does.
     if let Some(esk) = exclusive_start_key.as_ref() {
+        let (index_hash, index_range) = match &scan_index_keys {
+            Some((hk, rk)) => (hk.as_deref().unwrap_or(""), rk.as_deref().unwrap_or("")),
+            None => ("", ""),
+        };
         validate_exclusive_start_key(
             esk,
-            &[&hash_key_name, range_key_name.as_deref().unwrap_or("")],
+            &[
+                (index_hash, true),
+                (index_range, false),
+                (&hash_key_name, true),
+                (range_key_name.as_deref().unwrap_or(""), false),
+            ],
         )?;
     }
 
@@ -926,16 +961,18 @@ pub fn scan(
             // ScannedCount and the Limit before the FilterExpression runs.
             scanned_count += 1;
 
-            // An index scan sees the item through the index's Projection,
-            // exactly as Query does, before any request-level projection.
-            let item = match &scan_index_projection {
-                Some(p) => p.filter(&item),
-                None => item,
+            // A GSI scan sees the item through the index's Projection,
+            // exactly as Query does, before the filter or any request-level
+            // projection. Borrowed when there is no index view to apply, so
+            // rows a filter discards are never cloned.
+            let after_index: std::borrow::Cow<'_, DynamoItem> = match &scan_index_projection {
+                Some(p) => std::borrow::Cow::Owned(p.filter(&item)),
+                None => std::borrow::Cow::Borrowed(&item),
             };
 
             let passes_filter = match &filter_condition {
                 Some(filter) => {
-                    evaluate_condition(filter, &item, &expr_attr_names, &expr_attr_values)?
+                    evaluate_condition(filter, &after_index, &expr_attr_names, &expr_attr_values)?
                 }
                 None => true,
             };
@@ -946,12 +983,15 @@ pub fn scan(
                 }
             } else {
                 if passes_filter {
-                    let projected =
-                        apply_projection_to_item(&item, &projection_paths, &expr_attr_names)?;
+                    let projected = apply_projection_to_item(
+                        &after_index,
+                        &projection_paths,
+                        &expr_attr_names,
+                    )?;
                     items.push(projected);
                 }
                 // 1 MiB cap is charged against examined bytes, not matches.
-                response_bytes += estimate_item_bytes(&item);
+                response_bytes += estimate_item_bytes(&after_index);
             }
 
             // Cursor advances for every evaluated row so LastEvaluatedKey
@@ -984,12 +1024,18 @@ pub fn scan(
     });
 
     if hit_limit && let Some(item) = last_item {
-        // Scan always streams the base table, so the index and base key
-        // names coincide here.
+        // We stream the base table even when scanning an index, so the base
+        // primary key alone is enough for our own resume. AWS still returns
+        // the index keys alongside it, and a client that round-trips the
+        // cursor through its own key-shaped type would notice their absence.
+        let (index_hash, index_range) = match &scan_index_keys {
+            Some((hk, rk)) => (hk.as_deref().unwrap_or(&hash_key_name), rk.as_deref()),
+            None => (hash_key_name.as_str(), range_key_name.as_deref()),
+        };
         let lek = last_evaluated_key(
             &item,
-            &hash_key_name,
-            range_key_name.as_deref(),
+            index_hash,
+            index_range,
             &hash_key_name,
             range_key_name.as_deref(),
         );
@@ -1012,6 +1058,26 @@ pub fn scan(
         result["ConsumedCapacity"] = cc;
     }
     Ok(result)
+}
+
+/// Parse and validate `Limit` for Query and Scan. AWS constrains it to an
+/// integer of at least 1, so `Limit: 0` and negatives are ValidationExceptions
+/// rather than a request for an empty page. Silently ignoring them would let a
+/// client bug pass here and fail against real DynamoDB.
+fn parse_limit(input: &Value) -> Result<Option<usize>, AwsError> {
+    let Some(raw) = input.get("Limit").filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    match raw.as_u64() {
+        Some(v) if v >= 1 => Ok(Some(v as usize)),
+        _ => {
+            let shown = raw.as_str().map_or_else(|| raw.to_string(), str::to_string);
+            Err(AwsError::validation(format!(
+                "1 validation error detected: Value '{shown}' at 'limit' failed to \
+                 satisfy constraint: Member must have value greater than or equal to 1"
+            )))
+        }
+    }
 }
 
 /// Parse and validate the parallel-scan parameters. Returns None when
@@ -2149,6 +2215,186 @@ mod tests {
         assert!(item.get("another").is_none(), "KEYS_ONLY leaked 'another'");
     }
 
+    /// Table "t" (pk/sk) with a KEYS_ONLY LSI "byRank" on (pk, rank).
+    fn make_state_with_rank_lsi() -> DynamoState {
+        use crate::state::Projection;
+        let state = make_state();
+        state.tables.get_mut("t").unwrap().lsi = vec![crate::state::LocalSecondaryIndex {
+            index_name: "byRank".into(),
+            key_schema: vec![
+                KeySchemaElement {
+                    attribute_name: "pk".into(),
+                    key_type: "HASH".into(),
+                },
+                KeySchemaElement {
+                    attribute_name: "rank".into(),
+                    key_type: "RANGE".into(),
+                },
+            ],
+            projection: Projection {
+                projection_type: "KEYS_ONLY".into(),
+                non_key_attributes: vec![],
+            },
+        }];
+        state
+    }
+
+    #[test]
+    fn gsi_filter_cannot_see_unprojected_attributes() {
+        // A KEYS_ONLY GSI never stores 'secret', so DynamoDB has nothing to
+        // compare and the filter matches nothing. It does not fall back to
+        // the base item. The item is still evaluated, so ScannedCount is 1.
+        let state = make_state_with_by_tag_gsi("KEYS_ONLY", vec![]);
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        put_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Item": {
+                    "pk":     { "S": "p1" },
+                    "sk":     { "S": "s1" },
+                    "tag":    { "S": "shared" },
+                    "secret": { "S": "hit" },
+                },
+            }),
+            &c,
+        )
+        .unwrap();
+
+        let req = json!({
+            "TableName": "t",
+            "IndexName": "byTag",
+            "KeyConditionExpression": "tag = :t",
+            "FilterExpression": "secret = :s",
+            "ExpressionAttributeValues": { ":t": {"S": "shared"}, ":s": {"S": "hit"} },
+        });
+        let resp = query(&state, &sqlite, &req, &c).unwrap();
+        assert_eq!(
+            resp["Count"],
+            json!(0),
+            "filter on an unprojected GSI attribute must not match"
+        );
+        assert_eq!(resp["ScannedCount"], json!(1), "the item was still read");
+
+        let resp = scan(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "IndexName": "byTag",
+                "FilterExpression": "secret = :s",
+                "ExpressionAttributeValues": { ":s": {"S": "hit"} },
+            }),
+            &c,
+        )
+        .unwrap();
+        assert_eq!(resp["Count"], json!(0), "Scan agrees with Query");
+    }
+
+    #[test]
+    fn lsi_filter_sees_unprojected_attributes() {
+        // An LSI sits in the base item's own partition, so AWS fetches
+        // non-projected attributes from the base table rather than hiding
+        // them. A KEYS_ONLY LSI can still filter and project on 'secret'.
+        let state = make_state_with_rank_lsi();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        put_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Item": {
+                    "pk":     { "S": "p1" },
+                    "sk":     { "S": "s1" },
+                    "rank":   { "N": "1" },
+                    "secret": { "S": "hit" },
+                },
+            }),
+            &c,
+        )
+        .unwrap();
+
+        let resp = query(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "IndexName": "byRank",
+                "KeyConditionExpression": "pk = :p",
+                "FilterExpression": "secret = :s",
+                "ProjectionExpression": "secret",
+                "ExpressionAttributeValues": { ":p": {"S": "p1"}, ":s": {"S": "hit"} },
+            }),
+            &c,
+        )
+        .unwrap();
+        assert_eq!(resp["Count"], json!(1), "LSI filter reads through to base");
+        assert_eq!(
+            resp["Items"][0]["secret"]["S"],
+            json!("hit"),
+            "LSI fetches an unprojected attribute the caller asked for"
+        );
+    }
+
+    #[test]
+    fn scan_index_last_evaluated_key_carries_index_keys() {
+        // AWS keys an index-scan cursor on the index keys plus the base
+        // primary key, because index keys are not unique on their own.
+        let state = make_state_with_by_tag_gsi("ALL", vec![]);
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        for i in 0..3 {
+            put_item(
+                &state,
+                &sqlite,
+                &json!({
+                    "TableName": "t",
+                    "Item": {
+                        "pk":  { "S": format!("p{i}") },
+                        "sk":  { "S": "s1" },
+                        "tag": { "S": "shared" },
+                    },
+                }),
+                &c,
+            )
+            .unwrap();
+        }
+
+        let resp = scan(
+            &state,
+            &sqlite,
+            &json!({ "TableName": "t", "IndexName": "byTag", "Limit": 1 }),
+            &c,
+        )
+        .unwrap();
+        let lek = &resp["LastEvaluatedKey"];
+        assert_eq!(lek["pk"]["S"], json!("p0"));
+        assert_eq!(lek["sk"]["S"], json!("s1"));
+        assert_eq!(
+            lek["tag"]["S"],
+            json!("shared"),
+            "index key missing from LEK"
+        );
+
+        // The cursor still round-trips: feeding it back resumes the scan.
+        let resp2 = scan(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "IndexName": "byTag",
+                "Limit": 1,
+                "ExclusiveStartKey": lek,
+            }),
+            &c,
+        )
+        .unwrap();
+        assert_eq!(resp2["Items"][0]["pk"]["S"], json!("p1"));
+    }
+
     #[test]
     fn gsi_include_projection_returns_keys_plus_listed_attrs() {
         let state = make_state_with_by_tag_gsi("INCLUDE", vec!["secret".into()]);
@@ -2537,6 +2783,60 @@ mod tests {
     }
 
     #[test]
+    fn limit_below_one_is_rejected() {
+        // AWS constrains Limit to >= 1. Zero is not "return nothing", and a
+        // negative is not "no limit"; both are ValidationExceptions.
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        put_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Item": { "pk": {"S": "p"}, "sk": {"S": "a"} },
+            }),
+            &c,
+        )
+        .unwrap();
+
+        for bad in [json!(0), json!(-1)] {
+            let err = query(
+                &state,
+                &sqlite,
+                &json!({
+                    "TableName": "t",
+                    "KeyConditionExpression": "pk = :pk",
+                    "ExpressionAttributeValues": { ":pk": {"S": "p"} },
+                    "Limit": bad,
+                }),
+                &c,
+            )
+            .unwrap_err();
+            assert!(
+                err.to_string().contains("greater than or equal to 1"),
+                "Query Limit {bad} should be rejected, got {err}"
+            );
+
+            let err = scan(
+                &state,
+                &sqlite,
+                &json!({ "TableName": "t", "Limit": bad }),
+                &c,
+            )
+            .unwrap_err();
+            assert!(
+                err.to_string().contains("greater than or equal to 1"),
+                "Scan Limit {bad} should be rejected, got {err}"
+            );
+        }
+
+        // An absent or null Limit still means "no limit", not an error.
+        let resp = scan(&state, &sqlite, &json!({ "TableName": "t" }), &c).unwrap();
+        assert_eq!(resp["Count"], json!(1));
+    }
+
+    #[test]
     fn scan_limit_counts_evaluated_items_not_matches() {
         // Same semantics for Scan: 30 rows in 30 partitions, scanned in
         // (pk,sk) order p000..p029. Limit=10 evaluates p000..p009; only
@@ -2619,6 +2919,187 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn exclusive_start_key_size_is_checked_before_its_contents() {
+        // AWS separates the two failures: a cursor with the wrong number of
+        // attributes is rejected on size, and only a correctly sized one is
+        // checked attribute by attribute. Table "t" is pk + sk, so the
+        // schema size is 2.
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        let scan_with = |esk: Value| {
+            scan(
+                &state,
+                &sqlite,
+                &json!({ "TableName": "t", "ExclusiveStartKey": esk }),
+                &c,
+            )
+            .unwrap_err()
+        };
+
+        for wrong_size in [
+            json!({}),
+            json!({ "pk": {"S": "x"} }),
+            json!({ "pk": {"S": "x"}, "sk": {"S": "y"}, "extra": {"S": "z"} }),
+        ] {
+            let err = scan_with(wrong_size.clone());
+            assert_eq!(err.code, "ValidationException");
+            assert!(
+                err.message.contains("same size as table's key schema"),
+                "{wrong_size} should fail on size, got: {}",
+                err.message
+            );
+        }
+
+        // Right size, wrong names: a contents error, not a size error.
+        let err = scan_with(json!({ "pk": {"S": "x"}, "nope": {"S": "y"} }));
+        assert_eq!(err.code, "ValidationException");
+        assert_eq!(err.message, "The provided starting key is invalid");
+    }
+
+    #[test]
+    fn exclusive_start_key_values_are_validated_like_written_keys() {
+        // A correctly shaped cursor still has to carry usable key values.
+        // Before this check an empty-string key silently restarted the scan
+        // from the beginning, and an oversized one was accepted as a cursor
+        // even though the same key could never have been written.
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+        let scan_with = |esk: Value| {
+            scan(
+                &state,
+                &sqlite,
+                &json!({ "TableName": "t", "ExclusiveStartKey": esk }),
+                &c,
+            )
+            .unwrap_err()
+        };
+
+        let err = scan_with(json!({ "pk": {"S": ""}, "sk": {"S": "y"} }));
+        assert_eq!(err.code, "ValidationException");
+        assert!(
+            err.message.contains("cannot contain an empty string value"),
+            "got: {}",
+            err.message
+        );
+
+        let err = scan_with(json!({ "pk": {"S": "x"}, "sk": {"S": ""} }));
+        assert!(
+            err.message.contains("cannot contain an empty string value"),
+            "an empty sort key is invalid too, got: {}",
+            err.message
+        );
+
+        // 2048 bytes for a partition key, 1024 for a sort key.
+        let err = scan_with(json!({
+            "pk": {"S": "a".repeat(2049)},
+            "sk": {"S": "y"},
+        }));
+        assert!(
+            err.message.contains("Size of hashkey"),
+            "got: {}",
+            err.message
+        );
+        let err = scan_with(json!({
+            "pk": {"S": "x"},
+            "sk": {"S": "a".repeat(1025)},
+        }));
+        assert!(
+            err.message.contains("Size of rangekey"),
+            "got: {}",
+            err.message
+        );
+
+        // The limits are exact, not approximate: at the cap the cursor is
+        // valid and the scan simply resumes past it.
+        let resp = scan(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "ExclusiveStartKey": {
+                    "pk": {"S": "a".repeat(2048)},
+                    "sk": {"S": "b".repeat(1024)},
+                },
+            }),
+            &c,
+        )
+        .unwrap();
+        assert_eq!(resp["Count"], json!(0));
+    }
+
+    #[test]
+    fn oversized_keys_are_rejected_on_write_too() {
+        // The read and write paths have to agree: a key that cannot be
+        // written must not be presentable as a cursor, and vice versa.
+        // Without this, a stored oversized key would produce a
+        // LastEvaluatedKey our own cursor validation then rejects.
+        let state = make_state();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let err = put_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Item": { "pk": {"S": "a".repeat(2049)}, "sk": {"S": "y"} },
+            }),
+            &ctx(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ValidationException");
+        assert!(
+            err.message.contains("Size of hashkey"),
+            "got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn index_key_values_are_validated_on_write() {
+        // A GSI cursor carries the index key's value, so index keys have to
+        // clear the same rules as base keys. UpdateItem counts: setting a
+        // GSI key attribute is another way to reach the index.
+        let state = make_state_with_by_tag_gsi("ALL", vec![]);
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let c = ctx();
+
+        let err = put_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Item": { "pk": {"S": "p1"}, "sk": {"S": "s1"}, "tag": {"S": ""} },
+            }),
+            &c,
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("IndexName: byTag"),
+            "an empty index key names the index, got: {}",
+            err.message
+        );
+
+        let err = super::super::item::update_item(
+            &state,
+            &sqlite,
+            &json!({
+                "TableName": "t",
+                "Key": { "pk": {"S": "p1"}, "sk": {"S": "s1"} },
+                "UpdateExpression": "SET tag = :t",
+                "ExpressionAttributeValues": { ":t": {"S": "a".repeat(2049)} },
+            }),
+            &c,
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("Size of hashkey"),
+            "an update must not smuggle an oversized index key in, got: {}",
+            err.message
+        );
     }
 
     #[test]
