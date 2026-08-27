@@ -2,9 +2,7 @@ use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
 use crate::{
-    keys::{
-        extract_item_keys, extract_pk_sk, item_to_storage_value, resolve_key, storage_value_to_item,
-    },
+    keys::{extract_pk_sk, item_to_storage_value, resolve_key, storage_value_to_item},
     sqlite_store::SqliteStore,
     state::DynamoState,
     throttle::BucketKind,
@@ -12,7 +10,7 @@ use crate::{
 
 use super::item::{
     ITEM_MAX_BYTES, estimate_item_bytes, estimate_value_bytes, item_to_json, parse_item,
-    validate_item, validate_key_attribute_values,
+    validate_and_extract_keys, validate_item, validate_key_attribute_values,
 };
 use super::{
     item_collection_metrics, push_item_collection, read_capacity_units, write_capacity_units,
@@ -265,37 +263,41 @@ pub fn batch_write_item(
                     )));
                 }
                 validate_item(&item)?;
-                validate_key_attribute_values(&table, &item)?;
-                if let Some(keys) = extract_item_keys(&table, &item) {
-                    let attrs = item_to_storage_value(&item);
-                    *write_units_by_table.entry(table_name.clone()).or_default() +=
-                        write_capacity_units(item_bytes, false);
-                    if let Some(icm) = item_collection_metrics(input, &table, &item) {
-                        push_item_collection(&mut item_collections, table_name, icm);
-                    }
-                    sqlite_ops.push(SqliteOp::Put {
-                        table: table_name.clone(),
-                        pk: keys.pk,
-                        sk: keys.sk,
-                        attrs,
-                        gsi: Box::new(keys.gsi),
-                    });
+                // A request whose key cannot be extracted is rejected, not
+                // skipped. Skipping returned 200 with an empty
+                // UnprocessedItems for a write that never happened, which
+                // the caller has no way to detect.
+                let keys = validate_and_extract_keys(&table, &item)?;
+                let attrs = item_to_storage_value(&item);
+                *write_units_by_table.entry(table_name.clone()).or_default() +=
+                    write_capacity_units(item_bytes, false);
+                if let Some(icm) = item_collection_metrics(input, &table, &item) {
+                    push_item_collection(&mut item_collections, table_name, icm);
                 }
+                sqlite_ops.push(SqliteOp::Put {
+                    table: table_name.clone(),
+                    pk: keys.pk,
+                    sk: keys.sk,
+                    attrs,
+                    gsi: Box::new(keys.gsi),
+                });
             } else if let Some(delete_req) = req.get("DeleteRequest") {
                 let key = match parse_item(&delete_req["Key"]) {
                     Some(k) => k,
                     None => continue,
                 };
-                if let Some((pk, sk)) = extract_pk_sk(&table, &key) {
-                    if let Some(icm) = item_collection_metrics(input, &table, &key) {
-                        push_item_collection(&mut item_collections, table_name, icm);
-                    }
-                    sqlite_ops.push(SqliteOp::Delete {
-                        table: table_name.clone(),
-                        pk,
-                        sk,
-                    });
+                validate_key_attribute_values(&table, &key)?;
+                let (pk, sk) = extract_pk_sk(&table, &key).ok_or_else(|| {
+                    AwsError::validation("One of the required keys was not given a value")
+                })?;
+                if let Some(icm) = item_collection_metrics(input, &table, &key) {
+                    push_item_collection(&mut item_collections, table_name, icm);
                 }
+                sqlite_ops.push(SqliteOp::Delete {
+                    table: table_name.clone(),
+                    pk,
+                    sk,
+                });
             }
         }
     }

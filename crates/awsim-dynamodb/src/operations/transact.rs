@@ -5,9 +5,7 @@ use serde_json::{Value, json};
 
 use crate::{
     expressions::{apply_update_expression, evaluate_condition, parse_condition},
-    keys::{
-        extract_item_keys, extract_pk_sk, item_to_storage_value, resolve_key, storage_value_to_item,
-    },
+    keys::{extract_pk_sk, item_to_storage_value, resolve_key, storage_value_to_item},
     sqlite_store::{MAX_GSI_SLOTS, ReadTx, SqliteStore, WriteTx},
     state::{DynamoItem, DynamoState},
     throttle::BucketKind,
@@ -16,8 +14,8 @@ use crate::{
 use super::{
     build_consumed_capacity, get_expr_attr_names, get_expr_attr_values,
     item::{
-        estimate_item_bytes, estimate_value_bytes, item_to_json, parse_item, validate_item,
-        validate_key_attribute_values,
+        estimate_item_bytes, estimate_value_bytes, item_to_json, parse_item,
+        validate_and_extract_keys, validate_item,
     },
     item_collection_metrics, opt_str, push_item_collection, read_capacity_units,
     validate_expr_attr_values, write_capacity_units,
@@ -306,12 +304,10 @@ pub fn transact_write_items(
                         format!("Table not found: {table_name}"),
                     )
                 })?;
-                validate_key_attribute_values(&table, &item)?;
                 if let Some(icm) = item_collection_metrics(input, &table, &item) {
                     push_item_collection(&mut item_collections, &table_name, icm);
                 }
-                extract_item_keys(&table, &item)
-                    .ok_or_else(|| AwsError::validation("Could not construct key"))?
+                validate_and_extract_keys(&table, &item)?
             };
             // A Put that replaces an item charges the larger of the
             // old and new images.
@@ -676,8 +672,7 @@ pub fn transact_write_items(
                     let table = schema_cache
                         .get(&mutation.table_name)
                         .ok_or_else(|| AwsError::internal("missing schema cache entry"))?;
-                    let sqlite_keys = extract_item_keys(table, &item)
-                        .ok_or_else(|| AwsError::validation("Could not extract SQLite keys"))?;
+                    let sqlite_keys = validate_and_extract_keys(table, &item)?;
                     let attrs = item_to_storage_value(&item);
                     tx.put_item(
                         &ctx.account_id,

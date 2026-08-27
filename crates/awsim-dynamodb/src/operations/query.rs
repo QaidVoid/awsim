@@ -18,7 +18,9 @@ use super::{
     build_consumed_capacity, get_expr_attr_names, get_expr_attr_values, opt_str,
     read_capacity_units, require_str, validate_expr_attr_values,
 };
-use crate::operations::item::{estimate_item_bytes, item_to_json};
+use crate::operations::item::{estimate_item_bytes, estimate_value_bytes, item_to_json};
+
+use std::borrow::Cow;
 
 /// Split an index key schema into its `(hash, range)` attribute names.
 fn index_key_names(schema: &[crate::state::KeySchemaElement]) -> (Option<String>, Option<String>) {
@@ -244,17 +246,192 @@ impl IndexProjection {
         }
     }
 
+    /// Whether the index stores this attribute.
+    fn allows(&self, name: &str) -> bool {
+        self.allowed.as_ref().is_none_or(|a| a.contains(name))
+    }
+
     /// Apply the projection: drop attributes that the index would not
-    /// store. No-op when `allowed` is None (ALL projection).
-    fn filter(&self, item: &DynamoItem) -> DynamoItem {
+    /// store. An ALL projection borrows, since it drops nothing. ALL is
+    /// the default and the common case, so cloning here would clone every
+    /// examined item on most index reads.
+    fn filter<'a>(&self, item: &'a DynamoItem) -> Cow<'a, DynamoItem> {
         match &self.allowed {
-            None => item.clone(),
-            Some(allow) => item
-                .iter()
-                .filter(|(k, _)| allow.contains(k.as_str()))
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
+            None => Cow::Borrowed(item),
+            Some(allow) => Cow::Owned(
+                item.iter()
+                    .filter(|(k, _)| allow.contains(k.as_str()))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            ),
         }
+    }
+}
+
+/// Size an item as the index stores it, without building the projected copy.
+///
+/// The 1 MiB page cap is charged against the index view, and materialising
+/// that view purely to measure it is what made a filtered index read clone
+/// every row it examined. Mirrors [`estimate_item_bytes`] over the surviving
+/// attributes.
+fn estimate_projected_item_bytes(item: &DynamoItem, view: Option<&IndexProjection>) -> usize {
+    let Some(p) = view else {
+        return estimate_item_bytes(item);
+    };
+    let mut total = 0usize;
+    let mut count = 0usize;
+    for (name, value) in item {
+        if !p.allows(name) {
+            continue;
+        }
+        total += name.len() + estimate_value_bytes(value);
+        count += 1;
+    }
+    total + count * 4 + 2
+}
+
+/// Everything a Query or Scan needs to know about the index it targets.
+///
+/// Resolved once and shared by both read paths. Two copies of this logic is
+/// how Query came to reject an unknown `IndexName` while Scan silently swept
+/// the base table instead.
+struct ResolvedIndex {
+    /// Key names the key condition and the resume cursor are expressed in.
+    /// The base table's keys when no index is named.
+    hash_key: String,
+    range_key: Option<String>,
+    /// Storage slot backing a GSI. None for the base table and for an LSI,
+    /// which is served out of the base partition.
+    gsi_slot: Option<usize>,
+    /// What the index stores. None when no index is named.
+    projection: Option<IndexProjection>,
+    /// Whether `projection` also governs what the read sees.
+    ///
+    /// True for a GSI: a KEYS_ONLY GSI can never surface a non-key attribute,
+    /// so neither the filter nor the response may see one. False for an LSI,
+    /// which lives in the base item's partition and so fetches non-projected
+    /// attributes back from the base item rather than hiding them.
+    projection_is_view: bool,
+    /// Attribute an item must carry to appear in the index at all.
+    membership_attr: Option<String>,
+}
+
+impl ResolvedIndex {
+    /// The view the read filters and measures through, or None when it sees
+    /// the whole base item.
+    fn view(&self) -> Option<&IndexProjection> {
+        self.projection.as_ref().filter(|_| self.projection_is_view)
+    }
+}
+
+/// Resolve the target of a read, rejecting an index the table does not have.
+fn resolve_index(
+    table: &crate::state::Table,
+    index_name: Option<&str>,
+) -> Result<ResolvedIndex, AwsError> {
+    let base_hash = table.hash_key().unwrap_or("").to_string();
+    let base_range = table.range_key().map(str::to_string);
+
+    let Some(idx) = index_name else {
+        return Ok(ResolvedIndex {
+            hash_key: base_hash,
+            range_key: base_range,
+            gsi_slot: None,
+            projection: None,
+            projection_is_view: false,
+            membership_attr: None,
+        });
+    };
+
+    if let Some((slot, gsi)) = table
+        .gsi
+        .iter()
+        .enumerate()
+        .find(|(_, g)| g.index_name == idx)
+    {
+        let (hash, range) = index_key_names(&gsi.key_schema);
+        let hash = hash.ok_or_else(|| {
+            AwsError::validation(format!("GSI {idx} has no HASH key in its KeySchema"))
+        })?;
+        let projection = IndexProjection::from_index(
+            &gsi.projection,
+            Some(base_hash),
+            base_range,
+            Some(hash.clone()),
+            range.clone(),
+        );
+        return Ok(ResolvedIndex {
+            membership_attr: Some(hash.clone()),
+            hash_key: hash,
+            range_key: range,
+            gsi_slot: Some(slot).filter(|s| *s < crate::sqlite_store::MAX_GSI_SLOTS),
+            projection: Some(projection),
+            projection_is_view: true,
+        });
+    }
+
+    if let Some(lsi) = table.lsi.iter().find(|l| l.index_name == idx) {
+        let range = index_key_names(&lsi.key_schema).1;
+        let projection = IndexProjection::from_index(
+            &lsi.projection,
+            Some(base_hash.clone()),
+            base_range,
+            Some(base_hash.clone()),
+            range.clone(),
+        );
+        return Ok(ResolvedIndex {
+            hash_key: base_hash,
+            membership_attr: range.clone(),
+            range_key: range,
+            gsi_slot: None,
+            projection: Some(projection),
+            projection_is_view: false,
+        });
+    }
+
+    Err(AwsError::validation(format!(
+        "The table does not have the specified index: {idx}"
+    )))
+}
+
+/// Resolve `Select` into the narrowing it asks of the response, rejecting the
+/// combinations AWS rejects.
+///
+/// A GSI read is already confined to what the index projects by its view, so
+/// `ALL_PROJECTED_ATTRIBUTES` only has work to do on an LSI, which otherwise
+/// sees the whole base item. `verb` names the operation in the error message
+/// the way AWS does.
+fn resolve_select<'a>(
+    select: &str,
+    index: &'a ResolvedIndex,
+    on_index: bool,
+    has_projection: bool,
+    verb: &str,
+) -> Result<Option<&'a IndexProjection>, AwsError> {
+    match select {
+        "ALL_ATTRIBUTES" | "COUNT" => Ok(None),
+        "ALL_PROJECTED_ATTRIBUTES" => {
+            if !on_index {
+                return Err(AwsError::validation(format!(
+                    "ALL_PROJECTED_ATTRIBUTES can be used only when {verb} using an Index"
+                )));
+            }
+            Ok(index.projection.as_ref().filter(|_| index.view().is_none()))
+        }
+        "SPECIFIC_ATTRIBUTES" => {
+            if !has_projection {
+                return Err(AwsError::validation(
+                    "Cannot use Select=SPECIFIC_ATTRIBUTES without specifying \
+                     ProjectionExpression or AttributesToGet",
+                ));
+            }
+            Ok(None)
+        }
+        other => Err(AwsError::validation(format!(
+            "1 validation error detected: Value '{other}' at 'select' failed to \
+             satisfy constraint: Member must satisfy enum value set: \
+             [SPECIFIC_ATTRIBUTES, COUNT, ALL_ATTRIBUTES, ALL_PROJECTED_ATTRIBUTES]"
+        ))),
     }
 }
 
@@ -304,31 +481,33 @@ fn last_evaluated_key(
 /// only a cursor naming the right attributes has its values validated.
 ///
 /// `required` pairs each key attribute name with whether it is a hash key,
-/// which is what decides its size limit. The value rules are the ones the
-/// write paths enforce, so a key that can be stored is always a key that can
-/// be handed back as a cursor.
+/// which is what decides its size limit, and with the index it is a key of.
+/// The value rules are the ones the write paths enforce, so a key that can be
+/// stored is always a key that can be handed back as a cursor, and a violation
+/// reads the same either way. An attribute that is both an index key and a
+/// base key is reported as the base key, which is what it is.
 fn validate_exclusive_start_key(
     esk: &serde_json::Map<String, Value>,
-    required: &[(&str, bool)],
+    required: &[(&str, bool, Option<&str>)],
 ) -> Result<(), AwsError> {
-    let mut expected: Vec<(&str, bool)> = required
+    let mut expected: Vec<(&str, bool, Option<&str>)> = required
         .iter()
         .copied()
-        .filter(|(n, _)| !n.is_empty())
+        .filter(|(n, _, _)| !n.is_empty())
         .collect();
     expected.sort_unstable();
-    expected.dedup_by_key(|(n, _)| *n);
+    expected.dedup_by_key(|(n, _, _)| *n);
 
     if esk.len() != expected.len() {
         return Err(AwsError::validation(
             "Exclusive Start Key must have same size as table's key schema",
         ));
     }
-    for (name, is_hash) in &expected {
+    for (name, is_hash, index) in &expected {
         let Some(value) = esk.get(*name) else {
             return Err(AwsError::validation("The provided starting key is invalid"));
         };
-        super::item::validate_key_value(name, value, *is_hash, None)?;
+        super::item::validate_key_value(name, value, *is_hash, *index)?;
     }
     Ok(())
 }
@@ -387,72 +566,19 @@ pub fn query(
     let base_range_name = table.range_key().map(|s| s.to_string());
 
     // Resolve which key schema applies. With IndexName, GSI/LSI metadata
-    // names different attributes than the base table; we look up the
-    // index and pull its hash/range key names. Unknown index -> 400 (AWS
-    // raises ValidationException).
-    //
-    // We also capture the index's Projection setting so we can filter
-    // the returned attributes to KEYS_ONLY / INCLUDE / ALL, matching
-    // AWS. Without that filter awsim returns the full item regardless,
-    // which silently lies about what a non-ALL index would store.
+    // names different attributes than the base table.
     let index_name = opt_str(input, "IndexName");
-    let (hash_key_name, range_key_name, gsi_slot, index_projection) = match index_name {
-        None => (
-            table.hash_key().unwrap_or("").to_string(),
-            table.range_key().map(|s| s.to_string()),
-            None,
-            None,
-        ),
-        Some(idx) => {
-            // Try GSI first; fall back to LSI.
-            if let Some((slot, gsi)) = table
-                .gsi
-                .iter()
-                .enumerate()
-                .find(|(_, g)| g.index_name == idx)
-            {
-                let hk = gsi
-                    .key_schema
-                    .iter()
-                    .find(|k| k.key_type == "HASH")
-                    .map(|k| k.attribute_name.clone())
-                    .ok_or_else(|| {
-                        AwsError::validation(format!("GSI {idx} has no HASH key in its KeySchema"))
-                    })?;
-                let rk = gsi
-                    .key_schema
-                    .iter()
-                    .find(|k| k.key_type == "RANGE")
-                    .map(|k| k.attribute_name.clone());
-                let proj = IndexProjection::from_index(
-                    &gsi.projection,
-                    table.hash_key().map(str::to_string),
-                    table.range_key().map(str::to_string),
-                    Some(hk.clone()),
-                    rk.clone(),
-                );
-                (hk, rk, Some(slot), Some(proj))
-            } else if let Some(lsi) = table.lsi.iter().find(|l| l.index_name == idx) {
-                // LSI shares the base hash key, only the range key differs.
-                let hk = table.hash_key().unwrap_or("").to_string();
-                let rk = lsi
-                    .key_schema
-                    .iter()
-                    .find(|k| k.key_type == "RANGE")
-                    .map(|k| k.attribute_name.clone());
-                // No index view for an LSI. An LSI lives in the same partition
-                // as the base item, so AWS transparently fetches non-projected
-                // attributes from the base table (at extra read cost) instead
-                // of hiding them. A GSI cannot do that, which is why only the
-                // GSI arm above carries an IndexProjection.
-                (hk, rk, None, None) // LSI uses base table's pk column -> no slot
-            } else {
-                return Err(AwsError::validation(format!(
-                    "The table does not have the specified index: {idx}"
-                )));
-            }
-        }
-    };
+    let index = resolve_index(&table, index_name)?;
+    let hash_key_name = index.hash_key.clone();
+    let range_key_name = index.range_key.clone();
+    let gsi_slot = index.gsi_slot;
+    let select_view = resolve_select(
+        select,
+        &index,
+        index_name.is_some(),
+        !projection_paths.is_empty(),
+        "Querying",
+    )?;
 
     // Strongly consistent reads are not supported on GSIs: a GSI lags the
     // base table, so AWS rejects ConsistentRead=true on an index query with
@@ -514,10 +640,10 @@ pub fn query(
         validate_exclusive_start_key(
             esk,
             &[
-                (&hash_key_name, true),
-                (range_key_name.as_deref().unwrap_or(""), false),
-                (&base_hash_name, true),
-                (base_range_name.as_deref().unwrap_or(""), false),
+                (&hash_key_name, true, index_name),
+                (range_key_name.as_deref().unwrap_or(""), false, index_name),
+                (&base_hash_name, true, None),
+                (base_range_name.as_deref().unwrap_or(""), false, None),
             ],
         )?;
     }
@@ -568,6 +694,7 @@ pub fn query(
     };
 
     let mut scanned_count = 0usize;
+    let mut matched_count = 0usize;
     let mut items: Vec<DynamoItem> = Vec::new();
     let mut response_bytes = 0usize;
     let mut last_item: Option<DynamoItem> = None;
@@ -577,12 +704,24 @@ pub fn query(
     // shard, and we don't want to hold it across a blocking read.
     drop(table);
 
+    let view = index.view();
+    let returns_items = select != "COUNT";
+
     let mut handle = |item: DynamoItem| -> Result<bool, AwsError> {
         // Key condition over typed attributes (covers sort key range,
         // BEGINS_WITH, BETWEEN, etc.). Items that fail the key condition
         // are skipped silently. DynamoDB's index would never have
         // surfaced them, so they don't count toward ScannedCount either.
         if !evaluate_condition(&key_condition, &item, &expr_attr_names, &expr_attr_values)? {
+            return Ok(true);
+        }
+        // Sparse index semantics: an item that does not carry the index's
+        // key is not in the index, so the index could not have surfaced it.
+        // A GSI was already filtered in SQL; an LSI has no dedicated column
+        // and is checked here.
+        if let Some(attr) = &index.membership_attr
+            && !item.contains_key(attr)
+        {
             return Ok(true);
         }
         // This item is "evaluated": the index surfaced it. AWS counts every
@@ -594,17 +733,13 @@ pub fn query(
         // for: a KEYS_ONLY index can never surface a non-key attribute, so
         // neither the FilterExpression nor the ProjectionExpression can see
         // one. A filter on an unprojected attribute therefore matches
-        // nothing rather than falling back to the base item. The index view
-        // is also what the 1 MiB cap is charged against. Examined bytes, not
-        // just matched bytes.
-        // Borrowed on the base-table and LSI paths: there is no index view to
-        // apply, so the "after index" item is the item itself. Under a
-        // FilterExpression most examined items never reach the response, and
-        // deep-cloning each one just to measure it was the dominant cost of
-        // a scan.
-        let after_index: std::borrow::Cow<'_, DynamoItem> = match &index_projection {
-            Some(p) => std::borrow::Cow::Owned(p.filter(&item)),
-            None => std::borrow::Cow::Borrowed(&item),
+        // nothing rather than falling back to the base item.
+        //
+        // Built only when something reads it. Under `Select: COUNT` with no
+        // filter nothing does, and under an ALL projection it borrows.
+        let after_index = match view {
+            Some(p) if filter_condition.is_some() || returns_items => p.filter(&item),
+            _ => Cow::Borrowed(&item),
         };
 
         let passes_filter = match &filter_condition {
@@ -614,18 +749,26 @@ pub fn query(
             None => true,
         };
 
-        if select == "COUNT" {
-            if passes_filter {
-                items.push(DynamoItem::new());
+        if passes_filter {
+            matched_count += 1;
+            if returns_items {
+                let selected = match select_view {
+                    Some(p) => p.filter(after_index.as_ref()),
+                    None => Cow::Borrowed(after_index.as_ref()),
+                };
+                items.push(apply_projection_to_item(
+                    &selected,
+                    &projection_paths,
+                    &expr_attr_names,
+                )?);
             }
-        } else {
-            if passes_filter {
-                let projected =
-                    apply_projection_to_item(&after_index, &projection_paths, &expr_attr_names)?;
-                items.push(projected);
-            }
-            response_bytes += estimate_item_bytes(&after_index);
         }
+
+        // The 1 MiB cap is charged against examined bytes seen through the
+        // index view, on every read including COUNT. Measured without
+        // building the projected item, so a COUNT read allocates nothing
+        // per row.
+        response_bytes += estimate_projected_item_bytes(&item, view);
 
         // The cursor advances for every evaluated item so LastEvaluatedKey
         // lands on the last item examined, not the last one matched. Which
@@ -640,7 +783,7 @@ pub fn query(
             hit_limit = true;
             return Ok(false);
         }
-        if select != "COUNT" && response_bytes >= MAX_RESPONSE_BYTES {
+        if response_bytes >= MAX_RESPONSE_BYTES {
             hit_limit = true;
             return Ok(false);
         }
@@ -725,14 +868,16 @@ pub fn query(
         )?;
     }
 
-    let count = items.len();
-    let result_items: Vec<Value> = items.into_iter().map(|i| item_to_json(&i)).collect();
-
+    // A COUNT read reports the count alone. Real DynamoDB returns no Items
+    // for it, and accumulating one per match is what made a COUNT scan hold
+    // the whole table.
     let mut result = json!({
-        "Items": result_items,
-        "Count": count,
+        "Count": matched_count,
         "ScannedCount": scanned_count,
     });
+    if returns_items {
+        result["Items"] = Value::Array(items.into_iter().map(|i| item_to_json(&i)).collect());
+    }
 
     if hit_limit && let Some(item) = last_item {
         let lek = last_evaluated_key(
@@ -805,71 +950,23 @@ pub fn scan(
     // Resolve the requested index up front so the per-index
     // ConsumedCapacity breakdown can be attributed correctly. Computed
     // while `table` is still borrowed since the Ref is dropped below.
-    let scan_index_name = opt_str(input, "IndexName").map(|s| s.to_string());
-    let scan_gsi_slot = scan_index_name.as_deref().and_then(|n| {
-        table
-            .gsi
-            .iter()
-            .position(|g| g.index_name == n)
-            .filter(|slot| *slot < crate::sqlite_store::MAX_GSI_SLOTS)
-    });
-    let scan_index_is_gsi = scan_gsi_slot.is_some();
-
+    //
     // Scanning an index is not the same as scanning the table. Only items
     // that actually materialise into the index are visible (sparse
     // semantics), and a GSI's items are seen through its Projection. The
     // membership test is pushed into SQL below for a GSI; an LSI has no
     // dedicated column, so it is checked per item here.
-    //
-    // Only a GSI gets an index view. An LSI can fetch non-projected
-    // attributes back from the base item in its own partition, so it sees
-    // the whole item. See the same split on the [`query`] path.
-    let scan_index_projection = scan_index_name.as_deref().and_then(|n| {
-        table.gsi.iter().find(|g| g.index_name == n).map(|g| {
-            let (hk, rk) = index_key_names(&g.key_schema);
-            IndexProjection::from_index(
-                &g.projection,
-                table.hash_key().map(str::to_string),
-                table.range_key().map(str::to_string),
-                hk,
-                rk,
-            )
-        })
-    });
-    // The index's own key names, needed for the LastEvaluatedKey: AWS keys a
-    // resume cursor on the index keys plus the base primary key, since index
-    // keys are not unique on their own. An LSI's hash key is the base table's.
-    let scan_index_keys = scan_index_name.as_deref().and_then(|n| {
-        table
-            .gsi
-            .iter()
-            .find(|g| g.index_name == n)
-            .map(|g| index_key_names(&g.key_schema))
-            .or_else(|| {
-                table.lsi.iter().find(|l| l.index_name == n).map(|l| {
-                    (
-                        table.hash_key().map(str::to_string),
-                        index_key_names(&l.key_schema).1,
-                    )
-                })
-            })
-    });
-    // Attribute an item must carry to be in the index at all.
-    let scan_index_membership_attr = scan_index_name.as_deref().and_then(|n| {
-        table
-            .gsi
-            .iter()
-            .find(|g| g.index_name == n)
-            .map(|g| index_key_names(&g.key_schema).0)
-            .or_else(|| {
-                table
-                    .lsi
-                    .iter()
-                    .find(|l| l.index_name == n)
-                    .map(|l| index_key_names(&l.key_schema).1)
-            })
-            .flatten()
-    });
+    let scan_index_name = opt_str(input, "IndexName").map(|s| s.to_string());
+    let index = resolve_index(&table, scan_index_name.as_deref())?;
+    let scan_gsi_slot = index.gsi_slot;
+    let scan_index_is_gsi = scan_gsi_slot.is_some();
+    let select_view = resolve_select(
+        select,
+        &index,
+        scan_index_name.is_some(),
+        !projection_paths.is_empty(),
+        "Scanning",
+    )?;
 
     drop(table);
 
@@ -896,17 +993,14 @@ pub fn scan(
     // A supplied ExclusiveStartKey must carry the base primary key. Reject
     // `{}` and partial cursors the way real DynamoDB does.
     if let Some(esk) = exclusive_start_key.as_ref() {
-        let (index_hash, index_range) = match &scan_index_keys {
-            Some((hk, rk)) => (hk.as_deref().unwrap_or(""), rk.as_deref().unwrap_or("")),
-            None => ("", ""),
-        };
+        let on_index = scan_index_name.as_deref();
         validate_exclusive_start_key(
             esk,
             &[
-                (index_hash, true),
-                (index_range, false),
-                (&hash_key_name, true),
-                (range_key_name.as_deref().unwrap_or(""), false),
+                (&index.hash_key, true, on_index),
+                (index.range_key.as_deref().unwrap_or(""), false, on_index),
+                (&hash_key_name, true, None),
+                (range_key_name.as_deref().unwrap_or(""), false, None),
             ],
         )?;
     }
@@ -924,10 +1018,14 @@ pub fn scan(
     });
 
     let mut scanned_count = 0usize;
+    let mut matched_count = 0usize;
     let mut items: Vec<DynamoItem> = Vec::new();
     let mut response_bytes = 0usize;
     let mut last_item: Option<DynamoItem> = None;
     let mut hit_limit = false;
+
+    let view = index.view();
+    let returns_items = select != "COUNT";
 
     let scan_start_ref = scan_start.as_ref().map(|(p, s)| (p.as_str(), s.as_str()));
     sqlite.scan_table(
@@ -951,7 +1049,7 @@ pub fn scan(
             // An LSI has no dedicated key column, so its sparse-index
             // membership is checked here. A GSI was already filtered in
             // SQL, and re-checking it costs nothing.
-            if let Some(attr) = &scan_index_membership_attr
+            if let Some(attr) = &index.membership_attr
                 && !item.contains_key(attr)
             {
                 return Ok(true);
@@ -963,11 +1061,10 @@ pub fn scan(
 
             // A GSI scan sees the item through the index's Projection,
             // exactly as Query does, before the filter or any request-level
-            // projection. Borrowed when there is no index view to apply, so
-            // rows a filter discards are never cloned.
-            let after_index: std::borrow::Cow<'_, DynamoItem> = match &scan_index_projection {
-                Some(p) => std::borrow::Cow::Owned(p.filter(&item)),
-                None => std::borrow::Cow::Borrowed(&item),
+            // projection. Built only when something reads it.
+            let after_index = match view {
+                Some(p) if filter_condition.is_some() || returns_items => p.filter(&item),
+                _ => Cow::Borrowed(&item),
             };
 
             let passes_filter = match &filter_condition {
@@ -977,22 +1074,24 @@ pub fn scan(
                 None => true,
             };
 
-            if select == "COUNT" {
-                if passes_filter {
-                    items.push(DynamoItem::new());
-                }
-            } else {
-                if passes_filter {
-                    let projected = apply_projection_to_item(
-                        &after_index,
+            if passes_filter {
+                matched_count += 1;
+                if returns_items {
+                    let selected = match select_view {
+                        Some(p) => p.filter(after_index.as_ref()),
+                        None => Cow::Borrowed(after_index.as_ref()),
+                    };
+                    items.push(apply_projection_to_item(
+                        &selected,
                         &projection_paths,
                         &expr_attr_names,
-                    )?;
-                    items.push(projected);
+                    )?);
                 }
-                // 1 MiB cap is charged against examined bytes, not matches.
-                response_bytes += estimate_item_bytes(&after_index);
             }
+
+            // 1 MiB cap is charged against examined bytes, not matches, on
+            // every read including COUNT.
+            response_bytes += estimate_projected_item_bytes(&item, view);
 
             // Cursor advances for every evaluated row so LastEvaluatedKey
             // reflects the last item examined (matches AWS under a filter).
@@ -1006,7 +1105,7 @@ pub fn scan(
                 hit_limit = true;
                 return Ok(false);
             }
-            if select != "COUNT" && response_bytes >= MAX_RESPONSE_BYTES {
+            if response_bytes >= MAX_RESPONSE_BYTES {
                 hit_limit = true;
                 return Ok(false);
             }
@@ -1014,28 +1113,23 @@ pub fn scan(
         },
     )?;
 
-    let count = items.len();
-    let result_items: Vec<Value> = items.into_iter().map(|i| item_to_json(&i)).collect();
-
     let mut result = json!({
-        "Items": result_items,
-        "Count": count,
+        "Count": matched_count,
         "ScannedCount": scanned_count,
     });
+    if returns_items {
+        result["Items"] = Value::Array(items.into_iter().map(|i| item_to_json(&i)).collect());
+    }
 
     if hit_limit && let Some(item) = last_item {
         // We stream the base table even when scanning an index, so the base
         // primary key alone is enough for our own resume. AWS still returns
         // the index keys alongside it, and a client that round-trips the
         // cursor through its own key-shaped type would notice their absence.
-        let (index_hash, index_range) = match &scan_index_keys {
-            Some((hk, rk)) => (hk.as_deref().unwrap_or(&hash_key_name), rk.as_deref()),
-            None => (hash_key_name.as_str(), range_key_name.as_deref()),
-        };
         let lek = last_evaluated_key(
             &item,
-            index_hash,
-            index_range,
+            &index.hash_key,
+            index.range_key.as_deref(),
             &hash_key_name,
             range_key_name.as_deref(),
         );
@@ -1064,11 +1158,20 @@ pub fn scan(
 /// integer of at least 1, so `Limit: 0` and negatives are ValidationExceptions
 /// rather than a request for an empty page. Silently ignoring them would let a
 /// client bug pass here and fail against real DynamoDB.
+///
+/// A whole-valued float is accepted: a client whose serializer emits `1.0` for
+/// an integer is asking for a limit of 1, and rejecting it produces a message
+/// claiming 1.0 is less than 1.
 fn parse_limit(input: &Value) -> Result<Option<usize>, AwsError> {
     let Some(raw) = input.get("Limit").filter(|v| !v.is_null()) else {
         return Ok(None);
     };
-    match raw.as_u64() {
+    let whole = raw.as_u64().or_else(|| {
+        raw.as_f64()
+            .filter(|f| f.fract() == 0.0 && *f >= 1.0)
+            .map(|f| f as u64)
+    });
+    match whole {
         Some(v) if v >= 1 => Ok(Some(v as usize)),
         _ => {
             let shown = raw.as_str().map_or_else(|| raw.to_string(), str::to_string);
@@ -1484,12 +1587,151 @@ fn validation_err<T>(msg: &str) -> Result<T, AwsError> {
 mod tests {
     use super::*;
 
+    use crate::state::{GlobalSecondaryIndex, LocalSecondaryIndex, Projection};
+
     fn item_with(attrs: &[(&str, Value)]) -> DynamoItem {
         let mut m = DynamoItem::new();
         for (k, v) in attrs {
             m.insert(k.to_string(), v.clone());
         }
         m
+    }
+
+    fn ks(name: &str, kt: &str) -> KeySchemaElement {
+        KeySchemaElement {
+            attribute_name: name.to_string(),
+            key_type: kt.to_string(),
+        }
+    }
+
+    fn projection(kind: &str, non_key: &[&str]) -> Projection {
+        Projection {
+            projection_type: kind.to_string(),
+            non_key_attributes: non_key.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    /// Base table `pk`/`sk` with an ALL GSI and a KEYS_ONLY LSI.
+    fn table_with_indexes() -> Table {
+        Table {
+            name: "t".into(),
+            arn: "arn".into(),
+            key_schema: vec![ks("pk", "HASH"), ks("sk", "RANGE")],
+            attribute_definitions: vec![],
+            billing_mode: "PAY_PER_REQUEST".into(),
+            status: "ACTIVE".into(),
+            created_at: 0.0,
+            gsi: vec![GlobalSecondaryIndex {
+                index_name: "G1".into(),
+                key_schema: vec![ks("gpk", "HASH"), ks("gsk", "RANGE")],
+                projection: projection("ALL", &[]),
+                status: "ACTIVE".into(),
+            }],
+            lsi: vec![LocalSecondaryIndex {
+                index_name: "L1".into(),
+                key_schema: vec![ks("pk", "HASH"), ks("lsk", "RANGE")],
+                projection: projection("KEYS_ONLY", &[]),
+            }],
+            stream_enabled: false,
+            stream_arn: None,
+            stream_view_type: None,
+            stream_records: std::collections::VecDeque::new(),
+            stream_sequence: 0,
+            ttl: Default::default(),
+            tags: Default::default(),
+            deletion_protection_enabled: false,
+            sse: Default::default(),
+            read_capacity_units: 0,
+            write_capacity_units: 0,
+        }
+    }
+
+    #[test]
+    fn resolve_index_without_a_name_uses_the_base_table() {
+        let t = table_with_indexes();
+        let r = resolve_index(&t, None).expect("base table");
+        assert_eq!(r.hash_key, "pk");
+        assert_eq!(r.range_key.as_deref(), Some("sk"));
+        assert!(r.gsi_slot.is_none());
+        assert!(r.view().is_none());
+        assert!(r.membership_attr.is_none());
+    }
+
+    #[test]
+    fn resolve_index_resolves_a_gsi_to_its_own_keys_and_view() {
+        let t = table_with_indexes();
+        let r = resolve_index(&t, Some("G1")).expect("G1");
+        assert_eq!(r.hash_key, "gpk");
+        assert_eq!(r.range_key.as_deref(), Some("gsk"));
+        assert_eq!(r.gsi_slot, Some(0));
+        // A GSI is confined to what it projects, so it has a view.
+        assert!(r.view().is_some());
+        assert_eq!(r.membership_attr.as_deref(), Some("gpk"));
+    }
+
+    #[test]
+    fn resolve_index_gives_an_lsi_the_base_hash_key_and_no_view() {
+        let t = table_with_indexes();
+        let r = resolve_index(&t, Some("L1")).expect("L1");
+        assert_eq!(r.hash_key, "pk", "an LSI shares the base partition key");
+        assert_eq!(r.range_key.as_deref(), Some("lsk"));
+        assert!(r.gsi_slot.is_none(), "an LSI has no GSI storage slot");
+        assert!(
+            r.view().is_none(),
+            "an LSI fetches non-projected attributes from the base item"
+        );
+        assert!(
+            r.projection.is_some(),
+            "the projection is still needed for Select"
+        );
+        assert_eq!(r.membership_attr.as_deref(), Some("lsk"));
+    }
+
+    #[test]
+    fn resolve_index_rejects_an_unknown_name() {
+        let t = table_with_indexes();
+        let Err(err) = resolve_index(&t, Some("nope")) else {
+            panic!("an unknown index must be rejected");
+        };
+        assert_eq!(err.code, "ValidationException");
+        assert!(err.message.contains("does not have the specified index"));
+    }
+
+    #[test]
+    fn projected_size_matches_a_materialised_projection() {
+        let item = item_with(&[
+            ("pk", json!({ "S": "a" })),
+            ("sk", json!({ "S": "b" })),
+            ("lsk", json!({ "S": "c" })),
+            ("payload", json!({ "S": "dropped by KEYS_ONLY" })),
+        ]);
+        let t = table_with_indexes();
+        let lsi = resolve_index(&t, Some("L1")).expect("L1");
+        let p = lsi.projection.as_ref().expect("projection");
+
+        assert_eq!(
+            estimate_projected_item_bytes(&item, Some(p)),
+            estimate_item_bytes(&p.filter(&item)),
+            "measuring through the projection must match measuring a copy of it"
+        );
+    }
+
+    #[test]
+    fn an_all_projection_borrows_rather_than_clones() {
+        let item = item_with(&[("pk", json!({ "S": "a" })), ("v", json!({ "S": "b" }))]);
+        let t = table_with_indexes();
+        let gsi = resolve_index(&t, Some("G1")).expect("G1");
+        let view = gsi.view().expect("a GSI has a view");
+
+        assert!(
+            matches!(view.filter(&item), Cow::Borrowed(_)),
+            "ALL is the common projection; cloning here clones every examined item"
+        );
+        assert_eq!(
+            estimate_projected_item_bytes(&item, Some(view)),
+            estimate_item_bytes(&item),
+            "an ALL projection drops nothing, so it measures the whole item"
+        );
     }
 
     #[test]

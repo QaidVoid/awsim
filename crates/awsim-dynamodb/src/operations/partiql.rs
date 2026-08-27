@@ -16,7 +16,7 @@ use awsim_core::{AwsError, RequestContext};
 use serde_json::{Value, json};
 
 use crate::{
-    keys::{extract_item_keys, item_to_storage_value, resolve_key, storage_value_to_item},
+    keys::{item_to_storage_value, resolve_key, storage_value_to_item},
     sqlite_store::SqliteStore,
     state::{DynamoItem, DynamoState, Table},
     throttle::BucketKind,
@@ -24,7 +24,7 @@ use crate::{
 
 use super::{
     build_consumed_capacity,
-    item::{estimate_item_bytes, estimate_value_bytes},
+    item::{estimate_item_bytes, estimate_value_bytes, validate_and_extract_keys},
     read_capacity_units, write_capacity_units,
 };
 
@@ -353,9 +353,7 @@ fn run_insert(
                 format!("Table '{table_name}' not found"),
             )
         })?;
-        extract_item_keys(&table, &ddb_item).ok_or_else(|| {
-            AwsError::bad_request("ValidationException", "Item missing primary key")
-        })?
+        validate_and_extract_keys(&table, &ddb_item)?
     };
 
     // PartiQL INSERT does not overwrite: a pre-existing primary key is a
@@ -468,8 +466,7 @@ fn run_update(
                 format!("Table '{table_name}' not found"),
             )
         })?;
-        extract_item_keys(&table, &item)
-            .ok_or_else(|| AwsError::validation("Could not extract SQLite keys"))?
+        validate_and_extract_keys(&table, &item)?
     };
 
     // An update charges the larger of the pre- and post-update sizes.

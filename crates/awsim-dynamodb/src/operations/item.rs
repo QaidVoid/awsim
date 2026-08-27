@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::{
     expressions::{evaluate_condition, parse_condition},
-    keys::{extract_item_keys, item_to_storage_value, resolve_key, storage_value_to_item},
+    keys::{item_to_storage_value, resolve_key, storage_value_to_item},
     sqlite_store::SqliteStore,
     state::{DynamoItem, DynamoState, StreamRecord, StreamRecordData},
     throttle::BucketKind,
@@ -54,6 +54,18 @@ fn conditional_check_failed(input: &Value, existing: Option<&DynamoItem>) -> Aws
     err
 }
 
+/// Whether a write to this table needs to build stream images at all.
+///
+/// Callers check this before cloning the item they would pass to
+/// [`emit_stream_record`]. The clone is the expensive part, and on a table
+/// with streams off it was pure waste on every write.
+fn stream_enabled(state: &DynamoState, table_name: &str) -> bool {
+    state
+        .tables
+        .get(table_name)
+        .is_some_and(|t| t.stream_enabled)
+}
+
 /// Push a stream record into the table's bounded ring-buffer and optionally
 /// publish an `InternalEvent` to the event bus so Lambda triggers fire.
 fn emit_stream_record(
@@ -100,23 +112,17 @@ fn emit_stream_record(
     };
 
     // Size the record from what it actually carries after projection.
-    let size_bytes: u64 = {
-        let mut sz = 0u64;
-        for (k, v) in &keys {
-            sz += k.len() as u64 + v.to_string().len() as u64;
-        }
-        if let Some(ref img) = new_image {
-            for (k, v) in img {
-                sz += k.len() as u64 + v.to_string().len() as u64;
-            }
-        }
-        if let Some(ref img) = old_image {
-            for (k, v) in img {
-                sz += k.len() as u64 + v.to_string().len() as u64;
-            }
-        }
-        sz
+    // Measured rather than serialised: stringifying every attribute of both
+    // images to take its length allocated the whole record just to throw it
+    // away, on every write.
+    let measure = |img: &DynamoItem| -> u64 {
+        img.iter()
+            .map(|(k, v)| (k.len() + estimate_value_bytes(v)) as u64)
+            .sum()
     };
+    let size_bytes: u64 = measure(&keys)
+        + new_image.as_ref().map_or(0, &measure)
+        + old_image.as_ref().map_or(0, &measure);
 
     let record = StreamRecord {
         event_id: Uuid::new_v4().to_string(),
@@ -347,6 +353,21 @@ pub(crate) fn validate_key_value(
         )));
     }
 
+    // A key attribute must be S, N or B. Checked before the size limit
+    // because `dynamo_size` returns an element count for L, M and the set
+    // types, which would report a 2000-element list as 2000 bytes and
+    // reject it for the wrong reason.
+    let is_scalar = ["S", "N", "B"]
+        .iter()
+        .any(|t| value.get(t).is_some_and(Value::is_string));
+    if !is_scalar {
+        return Err(AwsError::validation(format!(
+            "One or more parameter values were invalid: \
+             The AttributeValue for a key attribute must be of type S, N or B. \
+             {location}"
+        )));
+    }
+
     let (limit, kind) = if is_hash {
         (MAX_HASH_KEY_BYTES, "hashkey")
     } else {
@@ -359,6 +380,23 @@ pub(crate) fn validate_key_value(
         )));
     }
     Ok(())
+}
+
+/// Validate every key attribute an item carries, then extract its storage
+/// keys.
+///
+/// The user-facing write paths call this rather than validating and
+/// extracting separately, so a write path cannot accept a key another one
+/// rejects. [`crate::keys::extract_item_keys`] stays permissive on its own
+/// for the restore and import paths, which must accept data already
+/// persisted.
+pub(crate) fn validate_and_extract_keys(
+    table: &crate::state::Table,
+    item: &DynamoItem,
+) -> Result<crate::keys::ItemKeys, AwsError> {
+    validate_key_attribute_values(table, item)?;
+    crate::keys::extract_item_keys(table, item)
+        .ok_or_else(|| AwsError::validation("One of the required keys was not given a value"))
 }
 
 /// Run [`validate_key_value`] over every key attribute `key_source` carries,
@@ -523,10 +561,7 @@ pub fn put_item(
                 "One or more parameter values were invalid: Missing the key {rk} in the item"
             )));
         }
-        validate_key_attribute_values(&table, &item)?;
-
-        let sqlite_keys = extract_item_keys(&table, &item)
-            .ok_or_else(|| AwsError::validation("Could not extract SQLite keys"))?;
+        let sqlite_keys = validate_and_extract_keys(&table, &item)?;
 
         let mut keys_item = DynamoItem::new();
         for k in table.key_schema.iter().map(|k| k.attribute_name.as_str()) {
@@ -571,13 +606,14 @@ pub fn put_item(
     } else {
         "INSERT"
     };
+    let streams_on = stream_enabled(state, &table_name);
     emit_stream_record(
         state,
         &table_name,
         event_name,
         keys_item,
-        Some(item.clone()),
-        old_item.clone(),
+        streams_on.then(|| item.clone()),
+        streams_on.then(|| old_item.clone()).flatten(),
         ctx,
     );
 
@@ -712,13 +748,14 @@ pub fn delete_item(
 
     // Emit stream record only when an item was actually removed.
     if old_item.is_some() {
+        let streams_on = stream_enabled(state, &table_name);
         emit_stream_record(
             state,
             &table_name,
             "REMOVE",
             keys_item,
             None,
-            old_item.clone(),
+            streams_on.then(|| old_item.clone()).flatten(),
             ctx,
         );
     }
@@ -823,9 +860,7 @@ pub fn update_item(
                 format!("Cannot do operations on a non-existent table: {table_name}"),
             )
         })?;
-        validate_key_attribute_values(&table, &new_item)?;
-        extract_item_keys(&table, &new_item)
-            .ok_or_else(|| AwsError::validation("Could not extract SQLite keys"))?
+        validate_and_extract_keys(&table, &new_item)?
     };
 
     let new_item_bytes = estimate_item_bytes(&new_item);
@@ -856,13 +891,14 @@ pub fn update_item(
     } else {
         "INSERT"
     };
+    let streams_on = stream_enabled(state, &table_name);
     emit_stream_record(
         state,
         &table_name,
         event_name,
         keys_item,
-        Some(new_item.clone()),
-        old_item.clone(),
+        streams_on.then(|| new_item.clone()),
+        streams_on.then(|| old_item.clone()).flatten(),
         ctx,
     );
 
