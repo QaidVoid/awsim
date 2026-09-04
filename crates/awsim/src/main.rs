@@ -8,9 +8,23 @@
 // which was dropped for flaky CI builds, this is a plain cc-crate build
 // of a few .c files, and both musl release targets already compile
 // aws-lc-sys, libsqlite3-sys and zstd-sys natively.
-#[cfg(target_env = "musl")]
+//
+// The `alloc-mimalloc` / `alloc-jemalloc` features force the choice on
+// any target, which is how `scripts/bench-allocators.sh` compares them
+// against glibc malloc. Neither is enabled by a normal build.
+#[cfg(all(feature = "alloc-mimalloc", feature = "alloc-jemalloc"))]
+compile_error!("alloc-mimalloc and alloc-jemalloc are mutually exclusive");
+
+#[cfg(all(
+    any(target_env = "musl", feature = "alloc-mimalloc"),
+    not(feature = "alloc-jemalloc")
+))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+#[cfg(feature = "alloc-jemalloc")]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 use anyhow::{Context, Result};
 use axum::error_handling::HandleErrorLayer;

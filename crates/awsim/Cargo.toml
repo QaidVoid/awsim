@@ -15,6 +15,13 @@ path = "src/main.rs"
 [target.'cfg(target_env = "musl")'.dependencies]
 mimalloc = { version = "0.1", default-features = false }
 
+# Allocator overrides for measuring the non-musl default, which is the
+# system allocator. Off by default, mutually exclusive, and only ever
+# enabled by `scripts/bench-allocators.sh`.
+[target.'cfg(not(target_env = "musl"))'.dependencies]
+mimalloc = { version = "0.1", default-features = false, optional = true }
+tikv-jemallocator = { version = "0.7", optional = true }
+
 [dependencies]
 awsim-apigateway = { workspace = true }
 awsim-appsync = { workspace = true }
@@ -129,6 +136,8 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring"]
 # PostgreSQL launched via Docker, so it is left out of the default build.
 [features]
 rds-data = ["dep:awsim-rds-data"]
+alloc-mimalloc = ["dep:mimalloc"]
+alloc-jemalloc = ["dep:tikv-jemallocator"]
 
 # rlimit is POSIX only. The crate's Resource::NOFILE and get/setrlimit do not
 # exist on Windows, so the unix-targeted fd watcher / soft-limit bumper
