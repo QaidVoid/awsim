@@ -4,7 +4,8 @@
 //!
 //! 1. **BYO** (`--tls-cert` + `--tls-key`): operator-provided PEMs.
 //! 2. **Bundled** (`cfg(has_bundled_cert)`): a publicly-trusted
-//!    Let's Encrypt cert for `aws.qaidvoid.dev` (and `*.aws.qaidvoid.dev`)
+//!    Let's Encrypt cert for `aws.qaidvoid.dev` (and
+//!    `*.aws.qaidvoid.dev`, `*.s3.aws.qaidvoid.dev`)
 //!    compiled into the binary. The wildcard A record points to
 //!    127.0.0.1, so traffic stays on loopback while browsers / SDKs
 //!    see a green-padlock cert with no out-of-band trust setup.
@@ -22,9 +23,10 @@ use anyhow::{Context, Result};
 use axum_server::tls_rustls::RustlsConfig;
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
 
-/// PEM-encoded full-chain cert for `aws.qaidvoid.dev` /
-/// `*.aws.qaidvoid.dev`, signed by Let's Encrypt. Renewed via the
-/// repo's `tls-renew` GitHub Action.
+/// PEM-encoded full-chain cert for `aws.qaidvoid.dev`,
+/// `*.aws.qaidvoid.dev` and `*.s3.aws.qaidvoid.dev`, signed by
+/// Let's Encrypt. Renewed manually via DNS-01 against the
+/// Cloudflare-hosted zone; see `docs/guide/tls.md`.
 #[cfg(has_bundled_cert)]
 const BUNDLED_CERT: &[u8] = include_bytes!("../assets/aws.qaidvoid.dev/cert.pem");
 

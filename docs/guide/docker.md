@@ -27,7 +27,7 @@ docker run --rm -p 4566:4566 -p 4567:4567 \
   ghcr.io/qaidvoid/awsim:latest
 ```
 
-That serves a publicly-trusted Let's Encrypt cert for `aws.qaidvoid.dev` (and `*.aws.qaidvoid.dev`) - DNS for those names points to `127.0.0.1`, so traffic never leaves your machine. See [tls.md](./tls.md) for the full story.
+That serves a publicly-trusted Let's Encrypt cert for `aws.qaidvoid.dev` (and `*.aws.qaidvoid.dev`, `*.s3.aws.qaidvoid.dev`) - DNS for those names points to `127.0.0.1`, so traffic never leaves your machine. See [tls.md](./tls.md) for the full story.
 
 ## Persisting data
 

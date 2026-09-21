@@ -20,8 +20,10 @@ docker run -p 4566:4566 -p 4567:4567 \
 Hit `https://aws.qaidvoid.dev:4567/_awsim/health` from a browser /
 curl / SDK. No `--cacert`, no `NODE_EXTRA_CA_CERTS`, no
 `AWS_CA_BUNDLE`, no system-trust-store install. `*.aws.qaidvoid.dev`
-is also covered, so virtual-hosted URLs like
-`https://s3.aws.qaidvoid.dev:4567/...` validate under the same cert.
+and `*.s3.aws.qaidvoid.dev` are also covered, so service-prefixed URLs
+like `https://s3.aws.qaidvoid.dev:4567/...` and virtual-hosted bucket
+URLs like `https://bucket.s3.aws.qaidvoid.dev:4567/...` validate under
+the same cert.
 
 ## How it works
 
@@ -58,11 +60,13 @@ flows such as the Cognito hosted UI or an S3 static website,
 service-prefixed hostnames like `https://s3.aws.qaidvoid.dev:4567`, or
 config that should mirror real AWS endpoints.
 
-The wildcard is only one level deep, so virtual-hosted S3 buckets
-(`bucket.s3.aws.qaidvoid.dev`) do not validate under the cert. Use
+The cert also carries `*.s3.aws.qaidvoid.dev`, so virtual-hosted S3
+buckets (`bucket.s3.aws.qaidvoid.dev`) validate over TLS alongside
 path-style addressing (`s3.aws.qaidvoid.dev/bucket`), which the SDKs
-default to for custom endpoints. If you genuinely need virtual-hosted
-buckets over TLS, reissue the cert with `*.s3.aws.qaidvoid.dev` added.
+default to for custom endpoints.
+
+Each wildcard is still only one level deep. A name that adds another
+label, such as `deep.nested.aws.qaidvoid.dev`, does not validate.
 
 ## Cert sources, in order of preference
 
