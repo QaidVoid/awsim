@@ -1,4 +1,11 @@
 
+## 0.7.1 — 2026-09-23
+
+### Bug Fixes
+
+- **dynamodb:** Bound read memory and unify index reads
+- **dynamodb:** Validate key values and fix index reads
+
 ## 0.7.0 — 2026-08-24
 
 ### Bug Fixes
