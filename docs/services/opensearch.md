@@ -87,6 +87,8 @@ curl -X POST http://localhost:4566/opensearch/products/_search \
   - Body: `{"query":{...},"size":10,"from":0,"sort":[...],"_source":[...], "_id":true}`
   - Returns: `{"hits":{"total":{"value":N},"hits":[{"_id":"...","_score":1.0,"_source":{...}}]}}`
   - Supported query types: `match`, `match_all`, `term`, `terms`, `range`, `bool` (`must`, `should`, `must_not`, `filter`), `ids`, `wildcard`, `prefix`, `exists`, `multi_match`, `query_string`, `knn` (top-level or inside `bool`, with optional `filter`)
+  - `_source`: `true`/`false`, a pattern or array of patterns, or `{"includes":[...],"excludes":[...]}` (dotted paths, `*` wildcards)
+  - `collapse`: `{"field":"..."}` keeps the best hit per field value; `hits.total` still counts every match
 
 - `GET /opensearch/{index}/_search` — search with URL query params (e.g., `?q=name:stack`)
 - `POST /opensearch/_msearch` — multi-search (alternating header line + query body in ndjson)

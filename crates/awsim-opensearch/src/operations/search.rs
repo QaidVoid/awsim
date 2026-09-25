@@ -1,4 +1,6 @@
-use serde_json::{Value, json};
+use std::collections::HashSet;
+
+use serde_json::{Map, Value, json};
 
 use super::index::index_not_found;
 use crate::state::OpenSearchState;
@@ -22,6 +24,9 @@ use crate::state::OpenSearchState;
 ///   `filter` (brute-force cosine similarity over a numeric vector
 ///   field. No ANN index, but correct enough for emulator workloads
 ///   up to a few thousand vectors)
+///
+/// Also honours `sort`, `from`/`size`, `collapse` (by `field`) and
+/// `_source` filtering.
 pub fn search(state: &OpenSearchState, index_pattern: &str, body: &Value) -> (u16, Value) {
     let size = body["size"].as_u64().unwrap_or(10) as usize;
     let from = body["from"].as_u64().unwrap_or(0) as usize;
@@ -86,8 +91,25 @@ pub fn search(state: &OpenSearchState, index_pattern: &str, body: &Value) -> (u1
         });
     }
 
+    // With `collapse`, `hits.total` still counts every matching doc.
     let total = hits.len();
-    let paged: Vec<Value> = hits.into_iter().skip(from).take(size).collect();
+    if let Some(field) = body.pointer("/collapse/field").and_then(Value::as_str) {
+        collapse_hits(&mut hits, field);
+    }
+    let paged: Vec<Value> = hits
+        .into_iter()
+        .skip(from)
+        .take(size)
+        .map(|mut hit| {
+            if let Some(obj) = hit.as_object_mut()
+                && let Some(source) = obj.remove("_source")
+                && let Some(filtered) = filter_source(source, body.get("_source"))
+            {
+                obj.insert("_source".to_string(), filtered);
+            }
+            hit
+        })
+        .collect();
 
     (
         200,
@@ -673,6 +695,89 @@ fn get_nested_field<'a>(doc: &'a Value, field: &str) -> Option<&'a Value> {
     Some(current)
 }
 
+/// Field collapsing: keep only the best (first, since `hits` is already
+/// sorted) hit per value of `field`, and expose that value under `fields`
+/// like OpenSearch does. Docs missing the field form a single group.
+fn collapse_hits(hits: &mut Vec<Value>, field: &str) {
+    let mut seen = HashSet::new();
+    hits.retain_mut(|hit| {
+        let value = get_nested_field(&hit["_source"], field)
+            .cloned()
+            .unwrap_or(Value::Null);
+        if !seen.insert(value.to_string()) {
+            return false;
+        }
+        if let Some(obj) = hit.as_object_mut() {
+            obj.insert("fields".to_string(), json!({ field: [value] }));
+        }
+        true
+    });
+}
+
+/// Apply a request's `_source` option to a hit's source. Returns `None`
+/// when the source should be omitted (`"_source": false`).
+///
+/// Accepts `true`/`false`, a field pattern or array of patterns
+/// (includes), or `{ "includes": ..., "excludes": ... }` (also the
+/// legacy singular `include` / `exclude`). Patterns are dotted paths and
+/// may contain `*` wildcards.
+fn filter_source(source: Value, spec: Option<&Value>) -> Option<Value> {
+    fn patterns(v: Option<&Value>) -> Vec<&str> {
+        match v {
+            Some(Value::String(s)) => vec![s.as_str()],
+            Some(Value::Array(arr)) => arr.iter().filter_map(Value::as_str).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    let (includes, excludes) = match spec {
+        None | Some(Value::Bool(true)) => return Some(source),
+        Some(Value::Bool(false)) => return None,
+        Some(Value::Object(o)) => (
+            patterns(o.get("includes").or_else(|| o.get("include"))),
+            patterns(o.get("excludes").or_else(|| o.get("exclude"))),
+        ),
+        other => (patterns(other), Vec::new()),
+    };
+    match source {
+        Value::Object(obj) => Some(Value::Object(filter_fields(&obj, "", &includes, &excludes))),
+        other => Some(other),
+    }
+}
+
+/// Recursive worker for [`filter_source`]. An included object keeps its
+/// whole subtree (minus excludes); an object that is not itself included
+/// is kept only if some descendant is.
+fn filter_fields(
+    obj: &Map<String, Value>,
+    prefix: &str,
+    includes: &[&str],
+    excludes: &[&str],
+) -> Map<String, Value> {
+    let mut out = Map::new();
+    for (key, value) in obj {
+        let path = if prefix.is_empty() {
+            key.clone()
+        } else {
+            format!("{prefix}.{key}")
+        };
+        if excludes.iter().any(|p| wildcard_match(p, &path)) {
+            continue;
+        }
+        let included = includes.is_empty() || includes.iter().any(|p| wildcard_match(p, &path));
+        if let Value::Object(child) = value {
+            let child_includes = if included { &[][..] } else { includes };
+            let filtered = filter_fields(child, &path, child_includes, excludes);
+            if included || !filtered.is_empty() {
+                out.insert(key.clone(), Value::Object(filtered));
+            }
+        } else if included {
+            out.insert(key.clone(), value.clone());
+        }
+    }
+    out
+}
+
 /// Internal key stamped onto each `knn` clause by [`apply_knn_cutoffs`]:
 /// the score of the clause's k-th nearest neighbour in the index.
 const KNN_CUTOFF_KEY: &str = "__awsim_knn_cutoff";
@@ -1126,5 +1231,106 @@ mod tests {
         let mut ids = hit_ids(&result);
         ids.sort();
         assert_eq!(ids, vec!["a", "d"]);
+    }
+
+    /// Chunked-document shape: several chunks share a `collapseId`, and
+    /// only the best-scoring chunk per document comes back.
+    #[test]
+    fn test_collapse_keeps_best_hit_per_value() {
+        let state = OpenSearchState::ephemeral().expect("ephemeral");
+        state
+            .create_index_meta(
+                "docs",
+                IndexMeta {
+                    mappings: json!({}),
+                    settings: json!({}),
+                    created_at: "2026-01-01".to_string(),
+                    uuid: "test-uuid-docs".to_string(),
+                },
+            )
+            .unwrap();
+        for (id, doc, rank) in [
+            ("d1_0", "d1", 3),
+            ("d1_1", "d1", 5),
+            ("d2_0", "d2", 4),
+            ("x", "", 1),
+        ] {
+            let mut source = json!({"rank": rank});
+            if !doc.is_empty() {
+                source["collapseId"] = json!(doc);
+            }
+            state.put_doc("docs", id, &source).unwrap();
+        }
+
+        let (_, result) = search(
+            &state,
+            "docs",
+            &json!({
+                "query": {"match_all": {}},
+                "sort": [{"rank": "desc"}],
+                "collapse": {"field": "collapseId"},
+            }),
+        );
+        assert_eq!(hit_ids(&result), vec!["d1_1", "d2_0", "x"]);
+        assert_eq!(result["hits"]["total"]["value"], 4);
+        assert_eq!(
+            result["hits"]["hits"][0]["fields"]["collapseId"],
+            json!(["d1"])
+        );
+    }
+
+    #[test]
+    fn test_source_false_omits_source() {
+        let state = test_state();
+        let (_, result) = search(
+            &state,
+            "articles",
+            &json!({"query": {"match_all": {}}, "_source": false}),
+        );
+        let hits = result["hits"]["hits"].as_array().unwrap();
+        assert_eq!(hits.len(), 3);
+        assert!(hits.iter().all(|h| h.get("_source").is_none()));
+    }
+
+    #[test]
+    fn test_source_includes_array() {
+        let state = test_state();
+        let (_, result) = search(
+            &state,
+            "articles",
+            &json!({"query": {"ids": {"values": ["1"]}}, "_source": ["title", "tag*"]}),
+        );
+        assert_eq!(
+            result["hits"]["hits"][0]["_source"],
+            json!({"title": "Rust Programming", "tags": ["rust", "systems"]})
+        );
+    }
+
+    #[test]
+    fn test_source_includes_and_excludes_nested_paths() {
+        let source = json!({
+            "id": "1",
+            "embedding": [0.1, 0.2],
+            "meta": {"owner": "u1", "secret": "s", "tags": {"a": 1}},
+            "other": {"x": 1},
+        });
+
+        assert_eq!(
+            filter_source(source.clone(), Some(&json!({"excludes": ["embedding"]}))),
+            Some(
+                json!({"id": "1", "meta": {"owner": "u1", "secret": "s", "tags": {"a": 1}}, "other": {"x": 1}})
+            )
+        );
+        assert_eq!(
+            filter_source(
+                source.clone(),
+                Some(&json!({"includes": ["meta"], "excludes": ["meta.secret"]}))
+            ),
+            Some(json!({"meta": {"owner": "u1", "tags": {"a": 1}}}))
+        );
+        assert_eq!(
+            filter_source(source, Some(&json!({"include": "meta.tags.*"}))),
+            Some(json!({"meta": {"tags": {"a": 1}}}))
+        );
     }
 }
