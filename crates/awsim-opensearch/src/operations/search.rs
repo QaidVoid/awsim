@@ -18,9 +18,10 @@ use crate::state::OpenSearchState;
 /// - `exists` queries
 /// - `ids` queries
 /// - `query_string` queries
-/// - `knn` queries (brute-force cosine similarity over a numeric
-///   vector field. No ANN index, but correct enough for emulator
-///   workloads up to a few thousand vectors)
+/// - `knn` queries, top-level or nested in `bool`, with an optional
+///   `filter` (brute-force cosine similarity over a numeric vector
+///   field. No ANN index, but correct enough for emulator workloads
+///   up to a few thousand vectors)
 pub fn search(state: &OpenSearchState, index_pattern: &str, body: &Value) -> (u16, Value) {
     let size = body["size"].as_u64().unwrap_or(10) as usize;
     let from = body["from"].as_u64().unwrap_or(0) as usize;
@@ -34,14 +35,6 @@ pub fn search(state: &OpenSearchState, index_pattern: &str, body: &Value) -> (u1
     if matching_indices.is_empty() || !matching_indices.iter().any(|n| state.index_exists(n)) {
         let name = index_pattern.split(',').next().unwrap_or(index_pattern);
         return (404, index_not_found(name));
-    }
-
-    // k-NN is special: it returns top-k by similarity rather than a
-    // per-doc match score, so collect-then-sort happens here instead
-    // of going through `match_score`. Falls through to standard search
-    // when the query is not a `knn` body.
-    if let Some((field, vector, k)) = parse_knn(&query) {
-        return knn_search(state, &matching_indices, &field, &vector, k, from, size);
     }
 
     let mut hits: Vec<Value> = Vec::new();
@@ -61,6 +54,9 @@ pub fn search(state: &OpenSearchState, index_pattern: &str, body: &Value) -> (u1
         if !state.index_exists(idx_name) {
             continue;
         }
+        // k-NN runs per shard, and each index here is a single shard.
+        let mut query = query.clone();
+        apply_knn_cutoffs(state, idx_name, &mut query);
         let _ = state.for_each_doc(idx_name, |doc_id, doc| {
             if let Some(ref allowed) = ids_filter
                 && !allowed.contains(&doc_id.to_string())
@@ -342,6 +338,21 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
         // Filtering happens at the search loop level; all docs score 1.0.
         if obj.contains_key("ids") {
             return 1.0;
+        }
+
+        // knn: { "field": { "vector": [...], "k": 10, "filter": {...} } }
+        if let Some(knn_obj) = obj.get("knn").and_then(|k| k.as_object()) {
+            return knn_obj
+                .iter()
+                .map(|(field, spec)| {
+                    let score = knn_score(field, spec, doc);
+                    let cutoff = spec
+                        .get(KNN_CUTOFF_KEY)
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.0);
+                    if score < cutoff { 0.0 } else { score }
+                })
+                .sum();
         }
 
         // bool: { "must": [...], "should": [...], "filter": [...], "must_not": [...] }
@@ -662,95 +673,76 @@ fn get_nested_field<'a>(doc: &'a Value, field: &str) -> Option<&'a Value> {
     Some(current)
 }
 
-/// Pull the field name, query vector, and `k` out of a `knn` query
-/// body. Returns `None` for any other query shape so the caller can
-/// fall through to the lexical search path.
-fn parse_knn(query: &Value) -> Option<(String, Vec<f64>, usize)> {
-    let knn_obj = query.get("knn")?.as_object()?;
-    // OpenSearch puts the field name as the key:
-    //   { "knn": { "embedding": { "vector": [...], "k": 10 } } }
-    let (field, spec) = knn_obj.iter().next()?;
-    let vector = spec
-        .get("vector")
-        .and_then(|v| v.as_array())?
-        .iter()
-        .filter_map(|n| n.as_f64())
-        .collect::<Vec<_>>();
-    if vector.is_empty() {
-        return None;
+/// Internal key stamped onto each `knn` clause by [`apply_knn_cutoffs`]:
+/// the score of the clause's k-th nearest neighbour in the index.
+const KNN_CUTOFF_KEY: &str = "__awsim_knn_cutoff";
+
+/// Stamp every `knn` clause in `query` with the score of its k-th
+/// nearest neighbour in `index`, so `match_score` only keeps the top-k
+/// docs. This mirrors the k-NN plugin, which picks the top-k (honouring
+/// the clause's own `filter`) before any enclosing `bool` combines or
+/// post-filters them.
+fn apply_knn_cutoffs(state: &OpenSearchState, index: &str, query: &mut Value) {
+    match query {
+        Value::Object(obj) => {
+            if let Some(knn_obj) = obj.get_mut("knn").and_then(|k| k.as_object_mut()) {
+                for (field, spec) in knn_obj.iter_mut() {
+                    let k = spec.get("k").and_then(Value::as_u64).unwrap_or(10) as usize;
+                    let mut scores = Vec::new();
+                    let _ = state.for_each_doc(index, |_, doc| {
+                        let score = knn_score(field, spec, doc);
+                        if score > 0.0 {
+                            scores.push(score);
+                        }
+                        true
+                    });
+                    let nth = k.saturating_sub(1);
+                    let cutoff = if scores.len() > nth {
+                        *scores.select_nth_unstable_by(nth, |a, b| b.total_cmp(a)).1
+                    } else {
+                        0.0
+                    };
+                    if let Some(spec) = spec.as_object_mut() {
+                        spec.insert(KNN_CUTOFF_KEY.to_string(), json!(cutoff));
+                    }
+                }
+                return;
+            }
+            for value in obj.values_mut() {
+                apply_knn_cutoffs(state, index, value);
+            }
+        }
+        Value::Array(arr) => {
+            for value in arr {
+                apply_knn_cutoffs(state, index, value);
+            }
+        }
+        _ => {}
     }
-    let k = spec.get("k").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
-    Some((field.clone(), vector, k))
 }
 
-/// Brute-force k-NN: walk every document in the matching indices,
-/// compute cosine similarity against the query vector, and return the
-/// top `k` (then apply `from`/`size` for paging on top of that).
+/// Similarity of `doc` to a `knn` clause spec, or 0.0 when the doc has no
+/// comparable vector or fails the clause's `filter`.
 ///
 /// Score is `(1 + cos) / 2` so the result lands in `[0, 1]` like the
 /// real k-NN plugin's normalised score, and unrelated vectors don't
 /// produce negative scores that would be filtered downstream.
-fn knn_search(
-    state: &OpenSearchState,
-    matching_indices: &[String],
-    field: &str,
-    vector: &[f64],
-    k: usize,
-    from: usize,
-    size: usize,
-) -> (u16, Value) {
-    let mut scored: Vec<(f64, Value)> = Vec::new();
-    for idx_name in matching_indices {
-        if !state.index_exists(idx_name) {
-            continue;
-        }
-        let _ = state.for_each_doc(idx_name, |doc_id, doc| {
-            let Some(doc_vec) = get_nested_field(doc, field).and_then(extract_vector) else {
-                return true;
-            };
-            if doc_vec.len() != vector.len() {
-                return true;
-            }
-            let sim = cosine_similarity(vector, &doc_vec);
-            let score = (1.0 + sim) / 2.0;
-            scored.push((
-                score,
-                json!({
-                    "_index": idx_name,
-                    "_id": doc_id,
-                    "_score": score,
-                    "_source": doc,
-                }),
-            ));
-            true
-        });
+fn knn_score(field: &str, spec: &Value, doc: &Value) -> f64 {
+    let Some(vector) = spec.get("vector").and_then(extract_vector) else {
+        return 0.0;
+    };
+    let Some(doc_vec) = get_nested_field(doc, field).and_then(extract_vector) else {
+        return 0.0;
+    };
+    if vector.is_empty() || doc_vec.len() != vector.len() {
+        return 0.0;
     }
-
-    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    scored.truncate(k);
-
-    let total = scored.len();
-    let max_score = scored.first().map(|(s, _)| *s).unwrap_or(0.0);
-    let paged: Vec<Value> = scored
-        .into_iter()
-        .map(|(_, v)| v)
-        .skip(from)
-        .take(size)
-        .collect();
-
-    (
-        200,
-        json!({
-            "took": 1,
-            "timed_out": false,
-            "_shards": { "total": 1, "successful": 1, "skipped": 0, "failed": 0 },
-            "hits": {
-                "total": { "value": total, "relation": "eq" },
-                "max_score": max_score,
-                "hits": paged,
-            }
-        }),
-    )
+    if let Some(filter) = spec.get("filter")
+        && match_score(filter, doc) <= 0.0
+    {
+        return 0.0;
+    }
+    (1.0 + cosine_similarity(&vector, &doc_vec)) / 2.0
 }
 
 fn extract_vector(v: &Value) -> Option<Vec<f64>> {
@@ -1026,5 +1018,113 @@ mod tests {
         // Identical vector -> cosine = 1.0 -> score = 1.0
         let top = hits[0]["_score"].as_f64().unwrap();
         assert!((top - 1.0).abs() < 1e-9, "top score {} != 1.0", top);
+    }
+
+    fn tenant_vec_state() -> OpenSearchState {
+        let state = OpenSearchState::ephemeral().expect("ephemeral");
+        state
+            .create_index_meta(
+                "chunks",
+                IndexMeta {
+                    mappings: json!({}),
+                    settings: json!({}),
+                    created_at: "2026-01-01".to_string(),
+                    uuid: "test-uuid-chunks".to_string(),
+                },
+            )
+            .unwrap();
+        for (id, tenant, embedding, text) in [
+            ("a", "t1", [1.0, 0.0, 0.0], "alpha"),
+            ("b", "t1", [0.9, 0.1, 0.0], "bravo"),
+            ("c", "t2", [0.95, 0.05, 0.0], "charlie"),
+            ("d", "t1", [0.0, 1.0, 0.0], "delta"),
+        ] {
+            state
+                .put_doc(
+                    "chunks",
+                    id,
+                    &json!({"tenantId": tenant, "embedding": embedding, "text": text}),
+                )
+                .unwrap();
+        }
+        state
+    }
+
+    fn hit_ids(result: &Value) -> Vec<&str> {
+        result["hits"]["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["_id"].as_str().unwrap())
+            .collect()
+    }
+
+    /// `knn` inside `bool.must` with a `bool.filter` is the usual
+    /// filtered vector search; before the fix it matched nothing.
+    #[test]
+    fn test_knn_in_bool_must_with_filter() {
+        let state = tenant_vec_state();
+        let (_, result) = search(
+            &state,
+            "chunks",
+            &json!({"query": {"bool": {
+                "must": [{"knn": {"embedding": {"vector": [1.0, 0.0, 0.0], "k": 4}}}],
+                "filter": [{"term": {"tenantId": "t1"}}],
+            }}}),
+        );
+        assert_eq!(hit_ids(&result), vec!["a", "b", "d"]);
+    }
+
+    /// A `bool.filter` is applied after the top-k is picked, so it can
+    /// leave fewer than `k` hits.
+    #[test]
+    fn test_knn_in_bool_is_post_filtered() {
+        let state = tenant_vec_state();
+        let (_, result) = search(
+            &state,
+            "chunks",
+            &json!({"query": {"bool": {
+                "must": [{"knn": {"embedding": {"vector": [1.0, 0.0, 0.0], "k": 2}}}],
+                "filter": [{"term": {"tenantId": "t1"}}],
+            }}}),
+        );
+        assert_eq!(hit_ids(&result), vec!["a"]);
+    }
+
+    /// The clause's own `filter` is applied before the top-k is picked.
+    #[test]
+    fn test_knn_clause_filter_is_pre_filtered() {
+        let state = tenant_vec_state();
+        let (_, result) = search(
+            &state,
+            "chunks",
+            &json!({"query": {"knn": {"embedding": {
+                "vector": [1.0, 0.0, 0.0],
+                "k": 2,
+                "filter": {"bool": {"filter": [{"term": {"tenantId": "t1"}}]}},
+            }}}}),
+        );
+        assert_eq!(hit_ids(&result), vec!["a", "b"]);
+    }
+
+    /// Hybrid shape: a doc matches through either the text clause or
+    /// the kNN top-k, and docs outside both are excluded.
+    #[test]
+    fn test_knn_in_bool_should_hybrid() {
+        let state = tenant_vec_state();
+        let (_, result) = search(
+            &state,
+            "chunks",
+            &json!({"query": {"bool": {
+                "should": [
+                    {"match": {"text": "delta"}},
+                    {"knn": {"embedding": {"vector": [1.0, 0.0, 0.0], "k": 1}}},
+                ],
+                "minimum_should_match": 1,
+            }}}),
+        );
+        let mut ids = hit_ids(&result);
+        ids.sort();
+        assert_eq!(ids, vec!["a", "d"]);
     }
 }
