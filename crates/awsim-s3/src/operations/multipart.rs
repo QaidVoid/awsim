@@ -3,7 +3,6 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 use awsim_core::{AwsError, RequestContext};
-use base64::Engine;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -14,7 +13,7 @@ use crate::util::{compute_etag, compute_multipart_etag, now_rfc7231};
 use md5::Digest;
 
 use super::bucket::no_such_bucket;
-use super::require_str;
+use super::{require_str, trailer_checksum_algorithm, upload_body};
 
 /// POST /{Bucket}/{Key+}?uploads. Initiate a multipart upload.
 pub fn create_multipart_upload(state: &S3State, input: &Value) -> Result<Value, AwsError> {
@@ -85,13 +84,7 @@ pub fn upload_part(state: &S3State, input: &Value) -> Result<Value, AwsError> {
         ));
     }
 
-    let data: Vec<u8> = if let Some(raw) = input.get("__raw_body").and_then(Value::as_str) {
-        base64::engine::general_purpose::STANDARD
-            .decode(raw)
-            .map_err(|_| AwsError::bad_request("InvalidRequest", "Cannot decode part body"))?
-    } else {
-        Vec::new()
-    };
+    let (data, chunk_trailers) = upload_body(input)?;
 
     // Reject parts whose Content-MD5 or x-amz-checksum-* header doesn't
     // match the body. CompleteMultipartUpload uses the per-part ETags as
@@ -102,19 +95,29 @@ pub fn upload_part(state: &S3State, input: &Value) -> Result<Value, AwsError> {
     {
         crate::util::verify_content_md5(&data, md5_b64)?;
     }
-    for (field, algo) in &[
+    let header_checksum = [
         ("ChecksumCrc32", "CRC32"),
         ("ChecksumCrc32c", "CRC32C"),
         ("ChecksumCrc64Nvme", "CRC64NVME"),
         ("ChecksumSha1", "SHA1"),
         ("ChecksumSha256", "SHA256"),
-    ] {
-        if let Some(v) = input.get(field).and_then(Value::as_str)
-            && !v.is_empty()
-        {
-            crate::util::verify_object_checksum(&data, algo, v)?;
-            break;
-        }
+    ]
+    .into_iter()
+    .find_map(|(field, algo)| {
+        input
+            .get(field)
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+            .map(|v| (algo, v))
+    });
+    // Modern SDKs send the flexible checksum in a chunk trailer instead of a header.
+    let trailer_checksum = || {
+        chunk_trailers.iter().find_map(|(name, value)| {
+            trailer_checksum_algorithm(name).map(|algo| (algo, value.as_str()))
+        })
+    };
+    if let Some((algo, value)) = header_checksum.or_else(trailer_checksum) {
+        crate::util::verify_object_checksum(&data, algo, value)?;
     }
 
     let etag = compute_etag(&data);
@@ -659,6 +662,7 @@ fn parse_complete_parts(input: &Value) -> Vec<(u32, Option<String>)> {
 mod tests {
     use super::*;
     use crate::state::{Bucket, ObjectVersions, S3Object, S3State};
+    use base64::Engine;
 
     fn state_with_source(src_bucket: &str, src_key: &str, body: &[u8]) -> S3State {
         let state = S3State::default();
@@ -774,6 +778,45 @@ mod tests {
         .unwrap();
         let etag = part["ETag"].as_str().unwrap().to_string();
         (state, upload_id, etag)
+    }
+
+    /// Modern SDKs frame part bodies as `aws-chunked` with the checksum in a trailer. The
+    /// framing must be stripped before the part is stored, and the trailer checked.
+    #[test]
+    fn upload_part_decodes_aws_chunked_body_and_checks_its_trailer() {
+        const C: crc::Crc<u32> = crc::Crc::<u32>::new(&crc::CRC_32_ISO_HDLC);
+        let (state, upload_id, _) = stage_single_part_upload(b"seed");
+        let part = |crc: &str| {
+            let framed = format!("5\r\nhello\r\n0\r\nx-amz-checksum-crc32:{crc}\r\n\r\n");
+            upload_part(
+                &state,
+                &json!({
+                    "Bucket": "dst",
+                    "Key": "obj",
+                    "uploadId": upload_id,
+                    "partNumber": "2",
+                    "__raw_body": base64::engine::general_purpose::STANDARD.encode(framed),
+                    "ContentEncoding": "aws-chunked",
+                    "ContentSha256": "STREAMING-UNSIGNED-PAYLOAD-TRAILER",
+                    "DecodedContentLength": "5",
+                }),
+            )
+        };
+
+        let good =
+            base64::engine::general_purpose::STANDARD.encode(C.checksum(b"hello").to_be_bytes());
+        let stored = part(&good).unwrap();
+        assert_eq!(
+            stored["ETag"].as_str(),
+            Some(compute_etag(b"hello").as_str())
+        );
+
+        let bad =
+            base64::engine::general_purpose::STANDARD.encode(C.checksum(b"other").to_be_bytes());
+        assert!(
+            part(&bad).is_err(),
+            "a wrong trailer checksum must be refused"
+        );
     }
 
     #[test]

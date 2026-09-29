@@ -1684,8 +1684,13 @@ async fn async_main() -> Result<()> {
         // the decompressed payload rather than the wire bytes - the
         // handler-visible body is what the user-facing cap should
         // gate. tower-http strips `Content-Encoding` + `Content-Length`
-        // for the inner service.
-        .layer(tower_http::decompression::RequestDecompressionLayer::new())
+        // for the inner service. Other encodings pass through untouched:
+        // S3 decodes `aws-chunked` upload framing itself, and a 415 here
+        // would reject every SDK upload that sends trailing checksums.
+        .layer(
+            tower_http::decompression::RequestDecompressionLayer::new()
+                .pass_through_unaccepted(true),
+        )
         .layer(axum::extract::DefaultBodyLimit::max(cli.max_body_bytes))
         // Bounded in-flight requests with shed-on-overload. A misbehaving
         // client (leaking sockets during a bulk import, hammering with

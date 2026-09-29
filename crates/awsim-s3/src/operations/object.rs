@@ -9,7 +9,9 @@ use crate::state::{Bucket, ObjectVersions, S3Object, S3State, VersioningStatus};
 use crate::util::{compute_etag, now_iso8601, now_rfc7231, parse_rfc7231};
 
 use super::bucket::no_such_bucket;
-use super::{opt_str, require_str};
+use super::{
+    opt_str, require_str, stored_content_encoding, trailer_checksum_algorithm, upload_body,
+};
 
 /// Outcome of evaluating RFC 7232 conditional headers on a GET/HEAD.
 enum ConditionOutcome {
@@ -470,19 +472,6 @@ fn parse_request_checksum(input: &Value) -> Result<(Option<String>, Option<Strin
     Ok((None, None))
 }
 
-/// Map an `x-amz-checksum-*` trailer name (lower-cased) to the algorithm name
-/// `verify_object_checksum` expects, or `None` if it is not a checksum trailer.
-fn trailer_checksum_algorithm(name: &str) -> Option<&'static str> {
-    match name {
-        "x-amz-checksum-crc32" => Some("CRC32"),
-        "x-amz-checksum-crc32c" => Some("CRC32C"),
-        "x-amz-checksum-crc64nvme" => Some("CRC64NVME"),
-        "x-amz-checksum-sha1" => Some("SHA1"),
-        "x-amz-checksum-sha256" => Some("SHA256"),
-        _ => None,
-    }
-}
-
 /// Pull the user-metadata sub-map out of the input. The protocol layer
 /// converts incoming `x-amz-meta-*` headers into PascalCase keys
 /// (`Meta<Suffix>`); this reverses that to the wire form so we store
@@ -574,50 +563,7 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
     let key = require_str(input, "Key")?;
     validate_object_key(key)?;
 
-    // Decode body: may be raw bytes (base64 in __raw_body) or a plain string.
-    let mut data: Vec<u8> = if let Some(raw) = input.get("__raw_body").and_then(Value::as_str) {
-        base64::engine::general_purpose::STANDARD
-            .decode(raw)
-            .map_err(|_| AwsError::bad_request("InvalidRequest", "Cannot decode request body"))?
-    } else if let Some(body_str) = input.get("Body").and_then(Value::as_str) {
-        // Client passed body as a string field.
-        body_str.as_bytes().to_vec()
-    } else {
-        Vec::new()
-    };
-
-    // SigV4-streaming uploads send the body as `aws-chunked` framing; the
-    // SDK signals it with `Content-Encoding: aws-chunked` and/or
-    // `x-amz-content-sha256: STREAMING-...`. Strip the framing so the
-    // rest of the path operates on the raw body. The SDK also sends the
-    // post-decode length in `x-amz-decoded-content-length`; if it
-    // disagrees with what we decoded, surface an error rather than
-    // storing a partial object.
-    let is_chunked = opt_str(input, "ContentEncoding")
-        .map(|v| v.eq_ignore_ascii_case("aws-chunked"))
-        .unwrap_or(false)
-        || opt_str(input, "ContentSha256")
-            .map(|v| v.starts_with("STREAMING-"))
-            .unwrap_or(false);
-    let mut chunk_trailers: Vec<(String, String)> = Vec::new();
-    if is_chunked {
-        let (decoded, trailers) = crate::util::decode_aws_chunked_with_trailers(&data)?;
-        data = decoded;
-        chunk_trailers = trailers;
-        if let Some(expected) =
-            opt_str(input, "DecodedContentLength").and_then(|s| s.parse::<usize>().ok())
-            && expected != data.len()
-        {
-            return Err(AwsError::bad_request(
-                "InvalidRequest",
-                format!(
-                    "x-amz-decoded-content-length {expected} does not match \
-                     decoded body length {}",
-                    data.len()
-                ),
-            ));
-        }
-    }
+    let (data, chunk_trailers) = upload_body(input)?;
 
     // The 5 GiB single-PUT cap that real S3 enforces is applied at the
     // gateway via the `--max-s3-upload-bytes` flag: once that many bytes
@@ -633,7 +579,7 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
     let content_type = opt_str(input, "ContentType")
         .unwrap_or("application/octet-stream")
         .to_string();
-    let content_encoding = opt_str(input, "ContentEncoding").map(String::from);
+    let content_encoding = stored_content_encoding(input);
     let cache_control = opt_str(input, "CacheControl").map(String::from);
     let content_disposition = opt_str(input, "ContentDisposition").map(String::from);
     let content_language = opt_str(input, "ContentLanguage").map(String::from);
@@ -1914,6 +1860,32 @@ mod tests {
             .decode(got["Body"].as_str().unwrap())
             .unwrap();
         assert_eq!(body, b"hello");
+    }
+
+    #[test]
+    fn put_object_does_not_store_aws_chunked_as_the_content_encoding() {
+        use base64::Engine as _;
+        let state = state_with(Bucket::new("b", "us-east-1", "now"));
+        let framed = base64::engine::general_purpose::STANDARD.encode(b"2\r\nhi\r\n0\r\n\r\n");
+        for (key, encoding, stored) in [
+            ("plain", "aws-chunked", None),
+            ("gzip", "aws-chunked,gzip", Some("gzip")),
+        ] {
+            put_object(
+                &state,
+                &json!({
+                    "Bucket": "b",
+                    "Key": key,
+                    "__raw_body": framed,
+                    "ContentEncoding": encoding,
+                    "ContentSha256": "STREAMING-UNSIGNED-PAYLOAD-TRAILER",
+                }),
+                &ctx(),
+            )
+            .unwrap();
+            let head = head_object(&state, &json!({ "Bucket": "b", "Key": key }), &ctx()).unwrap();
+            assert_eq!(head["ContentEncoding"].as_str(), stored, "{encoding}");
+        }
     }
 
     #[test]
