@@ -117,6 +117,25 @@ pub fn detect_protocol(headers: &HeaderMap, body: &Bytes) -> Option<Protocol> {
     None
 }
 
+/// The protocol a request to a service declaring `declared` is parsed with.
+///
+/// Detection wins where it identifies the wire protocol itself (`X-Amz-Target`, CBOR,
+/// `Action=` forms). A REST service's `Content-Type` describes its payload instead, such as
+/// an S3 object or a Lambda invoke body, so the service's declaration wins there. The two
+/// query dialects are indistinguishable on the wire, so an ec2Query service keeps its own.
+pub fn effective_protocol(declared: Protocol, headers: &HeaderMap, body: &Bytes) -> Protocol {
+    match detect_protocol(headers, body) {
+        Some(Protocol::RestJson1 | Protocol::RestXml)
+            if matches!(declared, Protocol::RestJson1 | Protocol::RestXml) =>
+        {
+            declared
+        }
+        Some(Protocol::AwsQuery) if declared == Protocol::Ec2Query => Protocol::Ec2Query,
+        Some(detected) => detected,
+        None => declared,
+    }
+}
+
 /// Parse a request based on the detected protocol.
 pub fn parse_request(
     protocol: Protocol,

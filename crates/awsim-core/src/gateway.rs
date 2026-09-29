@@ -603,17 +603,8 @@ async fn process_request(
         )
     })?;
 
-    let protocol = handler.protocol();
-
-    // 3. Determine effective protocol (use service's declared protocol if detection fails)
-    let mut detected = protocol::detect_protocol(headers, body).unwrap_or(protocol);
-
-    // Both query dialects put `Action=` in a form body, so detection
-    // cannot tell them apart. The service knows, and only the response
-    // envelope differs, so let its declaration win.
-    if detected == Protocol::AwsQuery && protocol == Protocol::Ec2Query {
-        detected = Protocol::Ec2Query;
-    }
+    // 3. Determine effective protocol
+    let mut detected = protocol::effective_protocol(handler.protocol(), headers, body);
 
     // 4. Get routes for REST protocols
     let empty_routes = Vec::new();
@@ -640,9 +631,8 @@ async fn process_request(
                 && let Some(fallback_handler) = state.services.get(&path_service)
             {
                 let fallback_routes = state.routes.get(&path_service).unwrap_or(&empty_routes);
-                let fallback_protocol = fallback_handler.protocol();
                 let fallback_detected =
-                    protocol::detect_protocol(headers, body).unwrap_or(fallback_protocol);
+                    protocol::effective_protocol(fallback_handler.protocol(), headers, body);
                 match protocol::parse_request(
                     fallback_detected,
                     method,
@@ -660,9 +650,8 @@ async fn process_request(
                         service_name = path_service;
                         handler = fallback_handler;
                         detected = fallback_detected;
-                        // `protocol` and `routes` are unused after
-                        // parse completes; no need to update them.
-                        let _ = fallback_protocol;
+                        // `routes` is unused after parse completes; no need
+                        // to update it.
                         let _ = fallback_routes;
                         p
                     }
