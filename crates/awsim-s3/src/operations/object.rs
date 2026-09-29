@@ -616,6 +616,19 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
         if matches!(bucket.versioning, VersioningStatus::Disabled) {
             check_object_lock(&bucket, key, bypass_governance)?;
         }
+        // Conditional write: `If-None-Match: *` creates the key only if no current object
+        // holds it. Checked before the body is stored, since an unversioned write replaces
+        // the existing blob in place.
+        if opt_str(input, "IfNoneMatch").is_some_and(|v| v.trim() == "*")
+            && bucket
+                .objects
+                .get(key)
+                .is_some_and(|versions| versions.current().is_some())
+        {
+            return Err(precondition_failed(
+                "At least one of the pre-conditions you specified did not hold",
+            ));
+        }
     }
 
     // Verify any caller-supplied integrity headers against the body before
@@ -1886,6 +1899,49 @@ mod tests {
             let head = head_object(&state, &json!({ "Bucket": "b", "Key": key }), &ctx()).unwrap();
             assert_eq!(head["ContentEncoding"].as_str(), stored, "{encoding}");
         }
+    }
+
+    #[test]
+    fn put_object_if_none_match_refuses_an_existing_key() {
+        let state = state_with(Bucket::new("b", "us-east-1", "now"));
+        let put = |body: &str| {
+            put_object(
+                &state,
+                &json!({ "Bucket": "b", "Key": "k", "Body": body, "IfNoneMatch": "*" }),
+                &ctx(),
+            )
+        };
+        put("first").unwrap();
+        let err = put("second").unwrap_err();
+        assert_eq!(err.code, "PreconditionFailed");
+        let got = get_object(&state, &json!({ "Bucket": "b", "Key": "k" }), &ctx()).unwrap();
+        let body = base64::engine::general_purpose::STANDARD
+            .decode(got["Body"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(
+            body, b"first",
+            "a refused write must not replace the object"
+        );
+    }
+
+    #[test]
+    fn put_object_if_none_match_allows_a_key_behind_a_delete_marker() {
+        let mut bucket = Bucket::new("b", "us-east-1", "now");
+        bucket.versioning = VersioningStatus::Enabled;
+        let state = state_with(bucket);
+        put_object(
+            &state,
+            &json!({ "Bucket": "b", "Key": "k", "Body": "v1" }),
+            &ctx(),
+        )
+        .unwrap();
+        delete_object(&state, &json!({ "Bucket": "b", "Key": "k" }), &ctx()).unwrap();
+        put_object(
+            &state,
+            &json!({ "Bucket": "b", "Key": "k", "Body": "v2", "IfNoneMatch": "*" }),
+            &ctx(),
+        )
+        .unwrap();
     }
 
     #[test]
