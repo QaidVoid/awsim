@@ -139,7 +139,11 @@ impl StsService {
         validate_assume_role_duration(duration)?;
 
         if let Some(resolver) = self.trust_policy_resolver() {
-            evaluate_trust_policy(resolver.as_ref(), ctx, role_arn, input)?;
+            let caller = ctx
+                .access_key
+                .as_deref()
+                .and_then(|k| self.sessions.lookup(k));
+            evaluate_trust_policy(resolver.as_ref(), ctx, caller.as_ref(), role_arn, input)?;
         }
 
         debug!(role_arn = %role_arn, session_name = %session_name, "AssumeRole");
@@ -762,6 +766,7 @@ fn extract_saml_nameid(assertion_b64: &str) -> Option<String> {
 fn evaluate_trust_policy(
     resolver: &dyn TrustPolicyResolver,
     ctx: &RequestContext,
+    caller: Option<&AssumedRoleSession>,
     role_arn: &str,
     input: &Value,
 ) -> Result<(), AwsError> {
@@ -779,11 +784,13 @@ fn evaluate_trust_policy(
         ))
     })?;
 
-    // Derive the calling principal from the SigV4 access key. Anonymous /
-    // unauthenticated callers fall through as the account root, mirroring
-    // GetCallerIdentity's existing behaviour.
-    let principal_arn = match ctx.access_key.as_deref() {
-        Some(k) if !k.is_empty() => arn::build_global(ctx, "iam", format!("user/{k}")),
+    // Derive the calling principal from the SigV4 access key, resolved as
+    // GetCallerIdentity resolves it. A role session is its role, so a trust
+    // policy naming the role admits the role's sessions, as AWS does.
+    // Anonymous / unauthenticated callers fall through as the account root.
+    let principal_arn = match (caller, ctx.access_key.as_deref()) {
+        (Some(session), _) => session.role_arn.clone(),
+        (None, Some(k)) if !k.is_empty() => arn::build_global(ctx, "iam", format!("user/{k}")),
         _ => arn::build_global(ctx, "iam", "root"),
     };
 
@@ -1806,6 +1813,44 @@ mod tests {
             )
             .unwrap();
         assert!(resp["Credentials"]["AccessKeyId"].as_str().is_some());
+    }
+
+    #[test]
+    fn assume_role_admits_a_session_of_the_role_its_trust_policy_names() {
+        let svc = StsService::new();
+        let role = "arn:aws:iam::000000000000:role/SelfTrusting";
+        let issued = svc
+            .assume_role(
+                &json!({ "RoleArn": role, "RoleSessionName": "first" }),
+                &make_ctx(),
+            )
+            .unwrap();
+        let key = issued["Credentials"]["AccessKeyId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        svc.set_trust_policy_resolver(Arc::new(StaticResolver(Some(
+            r#"{
+                "Version":"2012-10-17",
+                "Statement":[{
+                    "Effect":"Allow",
+                    "Principal":{"AWS":"arn:aws:iam::000000000000:role/SelfTrusting"},
+                    "Action":"sts:AssumeRole"
+                }]
+            }"#,
+        ))));
+        let input = json!({ "RoleArn": role, "RoleSessionName": "narrowed" });
+
+        let mut ctx = make_ctx();
+        ctx.access_key = Some(key);
+        assert!(svc.assume_role(&input, &ctx).is_ok());
+
+        let mut stranger = make_ctx();
+        stranger.access_key = Some("AKIATESTAKID000000".to_string());
+        assert_eq!(
+            svc.assume_role(&input, &stranger).unwrap_err().code,
+            "AccessDenied"
+        );
     }
 
     #[test]
