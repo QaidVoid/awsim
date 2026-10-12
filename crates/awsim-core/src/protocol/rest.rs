@@ -350,6 +350,22 @@ fn parse_xml_body(body: &Bytes) -> Result<Value, AwsError> {
     parse_xml_element(s)
 }
 
+/// Insert `value` under `key`, turning a repeated element into an array of
+/// every occurrence, as AWS's flattened lists (such as a CORS rule's
+/// `AllowedOrigin`s) repeat an element once per entry.
+fn insert_repeated(map: &mut serde_json::Map<String, Value>, key: &str, value: Value) {
+    match map.get_mut(key) {
+        Some(Value::Array(arr)) => arr.push(value),
+        Some(existing) => {
+            let prev = existing.take();
+            *existing = Value::Array(vec![prev, value]);
+        }
+        None => {
+            map.insert(key.to_string(), value);
+        }
+    }
+}
+
 /// Simple XML -> JSON parser for AWS request bodies.
 fn parse_xml_element(xml: &str) -> Result<Value, AwsError> {
     use quick_xml::Reader;
@@ -386,18 +402,7 @@ fn parse_xml_element(xml: &str) -> Result<Value, AwsError> {
                 if current_text.is_empty() && !map.is_empty() {
                     let value = Value::Object(map.clone());
                     if let Some((parent_key, mut parent_map)) = stack.pop() {
-                        // Check if this key already exists (array case)
-                        if let Some(existing) = parent_map.get_mut(&current_key) {
-                            match existing {
-                                Value::Array(arr) => arr.push(value),
-                                other => {
-                                    let prev = other.take();
-                                    *other = Value::Array(vec![prev, value]);
-                                }
-                            }
-                        } else {
-                            parent_map.insert(current_key.clone(), value);
-                        }
+                        insert_repeated(&mut parent_map, &current_key, value);
                         map = parent_map;
                         current_key = parent_key;
                     } else {
@@ -405,12 +410,12 @@ fn parse_xml_element(xml: &str) -> Result<Value, AwsError> {
                     }
                 } else if !current_key.is_empty() {
                     let value = Value::String(current_text.clone());
-                    if let Some((_parent_key, _parent_map)) = stack.last_mut() {}
-                    map.insert(current_key.clone(), value);
                     if let Some((parent_key, mut parent_map)) = stack.pop() {
-                        parent_map.insert(current_key.clone(), Value::String(current_text.clone()));
+                        insert_repeated(&mut parent_map, &current_key, value);
                         map = parent_map;
                         current_key = parent_key;
+                    } else {
+                        map.insert(current_key.clone(), value);
                     }
                 }
                 current_text.clear();
@@ -793,6 +798,7 @@ fn derive_host_id(request_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_match_simple_path() {
@@ -1014,6 +1020,26 @@ mod tests {
             nested.is_some() || top.is_some(),
             "self-closing element should be present: {value:?}"
         );
+    }
+
+    #[test]
+    fn parse_xml_keeps_every_repeated_text_element() {
+        // A CORS rule lists each origin and method as its own element.
+        let xml = "<CORSConfiguration><CORSRule>\
+                   <AllowedOrigin>http://a.test</AllowedOrigin>\
+                   <AllowedOrigin>http://b.test</AllowedOrigin>\
+                   <AllowedMethod>GET</AllowedMethod>\
+                   <AllowedMethod>PUT</AllowedMethod>\
+                   <MaxAgeSeconds>3600</MaxAgeSeconds>\
+                   </CORSRule></CORSConfiguration>";
+        let value = parse_xml_element(xml).expect("parse");
+        let rule = &value["CORSConfiguration"]["CORSRule"];
+        assert_eq!(
+            rule["AllowedOrigin"],
+            json!(["http://a.test", "http://b.test"])
+        );
+        assert_eq!(rule["AllowedMethod"], json!(["GET", "PUT"]));
+        assert_eq!(rule["MaxAgeSeconds"], json!("3600"));
     }
 
     #[test]
