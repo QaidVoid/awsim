@@ -325,4 +325,8 @@ and Resource follows AWS semantics (`*`, `?`).
 Services that want enforcement override `ServiceHandler::iam_action(op)` and
 `ServiceHandler::iam_resource(op, input, ctx)` to return the action string
 (`s3:GetObject`) and resource ARN. Services that don't override these are
-silently bypassed (backwards compatible).
+silently bypassed (backwards compatible). When the action depends on the
+input or one request needs several checks (S3 CopyObject, DeleteObjects),
+override `ServiceHandler::iam_checks(op, input, ctx)` instead. Map to the
+IAM action names in AWS's service authorization reference, not the API
+operation names (`ListObjectsV2` is `s3:ListBucket`).

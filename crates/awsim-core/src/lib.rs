@@ -188,6 +188,28 @@ pub trait ServiceHandler: Send + Sync {
         None
     }
 
+    /// Every `(action, resource)` pair IAM must allow for this request.
+    ///
+    /// The default is the single pair from [`Self::iam_action`] and
+    /// [`Self::iam_resource`], or none when either is undeclared (the
+    /// request is not enforced). Override when the action depends on the
+    /// input, or one request needs several actions (S3 CopyObject reads
+    /// its source and writes its target).
+    fn iam_checks(
+        &self,
+        operation: &str,
+        input: &serde_json::Value,
+        ctx: &router::RequestContext,
+    ) -> Vec<(String, String)> {
+        match (
+            self.iam_action(operation),
+            self.iam_resource(operation, input, ctx),
+        ) {
+            (Some(action), Some(resource)) => vec![(action, resource)],
+            _ => Vec::new(),
+        }
+    }
+
     /// Periodic tick. The gateway spawns a single 1-second loop that
     /// calls `tick` on every registered service after the server is up.
     /// Use this hook for time-driven behavior that doesn't fit into the

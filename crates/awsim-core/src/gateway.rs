@@ -722,20 +722,21 @@ async fn process_request(
     };
 
     // 6b. IAM authorization (opt-in via AWSIM_IAM_ENFORCE)
-    if let (Some(action), Some(resource)) = (
-        handler.iam_action(&parsed.operation),
-        handler.iam_resource(&parsed.operation, &parsed.input, &ctx),
-    ) {
-        state
-            .authz
-            .check(&ctx, &action, &resource)
-            .map_err(|e| (detected, e))?;
-    } else {
-        debug!(
-            service = %service_name,
-            operation = %parsed.operation,
-            "Skipping IAM check. Handler does not declare action/resource"
-        );
+    if state.authz.enabled() {
+        let checks = handler.iam_checks(&parsed.operation, &parsed.input, &ctx);
+        for (action, resource) in &checks {
+            state
+                .authz
+                .check(&ctx, action, resource)
+                .map_err(|e| (detected, e))?;
+        }
+        if checks.is_empty() {
+            debug!(
+                service = %service_name,
+                operation = %parsed.operation,
+                "Skipping IAM check. Handler does not declare action/resource"
+            );
+        }
     }
 
     let operation = parsed.operation.clone();
