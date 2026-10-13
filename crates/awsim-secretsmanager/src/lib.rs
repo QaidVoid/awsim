@@ -166,23 +166,49 @@ impl ServiceHandler for SecretsManagerService {
         }
     }
 
-    fn iam_resource(&self, operation: &str, input: &Value, ctx: &RequestContext) -> Option<String> {
+    fn iam_checks(
+        &self,
+        operation: &str,
+        input: &Value,
+        ctx: &RequestContext,
+    ) -> Vec<(String, String)> {
+        let Some(action) = self.iam_action(operation) else {
+            return Vec::new();
+        };
+        let state = self.store.get(&ctx.account_id, &ctx.region);
+        // Policies name the full secret ARN, random suffix included, so a
+        // secret named by its plain name is checked under its stored ARN.
+        let secret_arn = |id: &str| {
+            if id.starts_with("arn:") {
+                return id.to_string();
+            }
+            state
+                .secrets
+                .get(id)
+                .map(|s| s.arn.clone())
+                .unwrap_or_else(|| arn::build(ctx, "secretsmanager", format!("secret:{id}")))
+        };
         match operation {
-            "ListSecrets" | "GetRandomPassword" | "BatchGetSecretValue" | "CreateSecret" => {
-                Some("*".to_string())
-            }
-            _ => {
-                let secret_id = input.get("SecretId").and_then(|v| v.as_str())?;
-                if secret_id.starts_with("arn:") {
-                    Some(secret_id.to_string())
-                } else {
-                    Some(arn::build(
-                        ctx,
-                        "secretsmanager",
-                        format!("secret:{secret_id}"),
-                    ))
+            "ListSecrets" | "GetRandomPassword" => vec![(action, "*".to_string())],
+            "CreateSecret" => input
+                .get("Name")
+                .and_then(Value::as_str)
+                .map(|name| vec![(action, secret_arn(name))])
+                .unwrap_or_default(),
+            // Each secret a batch returns also needs GetSecretValue.
+            "BatchGetSecretValue" => {
+                let mut checks = vec![(action, "*".to_string())];
+                let ids = input.get("SecretIdList").and_then(Value::as_array);
+                for id in ids.into_iter().flatten().filter_map(Value::as_str) {
+                    checks.push(("secretsmanager:GetSecretValue".to_string(), secret_arn(id)));
                 }
+                checks
             }
+            _ => input
+                .get("SecretId")
+                .and_then(Value::as_str)
+                .map(|id| vec![(action, secret_arn(id))])
+                .unwrap_or_default(),
         }
     }
 

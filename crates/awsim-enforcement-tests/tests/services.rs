@@ -349,6 +349,64 @@ async fn secretsmanager_alice_can_create_and_read() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn secretsmanager_checks_secret_by_its_full_arn() {
+    let iam = Arc::new(awsim_iam::IamService::new());
+    let (srv, port) = start_server_unenforced(iam.clone()).await;
+    let admin_cfg = make_sdk_config(port, "admin", "admin");
+    let admin_sm = secretsmanager_client(&admin_cfg);
+    let mut arns = Vec::new();
+    for name in ["api_key", "db_password"] {
+        let created = admin_sm
+            .create_secret()
+            .name(name)
+            .secret_string("topsecret")
+            .send()
+            .await
+            .expect("CreateSecret");
+        arns.push(created.arn.expect("secret arn"));
+    }
+    // Scoped to the exact ARN, random suffix included, as policies
+    // copied from the console are.
+    let policy = format!(
+        r#"{{"Version":"2012-10-17","Statement":[
+            {{"Effect":"Allow","Action":"secretsmanager:GetSecretValue","Resource":"{}"}},
+            {{"Effect":"Allow","Action":"secretsmanager:BatchGetSecretValue","Resource":"*"}}
+        ]}}"#,
+        arns[0]
+    );
+    let (ak, sk) = bootstrap_user(
+        &iam_client(&admin_cfg),
+        "alice",
+        &[("AliceOneSecret".into(), policy)],
+    )
+    .await;
+
+    srv.set_enforcement(true);
+
+    let sm = secretsmanager_client(&make_sdk_config(port, &ak, &sk));
+    sm.get_secret_value()
+        .secret_id("api_key")
+        .send()
+        .await
+        .expect("GetSecretValue by name under an ARN-scoped policy");
+    sm.batch_get_secret_value()
+        .secret_id_list("api_key")
+        .send()
+        .await
+        .expect("BatchGetSecretValue of the allowed secret");
+    let err = sm
+        .batch_get_secret_value()
+        .secret_id_list("api_key")
+        .secret_id_list("db_password")
+        .send()
+        .await
+        .expect_err("BatchGetSecretValue including a denied secret");
+    assert!(sdk_err_is_access_denied(&err), "{err}");
+
+    srv.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn secretsmanager_no_policy_implicit_deny() {
     let iam = Arc::new(awsim_iam::IamService::new());
     let (srv, port) = start_server_unenforced(iam.clone()).await;
