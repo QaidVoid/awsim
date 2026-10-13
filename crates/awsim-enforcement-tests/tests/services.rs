@@ -376,16 +376,15 @@ async fn iam_target_alice_readonly_can_list_but_not_create() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn s3_bucket_arn_does_not_grant_object_access() {
-    // awsim maps `ListObjectsV2` to the literal `s3:ListObjectsV2`
-    // action (real AWS uses `s3:ListBucket`). The policy below grants
-    // bucket-level ListObjectsV2 + GetObject on the bucket ARN. The
-    // GetObject must still be denied because object access requires
+    // ListObjectsV2 is authorized as `s3:ListBucket` on the bucket ARN.
+    // The policy below grants that plus GetObject on the bucket ARN.
+    // The GetObject must still be denied because object access requires
     // the object-level ARN.
     let bucket_only = r#"{
         "Version":"2012-10-17",
         "Statement":[{
             "Effect":"Allow",
-            "Action":["s3:ListObjectsV2","s3:GetObject"],
+            "Action":["s3:ListBucket","s3:GetObject"],
             "Resource":"arn:aws:s3:::test-bucket"
         }]
     }"#;
@@ -428,6 +427,125 @@ async fn s3_bucket_arn_does_not_grant_object_access() {
         sdk_err_is_access_denied(&err),
         "GetObject with bucket-only ARN must be AccessDenied: {err}"
     );
+
+    srv.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn s3_operations_are_checked_as_iam_actions() {
+    let policy = r#"{
+        "Version":"2012-10-17",
+        "Statement":[
+            {"Effect":"Allow","Action":"s3:ListAllMyBuckets","Resource":"*"},
+            {"Effect":"Allow","Action":"s3:ListBucket","Resource":"arn:aws:s3:::test-bucket"},
+            {"Effect":"Allow","Action":["s3:GetObject","s3:DeleteObject"],
+             "Resource":"arn:aws:s3:::test-bucket/*"},
+            {"Effect":"Allow","Action":"s3:PutObject","Resource":"arn:aws:s3:::test-bucket/copies/*"}
+        ]
+    }"#;
+
+    let iam = Arc::new(awsim_iam::IamService::new());
+    let (srv, port) = start_server_unenforced(iam.clone()).await;
+    let admin_cfg = make_sdk_config(port, "admin", "admin");
+    let admin_s3 = s3_client(&admin_cfg);
+    for bucket in ["test-bucket", "other-bucket"] {
+        admin_s3
+            .create_bucket()
+            .bucket(bucket)
+            .send()
+            .await
+            .expect("create_bucket");
+        admin_s3
+            .put_object()
+            .bucket(bucket)
+            .key("a.txt")
+            .body(aws_sdk_s3::primitives::ByteStream::from_static(b"a"))
+            .send()
+            .await
+            .expect("put_object");
+    }
+    let (ak, sk) = bootstrap_user(
+        &iam_client(&admin_cfg),
+        "alice",
+        &[("AliceS3".into(), policy.into())],
+    )
+    .await;
+
+    srv.set_enforcement(true);
+
+    let s3 = s3_client(&make_sdk_config(port, &ak, &sk));
+    s3.list_buckets().send().await.expect("ListBuckets");
+    s3.head_bucket()
+        .bucket("test-bucket")
+        .send()
+        .await
+        .expect("HeadBucket");
+    s3.list_objects_v2()
+        .bucket("test-bucket")
+        .send()
+        .await
+        .expect("ListObjectsV2");
+    s3.head_object()
+        .bucket("test-bucket")
+        .key("a.txt")
+        .send()
+        .await
+        .expect("HeadObject");
+    s3.copy_object()
+        .copy_source("test-bucket/a.txt")
+        .bucket("test-bucket")
+        .key("copies/a.txt")
+        .send()
+        .await
+        .expect("CopyObject within allowed source and target");
+
+    let err = s3
+        .copy_object()
+        .copy_source("other-bucket/a.txt")
+        .bucket("test-bucket")
+        .key("copies/b.txt")
+        .send()
+        .await
+        .expect_err("CopyObject from an unreadable source");
+    assert!(sdk_err_is_access_denied(&err), "{err}");
+
+    let err = s3
+        .list_objects_v2()
+        .bucket("other-bucket")
+        .send()
+        .await
+        .expect_err("ListObjectsV2 on another bucket");
+    assert!(sdk_err_is_access_denied(&err), "{err}");
+
+    let delete = |keys: &[&str]| {
+        aws_sdk_s3::types::Delete::builder()
+            .set_objects(Some(
+                keys.iter()
+                    .map(|k| {
+                        aws_sdk_s3::types::ObjectIdentifier::builder()
+                            .key(*k)
+                            .build()
+                            .unwrap()
+                    })
+                    .collect(),
+            ))
+            .build()
+            .unwrap()
+    };
+    let err = s3
+        .delete_objects()
+        .bucket("other-bucket")
+        .delete(delete(&["a.txt"]))
+        .send()
+        .await
+        .expect_err("DeleteObjects on another bucket's keys");
+    assert!(sdk_err_is_access_denied(&err), "{err}");
+    s3.delete_objects()
+        .bucket("test-bucket")
+        .delete(delete(&["a.txt", "copies/a.txt"]))
+        .send()
+        .await
+        .expect("DeleteObjects with s3:DeleteObject on each key");
 
     srv.shutdown().await;
 }
