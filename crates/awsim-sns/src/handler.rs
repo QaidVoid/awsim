@@ -190,7 +190,6 @@ impl ServiceHandler for SnsService {
             | "SetSubscriptionAttributes"
             | "ConfirmSubscription"
             | "Publish"
-            | "PublishBatch"
             | "CheckIfPhoneNumberIsOptedOut"
             | "ListPhoneNumbersOptedOut"
             | "GetSMSAttributes"
@@ -216,6 +215,8 @@ impl ServiceHandler for SnsService {
             | "ListOriginationNumbers"
             | "AddPermission"
             | "RemovePermission" => Some(format!("sns:{operation}")),
+            // PublishBatch is authorized as sns:Publish.
+            "PublishBatch" => Some("sns:Publish".to_string()),
             _ => None,
         }
     }

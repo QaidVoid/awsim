@@ -244,6 +244,20 @@ async fn sns_alice_publish_only_alerts_topic() {
         "Publish to unauthorized topic must be AccessDenied: {err}"
     );
 
+    // PublishBatch is authorized as sns:Publish.
+    sns.publish_batch()
+        .topic_arn(&alerts_arn)
+        .publish_batch_request_entries(
+            aws_sdk_sns::types::PublishBatchRequestEntry::builder()
+                .id("1")
+                .message("hi")
+                .build()
+                .unwrap(),
+        )
+        .send()
+        .await
+        .expect("PublishBatch alerts");
+
     srv.shutdown().await;
 }
 
