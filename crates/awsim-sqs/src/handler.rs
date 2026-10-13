@@ -182,12 +182,9 @@ impl ServiceHandler for SqsService {
             | "GetQueueAttributes"
             | "SetQueueAttributes"
             | "SendMessage"
-            | "SendMessageBatch"
             | "ReceiveMessage"
             | "DeleteMessage"
-            | "DeleteMessageBatch"
             | "ChangeMessageVisibility"
-            | "ChangeMessageVisibilityBatch"
             | "ListDeadLetterSourceQueues"
             | "PurgeQueue"
             | "TagQueue"
@@ -198,15 +195,32 @@ impl ServiceHandler for SqsService {
             | "StartMessageMoveTask"
             | "CancelMessageMoveTask"
             | "ListMessageMoveTasks" => Some(format!("sqs:{operation}")),
+            // Batch calls are authorized as their single-message action.
+            "SendMessageBatch" => Some("sqs:SendMessage".to_string()),
+            "DeleteMessageBatch" => Some("sqs:DeleteMessage".to_string()),
+            "ChangeMessageVisibilityBatch" => Some("sqs:ChangeMessageVisibility".to_string()),
             _ => None,
         }
     }
 
     fn iam_resource(&self, operation: &str, input: &Value, ctx: &RequestContext) -> Option<String> {
         match operation {
-            "ListQueues" | "CreateQueue" | "GetQueueUrl" | "ListMessageMoveTasks" => {
-                Some("*".to_string())
+            "ListQueues" => Some("*".to_string()),
+            "CreateQueue" | "GetQueueUrl" => {
+                let name = input.get("QueueName").and_then(|v| v.as_str())?;
+                let account = input
+                    .get("QueueOwnerAWSAccountId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&ctx.account_id);
+                Some(format!(
+                    "arn:{}:sqs:{}:{}:{}",
+                    ctx.partition, ctx.region, account, name
+                ))
             }
+            "StartMessageMoveTask" | "ListMessageMoveTasks" => input
+                .get("SourceArn")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
             _ => {
                 let queue_url = input.get("QueueUrl").and_then(|v| v.as_str())?;
                 let name = queue_url.rsplit('/').next().filter(|s| !s.is_empty())?;

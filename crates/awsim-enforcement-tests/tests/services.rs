@@ -159,6 +159,33 @@ async fn sqs_alice_send_only_work_queue() {
         "SendMessage to unauthorized queue must be AccessDenied: {err}"
     );
 
+    // GetQueueUrl is checked against the named queue's ARN, and
+    // SendMessageBatch as sqs:SendMessage.
+    sqs.get_queue_url()
+        .queue_name("work")
+        .send()
+        .await
+        .expect("GetQueueUrl work");
+    let err = sqs
+        .get_queue_url()
+        .queue_name("other")
+        .send()
+        .await
+        .expect_err("GetQueueUrl other must fail");
+    assert!(sdk_err_is_access_denied(&err), "{err}");
+    sqs.send_message_batch()
+        .queue_url(&work_url)
+        .entries(
+            aws_sdk_sqs::types::SendMessageBatchRequestEntry::builder()
+                .id("1")
+                .message_body("hello")
+                .build()
+                .unwrap(),
+        )
+        .send()
+        .await
+        .expect("SendMessageBatch work");
+
     srv.shutdown().await;
 }
 
