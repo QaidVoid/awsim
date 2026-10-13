@@ -579,6 +579,27 @@ fn parse_from_where(
     Ok((table_name, None, None))
 }
 
+/// The IAM action and table a PartiQL statement needs: `dynamodb:PartiQLSelect`,
+/// `PartiQLInsert`, `PartiQLUpdate` or `PartiQLDelete` on the table it names.
+pub(crate) fn statement_iam_target(stmt: &str) -> Option<(&'static str, String)> {
+    let stmt = stmt.trim();
+    let upper = stmt.to_uppercase();
+    let (action, keyword) = if upper.starts_with("SELECT") {
+        ("dynamodb:PartiQLSelect", "FROM")
+    } else if upper.starts_with("INSERT") {
+        ("dynamodb:PartiQLInsert", "INTO")
+    } else if upper.starts_with("UPDATE") {
+        ("dynamodb:PartiQLUpdate", "UPDATE")
+    } else if upper.starts_with("DELETE") {
+        ("dynamodb:PartiQLDelete", "FROM")
+    } else {
+        return None;
+    };
+    let pos = upper.find(keyword)? + keyword.len();
+    let table = extract_quoted_identifier(stmt.get(pos..)?).ok()?;
+    (!table.is_empty()).then_some((action, table))
+}
+
 /// Extract the first `"identifier"` or unquoted word from a string.
 fn extract_quoted_identifier(s: &str) -> Result<String, AwsError> {
     let trimmed = s.trim();

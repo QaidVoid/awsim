@@ -475,6 +475,15 @@ where
     }
 }
 
+/// Table ARN for a `TableName`, which DynamoDB also accepts as a full ARN.
+fn table_arn(ctx: &RequestContext, table: &str) -> String {
+    if table.starts_with("arn:") {
+        table.to_string()
+    } else {
+        arn::build(ctx, "dynamodb", format!("table/{table}"))
+    }
+}
+
 #[async_trait]
 impl ServiceHandler for DynamoDbService {
     fn service_name(&self) -> &str {
@@ -956,15 +965,105 @@ impl ServiceHandler for DynamoDbService {
                 .get("ImportArn")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
-            "TagResource" | "UntagResource" | "ListTagsOfResource" => input
+            "TagResource"
+            | "UntagResource"
+            | "ListTagsOfResource"
+            | "PutResourcePolicy"
+            | "GetResourcePolicy"
+            | "DeleteResourcePolicy" => input
                 .get("ResourceArn")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
             _ => {
-                let table = input.get("TableName").and_then(|v| v.as_str())?;
-                Some(arn::build(ctx, "dynamodb", format!("table/{table}")))
+                let table = input
+                    .get("TableName")
+                    .or_else(|| input.get("TableArn"))
+                    .and_then(|v| v.as_str())?;
+                Some(table_arn(ctx, table))
             }
         }
+    }
+
+    fn iam_checks(
+        &self,
+        operation: &str,
+        input: &Value,
+        ctx: &RequestContext,
+    ) -> Vec<(String, String)> {
+        let mut checks: Vec<(String, String)> = Vec::new();
+        let mut push = |action: &str, resource: String| {
+            let check = (action.to_string(), resource);
+            if !checks.contains(&check) {
+                checks.push(check);
+            }
+        };
+        match operation {
+            // Batch calls are checked once per table they touch.
+            "BatchGetItem" | "BatchWriteItem" => {
+                let action = format!("dynamodb:{operation}");
+                let tables = input.get("RequestItems").and_then(Value::as_object);
+                for table in tables.into_iter().flat_map(|m| m.keys()) {
+                    push(&action, table_arn(ctx, table));
+                }
+            }
+            // Transactions need the single-item action for each item.
+            "TransactGetItems" | "TransactWriteItems" => {
+                let items = input.get("TransactItems").and_then(Value::as_array);
+                for item in items.into_iter().flatten() {
+                    for (kind, action) in [
+                        ("Get", "dynamodb:GetItem"),
+                        ("Put", "dynamodb:PutItem"),
+                        ("Update", "dynamodb:UpdateItem"),
+                        ("Delete", "dynamodb:DeleteItem"),
+                        ("ConditionCheck", "dynamodb:ConditionCheckItem"),
+                    ] {
+                        if let Some(table) = item[kind]["TableName"].as_str() {
+                            push(action, table_arn(ctx, table));
+                        }
+                    }
+                }
+            }
+            // PartiQL is checked per statement as PartiQLSelect and friends.
+            "ExecuteStatement" | "BatchExecuteStatement" | "ExecuteTransaction" => {
+                let statements: Vec<&Value> = match operation {
+                    "ExecuteStatement" => vec![input],
+                    "BatchExecuteStatement" => input["Statements"]
+                        .as_array()
+                        .map(|a| a.iter().collect())
+                        .unwrap_or_default(),
+                    _ => input["TransactStatements"]
+                        .as_array()
+                        .map(|a| a.iter().collect())
+                        .unwrap_or_default(),
+                };
+                for stmt in statements {
+                    let target = stmt["Statement"]
+                        .as_str()
+                        .and_then(operations::partiql::statement_iam_target);
+                    if let Some((action, table)) = target {
+                        push(action, table_arn(ctx, &table));
+                    }
+                }
+            }
+            // Reading an index is checked against the index ARN.
+            "Query" | "Scan" if input.get("IndexName").is_some() => {
+                let table = input["TableName"].as_str().unwrap_or_default();
+                let index = input["IndexName"].as_str().unwrap_or_default();
+                push(
+                    &format!("dynamodb:{operation}"),
+                    format!("{}/index/{index}", table_arn(ctx, table)),
+                );
+            }
+            _ => {
+                if let (Some(action), Some(resource)) = (
+                    self.iam_action(operation),
+                    self.iam_resource(operation, input, ctx),
+                ) {
+                    push(&action, resource);
+                }
+            }
+        }
+        checks
     }
 
     fn snapshot(&self) -> Option<Vec<u8>> {
@@ -1098,5 +1197,53 @@ mod handler_tests {
             .await
             .unwrap();
         assert!(res.get("__headers").is_none());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn test_iam_checks_index_reads_use_index_arn() {
+        let svc = DynamoDbService::new();
+        let ctx = RequestContext::new("dynamodb", "us-east-1");
+        let input = json!({ "TableName": "t", "IndexName": "by-owner" });
+        assert_eq!(
+            svc.iam_checks("Query", &input, &ctx),
+            vec![(
+                "dynamodb:Query".to_string(),
+                "arn:aws:dynamodb:us-east-1:000000000000:table/t/index/by-owner".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn test_iam_checks_partiql_statement_kinds() {
+        let svc = DynamoDbService::new();
+        let ctx = RequestContext::new("dynamodb", "us-east-1");
+        let input = json!({ "Statements": [
+            { "Statement": "SELECT * FROM \"a\" WHERE id = ?" },
+            { "Statement": "INSERT INTO \"b\" VALUE {'id': '1'}" },
+            { "Statement": "UPDATE \"c\" SET x = 1 WHERE id = '1'" },
+            { "Statement": "DELETE FROM \"d\" WHERE id = '1'" },
+        ] });
+        let actions: Vec<(String, String)> = svc
+            .iam_checks("BatchExecuteStatement", &input, &ctx)
+            .into_iter()
+            .map(|(action, resource)| (action, resource.rsplit('/').next().unwrap().to_string()))
+            .collect();
+        assert_eq!(
+            actions,
+            [
+                ("dynamodb:PartiQLSelect", "a"),
+                ("dynamodb:PartiQLInsert", "b"),
+                ("dynamodb:PartiQLUpdate", "c"),
+                ("dynamodb:PartiQLDelete", "d"),
+            ]
+            .map(|(a, t)| (a.to_string(), t.to_string()))
+        );
     }
 }

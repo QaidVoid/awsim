@@ -106,6 +106,125 @@ async fn ddb_alice_can_put_get_only_her_table() {
 
 // -- SQS ----------------------------------------------------------------------
 
+async fn create_ddb_table(ddb: &aws_sdk_dynamodb::Client, name: &str) {
+    ddb.create_table()
+        .table_name(name)
+        .billing_mode(BillingMode::PayPerRequest)
+        .attribute_definitions(
+            AttributeDefinition::builder()
+                .attribute_name("id")
+                .attribute_type(ScalarAttributeType::S)
+                .build()
+                .unwrap(),
+        )
+        .key_schema(
+            KeySchemaElement::builder()
+                .attribute_name("id")
+                .key_type(KeyType::Hash)
+                .build()
+                .unwrap(),
+        )
+        .send()
+        .await
+        .expect("create_table");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ddb_batch_transact_and_partiql_check_every_table() {
+    use aws_sdk_dynamodb::types::{Put, PutRequest, TransactWriteItem, WriteRequest};
+
+    let iam = Arc::new(awsim_iam::IamService::new());
+    let (srv, port) = start_server_unenforced(iam.clone()).await;
+    let admin_cfg = make_sdk_config(port, "admin", "admin");
+    let admin_ddb = dynamodb_client(&admin_cfg);
+    create_ddb_table(&admin_ddb, "widgets").await;
+    create_ddb_table(&admin_ddb, "other").await;
+
+    let policy = r#"{
+        "Version":"2012-10-17",
+        "Statement":[{
+            "Effect":"Allow",
+            "Action":["dynamodb:BatchWriteItem","dynamodb:PutItem","dynamodb:PartiQLSelect"],
+            "Resource":"arn:aws:dynamodb:us-east-1:000000000000:table/widgets"
+        }]
+    }"#;
+    let (ak, sk) = bootstrap_user(
+        &iam_client(&admin_cfg),
+        "alice",
+        &[("AliceWidgets".into(), policy.into())],
+    )
+    .await;
+
+    srv.set_enforcement(true);
+
+    let ddb = dynamodb_client(&make_sdk_config(port, &ak, &sk));
+    let item =
+        || std::collections::HashMap::from([("id".to_string(), AttributeValue::S("1".into()))]);
+    let write = || {
+        WriteRequest::builder()
+            .put_request(
+                PutRequest::builder()
+                    .set_item(Some(item()))
+                    .build()
+                    .unwrap(),
+            )
+            .build()
+    };
+    let transact_put = |table: &str| {
+        TransactWriteItem::builder()
+            .put(
+                Put::builder()
+                    .table_name(table)
+                    .set_item(Some(item()))
+                    .build()
+                    .unwrap(),
+            )
+            .build()
+    };
+
+    ddb.batch_write_item()
+        .request_items("widgets", vec![write()])
+        .send()
+        .await
+        .expect("BatchWriteItem widgets");
+    let err = ddb
+        .batch_write_item()
+        .request_items("widgets", vec![write()])
+        .request_items("other", vec![write()])
+        .send()
+        .await
+        .expect_err("BatchWriteItem touching other");
+    assert!(sdk_err_is_access_denied(&err), "{err}");
+
+    ddb.transact_write_items()
+        .transact_items(transact_put("widgets"))
+        .send()
+        .await
+        .expect("TransactWriteItems widgets");
+    let err = ddb
+        .transact_write_items()
+        .transact_items(transact_put("other"))
+        .send()
+        .await
+        .expect_err("TransactWriteItems other");
+    assert!(sdk_err_is_access_denied(&err), "{err}");
+
+    ddb.execute_statement()
+        .statement(r#"SELECT * FROM "widgets""#)
+        .send()
+        .await
+        .expect("PartiQL SELECT widgets");
+    let err = ddb
+        .execute_statement()
+        .statement(r#"SELECT * FROM "other""#)
+        .send()
+        .await
+        .expect_err("PartiQL SELECT other");
+    assert!(sdk_err_is_access_denied(&err), "{err}");
+
+    srv.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sqs_alice_send_only_work_queue() {
     let iam = Arc::new(awsim_iam::IamService::new());
