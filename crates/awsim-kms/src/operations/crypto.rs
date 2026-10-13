@@ -156,7 +156,7 @@ pub fn encrypt_raw(key_id: &str, secret: &[u8], plaintext: &[u8]) -> Vec<u8> {
     aes_encrypt(key_id, secret, plaintext, &[]).unwrap_or_else(|_| Vec::new())
 }
 
-fn decode_ciphertext_blob(blob_b64: &str) -> Result<(String, Vec<u8>), AwsError> {
+pub(crate) fn decode_ciphertext_blob(blob_b64: &str) -> Result<(String, Vec<u8>), AwsError> {
     let blob = BASE64.decode(blob_b64).map_err(|_| {
         AwsError::bad_request(
             "InvalidCiphertextException",

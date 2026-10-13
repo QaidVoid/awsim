@@ -431,6 +431,82 @@ async fn lambda_alice_invoke_unauthorized_function_denied() {
     srv.shutdown().await;
 }
 
+// -- KMS ----------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kms_checks_aliases_and_ciphertexts_as_their_key() {
+    use aws_sdk_kms::primitives::Blob;
+
+    let iam = Arc::new(awsim_iam::IamService::new());
+    let (srv, port) = start_server_unenforced(iam.clone()).await;
+    let admin_cfg = make_sdk_config(port, "admin", "admin");
+    let admin_kms = awsim_enforcement_tests::kms_client(&admin_cfg);
+    let mut keys = Vec::new();
+    for alias in ["alias/app", "alias/other"] {
+        let key = admin_kms.create_key().send().await.expect("CreateKey");
+        let meta = key.key_metadata.expect("metadata");
+        admin_kms
+            .create_alias()
+            .alias_name(alias)
+            .target_key_id(&meta.key_id)
+            .send()
+            .await
+            .expect("CreateAlias");
+        keys.push(meta.arn.expect("key arn"));
+    }
+    let other_ciphertext = admin_kms
+        .encrypt()
+        .key_id("alias/other")
+        .plaintext(Blob::new(b"x".to_vec()))
+        .send()
+        .await
+        .expect("Encrypt other")
+        .ciphertext_blob
+        .expect("ciphertext");
+
+    let policy = format!(
+        r#"{{"Version":"2012-10-17","Statement":[{{"Effect":"Allow",
+            "Action":["kms:Encrypt","kms:Decrypt"],"Resource":"{}"}}]}}"#,
+        keys[0]
+    );
+    let (ak, sk) = bootstrap_user(
+        &iam_client(&admin_cfg),
+        "alice",
+        &[("AliceAppKey".into(), policy)],
+    )
+    .await;
+
+    srv.set_enforcement(true);
+
+    let kms = awsim_enforcement_tests::kms_client(&make_sdk_config(port, &ak, &sk));
+    let ciphertext = kms
+        .encrypt()
+        .key_id("alias/app")
+        .plaintext(Blob::new(b"secret".to_vec()))
+        .send()
+        .await
+        .expect("Encrypt via alias under a key-ARN policy")
+        .ciphertext_blob
+        .expect("ciphertext");
+    let plain = kms
+        .decrypt()
+        .ciphertext_blob(ciphertext)
+        .send()
+        .await
+        .expect("Decrypt without KeyId");
+    assert_eq!(plain.plaintext.unwrap().as_ref(), b"secret");
+
+    let err = kms
+        .decrypt()
+        .ciphertext_blob(other_ciphertext)
+        .send()
+        .await
+        .expect_err("Decrypt of another key's ciphertext");
+    assert!(sdk_err_is_access_denied(&err), "{err}");
+
+    srv.shutdown().await;
+}
+
 // -- Secrets Manager ----------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

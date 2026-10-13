@@ -229,7 +229,38 @@ impl ServiceHandler for KmsService {
         }
     }
 
-    fn iam_resource(&self, operation: &str, input: &Value, ctx: &RequestContext) -> Option<String> {
+    fn iam_checks(
+        &self,
+        operation: &str,
+        input: &Value,
+        ctx: &RequestContext,
+    ) -> Vec<(String, String)> {
+        let Some(action) = self.iam_action(operation) else {
+            return Vec::new();
+        };
+        let state = self.store.get(&ctx.account_id, &ctx.region);
+        // AWS authorizes a key named by id, alias or ARN as the key ARN
+        // the reference resolves to. References to unknown keys keep
+        // their literal ARN so the handler can report NotFound.
+        let key_arn = |key_ref: &str| -> String {
+            let resolved = operations::keys::resolve_key_id(&state, key_ref)
+                .ok()
+                .and_then(|id| state.keys.get(&id).map(|k| k.arn.clone()));
+            match resolved {
+                Some(arn) => arn,
+                None if key_ref.starts_with("arn:") => key_ref.to_string(),
+                None if key_ref.starts_with("alias/") => arn::build(ctx, "kms", key_ref),
+                None => arn::build(ctx, "kms", format!("key/{key_ref}")),
+            }
+        };
+        let field = |name: &str| input.get(name).and_then(Value::as_str);
+        // Decrypt and ReEncrypt may name their key only inside the ciphertext.
+        let ciphertext_key = || {
+            field("CiphertextBlob")
+                .and_then(|blob| operations::crypto::decode_ciphertext_blob(blob).ok())
+                .map(|(key_id, _)| key_arn(&key_id))
+        };
+
         match operation {
             "ListKeys"
             | "ListAliases"
@@ -237,25 +268,46 @@ impl ServiceHandler for KmsService {
             | "DescribeCustomKeyStores"
             | "CreateKey"
             | "CreateCustomKeyStore"
-            | "GenerateRandom" => Some("*".to_string()),
-            "RetireGrant" => input
-                .get("GrantToken")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-                .or_else(|| Some("*".to_string())),
-            _ => {
-                let key_id = input
-                    .get("KeyId")
-                    .or_else(|| input.get("ResourceArn"))
-                    .and_then(|v| v.as_str())?;
-                if key_id.starts_with("arn:") {
-                    Some(key_id.to_string())
-                } else if key_id.starts_with("alias/") {
-                    Some(arn::build(ctx, "kms", key_id))
-                } else {
-                    Some(arn::build(ctx, "kms", format!("key/{key_id}")))
-                }
+            | "GenerateRandom" => vec![(action, "*".to_string())],
+            // Alias changes need the action on the alias and on its key.
+            "CreateAlias" | "UpdateAlias" | "DeleteAlias" => {
+                let Some(alias) = field("AliasName") else {
+                    return Vec::new();
+                };
+                let target = field("TargetKeyId").unwrap_or(alias);
+                vec![
+                    (action.clone(), arn::build(ctx, "kms", alias)),
+                    (action, key_arn(target)),
+                ]
             }
+            "Decrypt" => field("KeyId")
+                .map(key_arn)
+                .or_else(ciphertext_key)
+                .map(|key| vec![(action, key)])
+                .unwrap_or_default(),
+            "ReEncrypt" => {
+                let mut checks = Vec::new();
+                if let Some(source) = field("SourceKeyId").map(key_arn).or_else(ciphertext_key) {
+                    checks.push(("kms:ReEncryptFrom".to_string(), source));
+                }
+                if let Some(destination) = field("DestinationKeyId") {
+                    checks.push(("kms:ReEncryptTo".to_string(), key_arn(destination)));
+                }
+                checks
+            }
+            "RetireGrant" => {
+                let by_token = || {
+                    let token = field("GrantToken")?;
+                    let grant = state.grants.iter().find(|g| g.grant_token == token)?;
+                    Some(key_arn(&grant.key_id))
+                };
+                let key = field("KeyId").map(key_arn).or_else(by_token);
+                vec![(action, key.unwrap_or_else(|| "*".to_string()))]
+            }
+            _ => field("KeyId")
+                .or_else(|| field("ResourceArn"))
+                .map(|key| vec![(action, key_arn(key))])
+                .unwrap_or_default(),
         }
     }
 
@@ -697,6 +749,38 @@ mod tests {
             .decode(decrypted["Plaintext"].as_str().unwrap())
             .unwrap();
         assert_eq!(decrypted_bytes, b"reencrypt me");
+    }
+
+    #[test]
+    fn test_iam_checks_re_encrypt_uses_from_and_to_actions() {
+        let svc = KmsService::new();
+        let ctx = ctx();
+        let mut arns = Vec::new();
+        for _ in 0..2 {
+            let created = block_on(svc.handle("CreateKey", json!({}), &ctx)).unwrap();
+            arns.push(created["KeyMetadata"]["Arn"].as_str().unwrap().to_string());
+        }
+        let encrypted = block_on(svc.handle(
+            "Encrypt",
+            json!({ "KeyId": arns[0], "Plaintext": BASE64.encode(b"x") }),
+            &ctx,
+        ))
+        .unwrap();
+        let checks = svc.iam_checks(
+            "ReEncrypt",
+            &json!({
+                "CiphertextBlob": encrypted["CiphertextBlob"],
+                "DestinationKeyId": arns[1],
+            }),
+            &ctx,
+        );
+        assert_eq!(
+            checks,
+            vec![
+                ("kms:ReEncryptFrom".to_string(), arns[0].clone()),
+                ("kms:ReEncryptTo".to_string(), arns[1].clone()),
+            ]
+        );
     }
 
     #[test]
