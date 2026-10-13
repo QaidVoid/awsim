@@ -725,8 +725,6 @@ impl ServiceHandler for LambdaService {
             | "ListFunctions"
             | "UpdateFunctionCode"
             | "UpdateFunctionConfiguration"
-            | "Invoke"
-            | "InvokeFunction"
             | "InvokeAsync"
             | "PublishVersion"
             | "ListVersionsByFunction"
@@ -769,6 +767,8 @@ impl ServiceHandler for LambdaService {
             | "GetProvisionedConcurrencyConfig"
             | "DeleteProvisionedConcurrencyConfig"
             | "ListProvisionedConcurrencyConfigs" => Some(format!("lambda:{operation}")),
+            // The Invoke API is authorized as lambda:InvokeFunction.
+            "Invoke" | "InvokeFunction" => Some("lambda:InvokeFunction".to_string()),
             _ => None,
         }
     }
@@ -783,7 +783,6 @@ impl ServiceHandler for LambdaService {
             | "ListEventSourceMappings"
             | "ListLayers"
             | "GetAccountSettings"
-            | "CreateFunction"
             | "CreateEventSourceMapping" => Some("*".to_string()),
             "TagResource" | "UntagResource" | "ListTags" => input
                 .get("Resource")
@@ -801,10 +800,11 @@ impl ServiceHandler for LambdaService {
                 .map(|name| format!("{prefix}:layer:{name}")),
             "GetLayerVersion" | "DeleteLayerVersion" => {
                 let name = input.get("LayerName").and_then(|v| v.as_str())?;
-                let version = input
-                    .get("VersionNumber")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0);
+                let version = match input.get("VersionNumber") {
+                    Some(Value::String(s)) => s.clone(),
+                    Some(v) => v.to_string(),
+                    None => "0".to_string(),
+                };
                 Some(format!("{prefix}:layer:{name}:{version}"))
             }
             _ => {

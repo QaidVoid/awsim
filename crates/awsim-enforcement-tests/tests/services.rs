@@ -254,6 +254,20 @@ async fn lambda_alice_invoke_unauthorized_function_denied() {
         "Invoke unauthorized function must be AccessDenied: {err}"
     );
 
+    // Invoke is authorized as lambda:InvokeFunction, so the allowed
+    // function gets past IAM and fails only because it does not exist.
+    let err = lambda
+        .invoke()
+        .function_name("hello")
+        .send()
+        .await
+        .expect_err("hello is not deployed");
+    assert!(
+        err.as_service_error()
+            .is_some_and(|e| e.is_resource_not_found_exception()),
+        "Invoke allowed function must pass IAM: {err}"
+    );
+
     srv.shutdown().await;
 }
 
