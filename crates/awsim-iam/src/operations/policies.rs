@@ -67,7 +67,7 @@ fn policy_exists_or_managed(state: &IamState, arn: &str) -> bool {
     state.policies.contains_key(arn) || ensure_aws_managed_policy(state, arn)
 }
 
-use super::{opt_str, require_str};
+use super::{opt_bool, opt_str, require_str};
 
 fn validate_policy_document(doc: &str) -> Result<(), AwsError> {
     awsim_iam_policy::parse(doc)
@@ -401,10 +401,7 @@ fn version_to_value(v: &PolicyVersion) -> Value {
 pub fn create_policy_version(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let arn = require_str(input, "PolicyArn")?;
     let policy_document = require_str(input, "PolicyDocument")?;
-    let set_as_default = input
-        .get("SetAsDefault")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let set_as_default = opt_bool(input, "SetAsDefault").unwrap_or(false);
 
     if policy_document.len() > MANAGED_POLICY_SIZE_LIMIT {
         return Err(AwsError::bad_request(

@@ -167,7 +167,7 @@ fn validate_max_session_duration(value: u32) -> Result<(), AwsError> {
     Ok(())
 }
 
-use super::{opt_str, require_str};
+use super::{opt_str, opt_u32, require_str};
 
 fn role_to_value(r: &Role) -> Value {
     let mut v = json!({
@@ -206,11 +206,7 @@ pub fn create_role(
     let role_id = new_role_id();
     let arn = arn::build_global(ctx, "iam", format!("role{path}{role_name}"));
 
-    let max_session_duration = input
-        .get("MaxSessionDuration")
-        .and_then(|v| v.as_u64())
-        .map(|v| v as u32)
-        .unwrap_or(3600);
+    let max_session_duration = opt_u32(input, "MaxSessionDuration").unwrap_or(3600);
     validate_max_session_duration(max_session_duration)?;
 
     let role = Role {
@@ -357,8 +353,7 @@ pub fn update_role(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     if let Some(desc) = opt_str(input, "Description") {
         role.description = Some(desc.to_string());
     }
-    if let Some(dur) = input.get("MaxSessionDuration").and_then(|v| v.as_u64()) {
-        let dur = dur as u32;
+    if let Some(dur) = opt_u32(input, "MaxSessionDuration") {
         validate_max_session_duration(dur)?;
         role.max_session_duration = dur;
     }

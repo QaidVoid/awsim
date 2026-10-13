@@ -680,6 +680,49 @@ async fn iam_target_alice_readonly_can_list_but_not_create() {
     srv.shutdown().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn iam_new_default_policy_version_takes_effect() {
+    let iam = Arc::new(awsim_iam::IamService::new());
+    let (srv, port) = start_server_unenforced(iam.clone()).await;
+    let admin_cfg = make_sdk_config(port, "admin", "admin");
+    let admin_iam = iam_client(&admin_cfg);
+    let (ak, sk) = bootstrap_user(
+        &admin_iam,
+        "alice",
+        &[("AliceS3".into(), ALLOW_GETOBJECT.into())],
+    )
+    .await;
+
+    srv.set_enforcement(true);
+
+    let s3 = s3_client(&make_sdk_config(port, &ak, &sk));
+    let err = s3
+        .list_buckets()
+        .send()
+        .await
+        .expect_err("v1 does not allow ListBuckets");
+    assert!(sdk_err_is_access_denied(&err), "{err}");
+
+    admin_iam
+        .create_policy_version()
+        .policy_arn("arn:aws:iam::000000000000:policy/AliceS3")
+        .policy_document(
+            r#"{"Version":"2012-10-17","Statement":[
+                {"Effect":"Allow","Action":"s3:ListAllMyBuckets","Resource":"*"}]}"#,
+        )
+        .set_as_default(true)
+        .send()
+        .await
+        .expect("CreatePolicyVersion");
+
+    s3.list_buckets()
+        .send()
+        .await
+        .expect("v2 is the default and allows ListBuckets");
+
+    srv.shutdown().await;
+}
+
 // -- S3 deeper coverage -------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

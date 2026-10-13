@@ -8,7 +8,7 @@ use crate::{
     state::{AccessKey, IamState, LoginProfile, User},
 };
 
-use super::{opt_str, require_str};
+use super::{opt_bool, opt_str, require_str};
 
 /// AWS hard limit: at most 2 access keys per IAM user.
 const MAX_ACCESS_KEYS_PER_USER: usize = 2;
@@ -390,10 +390,7 @@ pub fn list_groups_for_user(state: &IamState, input: &Value) -> Result<Value, Aw
 pub fn create_login_profile(state: &IamState, input: &Value) -> Result<Value, AwsError> {
     let user_name = require_str(input, "UserName")?;
     let password = require_str(input, "Password")?;
-    let password_reset_required = input
-        .get("PasswordResetRequired")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let password_reset_required = opt_bool(input, "PasswordResetRequired").unwrap_or(false);
 
     // Verify user exists.
     if !state.users.contains_key(user_name) {
@@ -460,7 +457,7 @@ pub fn update_login_profile(state: &IamState, input: &Value) -> Result<Value, Aw
         .get_mut(user_name)
         .ok_or_else(|| no_such_entity("LoginProfile", user_name))?;
 
-    if let Some(reset) = input.get("PasswordResetRequired").and_then(|v| v.as_bool()) {
+    if let Some(reset) = opt_bool(input, "PasswordResetRequired") {
         profile.password_reset_required = reset;
     }
     if let Some(new_password) = opt_str(input, "Password") {

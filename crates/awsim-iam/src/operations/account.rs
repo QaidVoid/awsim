@@ -6,7 +6,7 @@ use crate::{
     state::{AccountPasswordPolicy, IamState},
 };
 
-use super::require_str;
+use super::{opt_bool, opt_u32, require_str};
 
 fn extract_filter_list(input: &Value) -> Vec<String> {
     if let Some(f) = input.get("Filter") {
@@ -31,14 +31,6 @@ fn extract_filter_list(input: &Value) -> Vec<String> {
         return vec![s];
     }
     Vec::new()
-}
-
-fn opt_bool(input: &Value, key: &str) -> Option<bool> {
-    input.get(key).and_then(|v| v.as_bool())
-}
-
-fn opt_u32(input: &Value, key: &str) -> Option<u32> {
-    input.get(key).and_then(|v| v.as_u64()).map(|n| n as u32)
 }
 
 fn password_policy_to_value(p: &AccountPasswordPolicy) -> Value {
