@@ -45,17 +45,23 @@ fn ensure_aws_managed_policy(state: &IamState, arn: &str) -> bool {
         return true;
     }
     let now = now_iso8601();
+    let document = "{\"Version\":\"2012-10-17\",\"Statement\":[]}".to_string();
     let policy = Policy {
         policy_name: name.to_string(),
         policy_id: new_policy_id(),
         arn: arn.to_string(),
         path: "/".to_string(),
         description: Some(format!("AWS managed policy {name}")),
-        policy_document: "{\"Version\":\"2012-10-17\",\"Statement\":[]}".to_string(),
+        policy_document: document.clone(),
         create_date: now.clone(),
-        update_date: now,
+        update_date: now.clone(),
         attachment_count: 0,
-        versions: Vec::new(),
+        versions: vec![PolicyVersion {
+            version_id: "v1".to_string(),
+            document,
+            is_default_version: true,
+            create_date: now,
+        }],
         default_version_id: "v1".to_string(),
         tags: HashMap::new(),
     };
@@ -82,6 +88,8 @@ fn policy_to_value(p: &Policy) -> Value {
         "Arn": p.arn,
         "Path": p.path,
         "PolicyDocument": p.policy_document,
+        "DefaultVersionId": p.default_version_id,
+        "IsAttachable": true,
         "AttachmentCount": p.attachment_count,
         "CreateDate": p.create_date,
         "UpdateDate": p.update_date,

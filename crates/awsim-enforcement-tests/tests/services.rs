@@ -715,6 +715,29 @@ async fn iam_new_default_policy_version_takes_effect() {
         .await
         .expect("CreatePolicyVersion");
 
+    // Clients read the default document as GetPolicy's DefaultVersionId
+    // followed by GetPolicyVersion.
+    let policy = admin_iam
+        .get_policy()
+        .policy_arn("arn:aws:iam::000000000000:policy/AliceS3")
+        .send()
+        .await
+        .expect("GetPolicy")
+        .policy
+        .expect("policy");
+    assert_eq!(policy.default_version_id.as_deref(), Some("v2"));
+    let version = admin_iam
+        .get_policy_version()
+        .policy_arn("arn:aws:iam::000000000000:policy/AliceS3")
+        .version_id(policy.default_version_id.unwrap())
+        .send()
+        .await
+        .expect("GetPolicyVersion")
+        .policy_version
+        .expect("version");
+    assert!(version.is_default_version);
+    assert!(version.document.unwrap().contains("s3:ListAllMyBuckets"));
+
     s3.list_buckets()
         .send()
         .await
