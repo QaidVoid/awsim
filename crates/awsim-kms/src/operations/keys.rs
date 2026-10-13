@@ -6,6 +6,7 @@ use awsim_core::{AwsError, RequestContext, arn};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use crate::asymmetric;
 use crate::error;
 use crate::state::{KmsKey, KmsState};
 use crate::util::{now_epoch_f64, random_secret};
@@ -65,8 +66,10 @@ pub fn create_key(
         "EXTERNAL" => "PendingImport",
         _ => "Enabled",
     };
-    let initial_enabled = initial_state == "Enabled";
 
+    // AWS lets a key be tagged at creation. Dropping them meant a
+    // caller had to follow every CreateKey with a TagResource.
+    let tags = create_tags(input)?;
     let key_id = Uuid::new_v4().to_string();
     let arn = arn::build(ctx, "kms", format!("key/{key_id}"));
     let secret = random_secret(32);
@@ -74,40 +77,26 @@ pub fn create_key(
 
     let key = KmsKey {
         key_id: key_id.clone(),
-        arn: arn.clone(),
-        description: description.clone(),
+        arn,
+        description,
         key_state: initial_state.to_string(),
-        key_spec: key_spec.clone(),
-        key_usage: key_usage.clone(),
+        private_key: asymmetric::generate(&key_spec)?.unwrap_or_default(),
+        key_spec,
+        key_usage,
         creation_date,
         secret,
         deletion_date: None,
         rotation_enabled: false,
         policies: HashMap::new(),
-        // AWS lets a key be tagged at creation. Dropping them meant a
-        // caller had to follow every CreateKey with a TagResource.
-        tags: create_tags(input)?,
+        tags,
         key_material_imported: false,
-        origin: origin.clone(),
+        origin,
     };
 
-    state.keys.insert(key_id.clone(), key);
+    let metadata = key_metadata(&key);
+    state.keys.insert(key_id, key);
 
-    Ok(json!({
-        "KeyMetadata": {
-            "KeyId": key_id,
-            "Arn": arn,
-            "Description": description,
-            "KeyState": initial_state,
-            "KeySpec": key_spec,
-            "KeyUsage": key_usage,
-            "CreationDate": creation_date,
-            "Enabled": initial_enabled,
-            "KeyManager": "CUSTOMER",
-            "Origin": origin,
-            "MultiRegion": false,
-        }
-    }))
+    Ok(json!({ "KeyMetadata": metadata }))
 }
 
 // ---------------------------------------------------------------------------
@@ -404,7 +393,9 @@ pub fn key_metadata(key: &KmsKey) -> Value {
         "KeyManager": "CUSTOMER",
         "Origin": key.origin,
         "MultiRegion": false,
+        "CustomerMasterKeySpec": key.key_spec,
     });
+    asymmetric::insert_algorithms(&mut meta, &key.key_spec, &key.key_usage);
 
     if let Some(ref dd) = key.deletion_date {
         meta["DeletionDate"] = json!(dd);

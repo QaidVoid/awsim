@@ -391,6 +391,7 @@ mod grant_token_tests {
                 tags: Default::default(),
                 key_material_imported: false,
                 origin: "AWS_KMS".to_string(),
+                private_key: Vec::new(),
             },
         );
         let resp = create_grant(

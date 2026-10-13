@@ -653,6 +653,77 @@ async fn test_kms_encrypt_decrypt() {
 }
 
 #[tokio::test]
+async fn test_kms_ecc_sign_verify_uses_der_formats() {
+    use aws_sdk_kms::types::{KeySpec, KeyUsageType, MessageType, SigningAlgorithmSpec};
+
+    let endpoint = start_server().await;
+    let config = make_config(&endpoint).await;
+    let client = aws_sdk_kms::Client::new(&config);
+
+    let key = client
+        .create_key()
+        .key_spec(KeySpec::EccNistP256)
+        .key_usage(KeyUsageType::SignVerify)
+        .send()
+        .await
+        .expect("CreateKey failed");
+    let key_id = key.key_metadata().unwrap().key_id().to_string();
+
+    let public = client
+        .get_public_key()
+        .key_id(&key_id)
+        .send()
+        .await
+        .expect("GetPublicKey failed");
+    assert_eq!(public.key_spec(), Some(&KeySpec::EccNistP256));
+    assert_eq!(
+        public.signing_algorithms(),
+        &[SigningAlgorithmSpec::EcdsaSha256]
+    );
+    let spki = public.public_key().unwrap().as_ref();
+    assert_eq!(spki.len(), 91);
+    assert_eq!(&spki[..2], &[0x30, 0x59]);
+
+    let signed = client
+        .sign()
+        .key_id(&key_id)
+        .message(Blob::new(b"payload".to_vec()))
+        .message_type(MessageType::Raw)
+        .signing_algorithm(SigningAlgorithmSpec::EcdsaSha256)
+        .send()
+        .await
+        .expect("Sign failed");
+    let signature = signed.signature().unwrap().clone();
+    assert_eq!(signature.as_ref()[0], 0x30);
+    assert!(signature.as_ref().len() <= 72);
+
+    let verified = client
+        .verify()
+        .key_id(&key_id)
+        .message(Blob::new(b"payload".to_vec()))
+        .signature(signature.clone())
+        .signing_algorithm(SigningAlgorithmSpec::EcdsaSha256)
+        .send()
+        .await
+        .expect("Verify failed");
+    assert!(verified.signature_valid());
+
+    let err = client
+        .verify()
+        .key_id(&key_id)
+        .message(Blob::new(b"other".to_vec()))
+        .signature(signature)
+        .signing_algorithm(SigningAlgorithmSpec::EcdsaSha256)
+        .send()
+        .await
+        .unwrap_err();
+    assert!(
+        err.into_service_error()
+            .is_kms_invalid_signature_exception()
+    );
+}
+
+#[tokio::test]
 async fn test_kms_generate_data_key() {
     let endpoint = start_server().await;
     let config = make_config(&endpoint).await;

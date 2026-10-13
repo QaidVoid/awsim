@@ -138,6 +138,7 @@ mod tests {
             tags: Default::default(),
             key_material_imported: false,
             origin: "AWS_KMS".into(),
+            private_key: Vec::new(),
         }
     }
 

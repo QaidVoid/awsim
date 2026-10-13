@@ -159,7 +159,11 @@ bcrypt = "0.16"
 crc = "3"
 hmac = "0.12"
 jsonwebtoken = "9"
+k256 = { version = "0.13", default-features = false, features = ["ecdsa", "pkcs8", "std"] }
 md-5 = "0.10"
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "pkcs8", "std"] }
+p384 = { version = "0.13", default-features = false, features = ["ecdsa", "pkcs8", "std"] }
+p521 = { version = "0.13", default-features = false, features = ["ecdsa", "pkcs8", "std"] }
 rand = "0.8"
 rsa = { version = "0.9", features = ["sha2"] }
 sha1 = "0.10"

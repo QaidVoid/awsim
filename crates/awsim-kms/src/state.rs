@@ -54,6 +54,11 @@ pub struct KmsKey {
     pub key_material_imported: bool,
     /// "AWS_KMS" or "EXTERNAL"
     pub origin: String,
+    /// PKCS#8 DER private key for RSA and ECC keys. Empty for other
+    /// specs, and for asymmetric keys persisted before awsim kept real
+    /// material (filled in on first use).
+    #[serde(default)]
+    pub private_key: Vec<u8>,
 }
 
 /// A custom key store stub.

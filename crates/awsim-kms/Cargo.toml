@@ -19,6 +19,11 @@ base64 = { workspace = true }
 sha2 = { workspace = true }
 aes-gcm = { workspace = true }
 rand = { workspace = true }
+rsa = { workspace = true }
+p256 = { workspace = true }
+p384 = { workspace = true }
+p521 = { workspace = true }
+k256 = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

@@ -1,3 +1,4 @@
+mod asymmetric;
 pub mod authz;
 pub mod error;
 mod operations;
@@ -831,6 +832,223 @@ mod tests {
         let err =
             block_on(svc.handle("GetPublicKey", json!({ "KeyId": key_id }), &ctx)).unwrap_err();
         assert_eq!(err.code, "UnsupportedOperationException");
+    }
+
+    fn create_signing_key(svc: &KmsService, ctx: &RequestContext, key_spec: &str) -> String {
+        let created = block_on(svc.handle(
+            "CreateKey",
+            json!({ "KeySpec": key_spec, "KeyUsage": "SIGN_VERIFY" }),
+            ctx,
+        ))
+        .unwrap();
+        created["KeyMetadata"]["KeyId"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    fn public_key_der(svc: &KmsService, ctx: &RequestContext, key_id: &str) -> Vec<u8> {
+        let result = block_on(svc.handle("GetPublicKey", json!({ "KeyId": key_id }), ctx)).unwrap();
+        BASE64
+            .decode(result["PublicKey"].as_str().unwrap())
+            .unwrap()
+    }
+
+    fn kms_sign(
+        svc: &KmsService,
+        ctx: &RequestContext,
+        key_id: &str,
+        algorithm: &str,
+        message: &[u8],
+        message_type: &str,
+    ) -> Vec<u8> {
+        let signed = block_on(svc.handle(
+            "Sign",
+            json!({
+                "KeyId": key_id,
+                "Message": BASE64.encode(message),
+                "MessageType": message_type,
+                "SigningAlgorithm": algorithm,
+            }),
+            ctx,
+        ))
+        .unwrap();
+        BASE64
+            .decode(signed["Signature"].as_str().unwrap())
+            .unwrap()
+    }
+
+    #[test]
+    fn test_get_public_key_ecc_returns_spki() {
+        let svc = KmsService::new();
+        let ctx = ctx();
+        for (spec, algorithm, der_len) in [
+            ("ECC_NIST_P256", "ECDSA_SHA_256", 91),
+            ("ECC_NIST_P384", "ECDSA_SHA_384", 120),
+            ("ECC_NIST_P521", "ECDSA_SHA_512", 158),
+            ("ECC_SECG_P256K1", "ECDSA_SHA_256", 88),
+        ] {
+            let key_id = create_signing_key(&svc, &ctx, spec);
+            let result =
+                block_on(svc.handle("GetPublicKey", json!({ "KeyId": key_id }), &ctx)).unwrap();
+            assert_eq!(result["KeySpec"], spec);
+            assert_eq!(result["CustomerMasterKeySpec"], spec);
+            assert_eq!(result["SigningAlgorithms"], json!([algorithm]));
+            assert!(result.get("EncryptionAlgorithms").is_none());
+            let der = BASE64
+                .decode(result["PublicKey"].as_str().unwrap())
+                .unwrap();
+            assert_eq!(der.len(), der_len, "{spec} SPKI length");
+
+            let described =
+                block_on(svc.handle("DescribeKey", json!({ "KeyId": key_id }), &ctx)).unwrap();
+            assert_eq!(
+                described["KeyMetadata"]["SigningAlgorithms"],
+                json!([algorithm])
+            );
+        }
+    }
+
+    #[test]
+    fn test_sign_ecc_returns_der_signature_that_verifies() {
+        use p256::ecdsa::signature::Verifier;
+        use p256::pkcs8::DecodePublicKey;
+
+        let svc = KmsService::new();
+        let ctx = ctx();
+        let key_id = create_signing_key(&svc, &ctx, "ECC_NIST_P256");
+        let public_key =
+            p256::PublicKey::from_public_key_der(&public_key_der(&svc, &ctx, &key_id)).unwrap();
+        let verifier = p256::ecdsa::VerifyingKey::from(public_key);
+
+        let signature = kms_sign(&svc, &ctx, &key_id, "ECDSA_SHA_256", b"hello", "RAW");
+        assert_eq!(signature[0], 0x30, "DER SEQUENCE");
+        assert!((8..=72).contains(&signature.len()));
+        let parsed = p256::ecdsa::Signature::from_der(&signature).unwrap();
+        verifier.verify(b"hello", &parsed).unwrap();
+
+        let verified = block_on(svc.handle(
+            "Verify",
+            json!({
+                "KeyId": key_id,
+                "Message": BASE64.encode(b"hello"),
+                "Signature": BASE64.encode(&signature),
+                "SigningAlgorithm": "ECDSA_SHA_256",
+            }),
+            &ctx,
+        ))
+        .unwrap();
+        assert_eq!(verified["SignatureValid"], true);
+
+        let err = block_on(svc.handle(
+            "Verify",
+            json!({
+                "KeyId": key_id,
+                "Message": BASE64.encode(b"tampered"),
+                "Signature": BASE64.encode(&signature),
+                "SigningAlgorithm": "ECDSA_SHA_256",
+            }),
+            &ctx,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "KMSInvalidSignatureException");
+    }
+
+    #[test]
+    fn test_sign_digest_message_type_on_every_curve() {
+        use sha2::Digest;
+
+        let svc = KmsService::new();
+        let ctx = ctx();
+        for (spec, algorithm, digest) in [
+            (
+                "ECC_NIST_P256",
+                "ECDSA_SHA_256",
+                sha2::Sha256::digest(b"m").to_vec(),
+            ),
+            (
+                "ECC_NIST_P384",
+                "ECDSA_SHA_384",
+                sha2::Sha384::digest(b"m").to_vec(),
+            ),
+            (
+                "ECC_NIST_P521",
+                "ECDSA_SHA_512",
+                sha2::Sha512::digest(b"m").to_vec(),
+            ),
+            (
+                "ECC_SECG_P256K1",
+                "ECDSA_SHA_256",
+                sha2::Sha256::digest(b"m").to_vec(),
+            ),
+        ] {
+            let key_id = create_signing_key(&svc, &ctx, spec);
+            let signature = kms_sign(&svc, &ctx, &key_id, algorithm, &digest, "DIGEST");
+            assert_eq!(signature[0], 0x30, "{spec} DER SEQUENCE");
+
+            // A DIGEST signature verifies against the RAW message it hashes.
+            let verified = block_on(svc.handle(
+                "Verify",
+                json!({
+                    "KeyId": key_id,
+                    "Message": BASE64.encode(b"m"),
+                    "MessageType": "RAW",
+                    "Signature": BASE64.encode(&signature),
+                    "SigningAlgorithm": algorithm,
+                }),
+                &ctx,
+            ))
+            .unwrap();
+            assert_eq!(verified["SignatureValid"], true, "{spec}");
+
+            let err = block_on(svc.handle(
+                "Sign",
+                json!({
+                    "KeyId": key_id,
+                    "Message": BASE64.encode(&digest[1..]),
+                    "MessageType": "DIGEST",
+                    "SigningAlgorithm": algorithm,
+                }),
+                &ctx,
+            ))
+            .unwrap_err();
+            assert_eq!(err.code, "ValidationException", "{spec}");
+        }
+    }
+
+    #[test]
+    fn test_sign_rsa_verifies_with_public_key() {
+        use rsa::pkcs8::DecodePublicKey;
+        use sha2::Digest;
+
+        let svc = KmsService::new();
+        let ctx = ctx();
+        let key_id = create_signing_key(&svc, &ctx, "RSA_2048");
+        let public_key =
+            rsa::RsaPublicKey::from_public_key_der(&public_key_der(&svc, &ctx, &key_id)).unwrap();
+        let digest = sha2::Sha256::digest(b"hello");
+
+        let signature = kms_sign(
+            &svc,
+            &ctx,
+            &key_id,
+            "RSASSA_PKCS1_V1_5_SHA_256",
+            b"hello",
+            "RAW",
+        );
+        assert_eq!(signature.len(), 256);
+        public_key
+            .verify(
+                rsa::Pkcs1v15Sign::new::<sha2::Sha256>(),
+                &digest,
+                &signature,
+            )
+            .unwrap();
+
+        let signature = kms_sign(&svc, &ctx, &key_id, "RSASSA_PSS_SHA_256", b"hello", "RAW");
+        public_key
+            .verify(rsa::Pss::new::<sha2::Sha256>(), &digest, &signature)
+            .unwrap();
     }
 
     #[test]

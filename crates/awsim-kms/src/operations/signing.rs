@@ -2,12 +2,13 @@ use awsim_core::{AwsError, RequestContext};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde_json::{Value, json};
 
+use crate::asymmetric;
 use crate::error;
 use crate::operations::keys::resolve_key;
-use crate::state::KmsState;
+use crate::state::{KmsKey, KmsState};
 use crate::util::random_secret;
 
-// Valid signing algorithms accepted by the stub.
+// Signing algorithms KMS defines.
 const SIGNING_ALGORITHMS: &[&str] = &[
     "RSASSA_PSS_SHA_256",
     "RSASSA_PSS_SHA_384",
@@ -21,53 +22,27 @@ const SIGNING_ALGORITHMS: &[&str] = &[
     "SM2DSA",
 ];
 
-/// AWS rejects sign/verify when SigningAlgorithm doesn't match the
-/// KeySpec family: an RSA key must use RSASSA_*, an ECC NIST key must
-/// use ECDSA_SHA_*, and SM2DSA pairs only with the SM2 KeySpec.
+/// Look up a key for Sign/Verify and check it can use `algorithm`.
 ///
-/// The exact ECDSA hash size is also bound to the curve (ECC_NIST_P256
-/// rejects ECDSA_SHA_384). Surface that as InvalidKeyUsageException so
-/// signers fix the algorithm choice instead of getting a silent stub.
-fn signing_algorithm_matches_key_spec(algo: &str, key_spec: &str) -> bool {
-    match (algo, key_spec) {
-        // RSA: every RSASSA_* works for any RSA_* spec.
-        (a, s) if a.starts_with("RSASSA_") && s.starts_with("RSA_") => true,
-        // ECC NIST: hash size must match curve size.
-        ("ECDSA_SHA_256", "ECC_NIST_P256" | "ECC_SECG_P256K1") => true,
-        ("ECDSA_SHA_384", "ECC_NIST_P384") => true,
-        ("ECDSA_SHA_512", "ECC_NIST_P521") => true,
-        // SM2 has its own DSA variant.
-        ("SM2DSA", "SM2") => true,
-        _ => false,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Sign
-// ---------------------------------------------------------------------------
-
-pub fn sign(state: &KmsState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
-    super::grants::validate_grant_tokens(state, input)?;
+/// AWS rejects sign/verify when SigningAlgorithm isn't one the key spec
+/// supports: an RSA key must use RSASSA_*, an ECC key the ECDSA_SHA_*
+/// whose hash matches its curve, and SM2DSA pairs only with SM2.
+fn signing_key(
+    state: &KmsState,
+    input: &Value,
+    algorithm: &str,
+    verb: &str,
+) -> Result<KmsKey, AwsError> {
     let key_id_input = input["KeyId"]
         .as_str()
         .ok_or_else(|| error::missing_parameter("KeyId"))?;
-
-    let _message_b64 = input["Message"]
-        .as_str()
-        .ok_or_else(|| error::missing_parameter("Message"))?;
-
-    let signing_algorithm = input["SigningAlgorithm"]
-        .as_str()
-        .ok_or_else(|| error::missing_parameter("SigningAlgorithm"))?;
-
-    if !SIGNING_ALGORITHMS.contains(&signing_algorithm) {
+    if !SIGNING_ALGORITHMS.contains(&algorithm) {
         return Err(error::invalid_parameter(format!(
-            "Unsupported SigningAlgorithm: {signing_algorithm}"
+            "Unsupported SigningAlgorithm: {algorithm}"
         )));
     }
 
     let key = resolve_key(state, key_id_input)?;
-
     if key.key_state == "Disabled" {
         return Err(error::key_disabled(&key.key_id));
     }
@@ -76,25 +51,84 @@ pub fn sign(state: &KmsState, input: &Value, _ctx: &RequestContext) -> Result<Va
     }
     if key.key_usage != "SIGN_VERIFY" {
         return Err(error::invalid_key_usage(format!(
-            "Key {} cannot be used for signing because its KeyUsage is {}, not SIGN_VERIFY",
+            "Key {} cannot be used for {verb} because its KeyUsage is {}, not SIGN_VERIFY",
             key.key_id, key.key_usage
         )));
     }
-    if !signing_algorithm_matches_key_spec(signing_algorithm, &key.key_spec) {
+    if !asymmetric::signing_algorithms(&key.key_spec).contains(&algorithm) {
         return Err(error::invalid_key_usage(format!(
-            "Key {} (spec {}) does not support SigningAlgorithm {signing_algorithm}.",
+            "Key {} (spec {}) does not support SigningAlgorithm {algorithm}.",
             key.key_id, key.key_spec
         )));
     }
+    Ok(key)
+}
 
-    // Return a random 64-byte fake signature
-    let signature_bytes = random_secret(64);
-    let signature_b64 = BASE64.encode(&signature_bytes);
+/// The key's PKCS#8 private key. Asymmetric keys persisted before awsim
+/// kept real material get it generated and stored on first use.
+fn private_key(state: &KmsState, key: &KmsKey) -> Result<Vec<u8>, AwsError> {
+    if !key.private_key.is_empty() {
+        return Ok(key.private_key.clone());
+    }
+    let Some(der) = asymmetric::generate(&key.key_spec)? else {
+        return Err(AwsError::bad_request(
+            "UnsupportedOperationException",
+            format!(
+                "awsim does not implement key material for KeySpec {}",
+                key.key_spec
+            ),
+        ));
+    };
+    if let Some(mut stored) = state.keys.get_mut(&key.key_id) {
+        if stored.private_key.is_empty() {
+            stored.private_key = der;
+        }
+        return Ok(stored.private_key.clone());
+    }
+    Ok(der)
+}
+
+/// Decode the base64 `Message` and reduce it to the digest the
+/// algorithm signs, honouring `MessageType` (RAW by default).
+fn message_digest(input: &Value, algorithm: &str) -> Result<Vec<u8>, AwsError> {
+    let message_b64 = input["Message"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("Message"))?;
+    let message = BASE64
+        .decode(message_b64)
+        .map_err(|_| error::invalid_parameter("Message is not valid base64"))?;
+    let message_type = input["MessageType"].as_str().unwrap_or("RAW");
+    asymmetric::digest(algorithm, &message, message_type)
+}
+
+// ---------------------------------------------------------------------------
+// Sign
+// ---------------------------------------------------------------------------
+
+pub fn sign(state: &KmsState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
+    super::grants::validate_grant_tokens(state, input)?;
+    if input["KeyId"].is_null() {
+        return Err(error::missing_parameter("KeyId"));
+    }
+    if input["Message"].is_null() {
+        return Err(error::missing_parameter("Message"));
+    }
+    let algorithm = input["SigningAlgorithm"]
+        .as_str()
+        .ok_or_else(|| error::missing_parameter("SigningAlgorithm"))?;
+    let key = signing_key(state, input, algorithm, "signing")?;
+    let digest = message_digest(input, algorithm)?;
+    let signature = asymmetric::sign(
+        &key.key_spec,
+        &private_key(state, &key)?,
+        algorithm,
+        &digest,
+    )?;
 
     Ok(json!({
         "KeyId": key.arn,
-        "Signature": signature_b64,
-        "SigningAlgorithm": signing_algorithm,
+        "Signature": BASE64.encode(signature),
+        "SigningAlgorithm": algorithm,
     }))
 }
 
@@ -104,48 +138,43 @@ pub fn sign(state: &KmsState, input: &Value, _ctx: &RequestContext) -> Result<Va
 
 pub fn verify(state: &KmsState, input: &Value, _ctx: &RequestContext) -> Result<Value, AwsError> {
     super::grants::validate_grant_tokens(state, input)?;
-    let key_id_input = input["KeyId"]
-        .as_str()
-        .ok_or_else(|| error::missing_parameter("KeyId"))?;
-
-    let _message_b64 = input["Message"]
-        .as_str()
-        .ok_or_else(|| error::missing_parameter("Message"))?;
-
-    let _signature_b64 = input["Signature"]
+    if input["KeyId"].is_null() {
+        return Err(error::missing_parameter("KeyId"));
+    }
+    if input["Message"].is_null() {
+        return Err(error::missing_parameter("Message"));
+    }
+    let signature_b64 = input["Signature"]
         .as_str()
         .ok_or_else(|| error::missing_parameter("Signature"))?;
-
-    let signing_algorithm = input["SigningAlgorithm"]
+    let algorithm = input["SigningAlgorithm"]
         .as_str()
         .ok_or_else(|| error::missing_parameter("SigningAlgorithm"))?;
+    let key = signing_key(state, input, algorithm, "verifying")?;
+    let digest = message_digest(input, algorithm)?;
+    let signature = BASE64
+        .decode(signature_b64)
+        .map_err(|_| error::invalid_parameter("Signature is not valid base64"))?;
 
-    let key = resolve_key(state, key_id_input)?;
-
-    if key.key_state == "Disabled" {
-        return Err(error::key_disabled(&key.key_id));
-    }
-    if key.key_state == "PendingDeletion" {
-        return Err(error::key_pending_deletion(&key.key_id));
-    }
-    if key.key_usage != "SIGN_VERIFY" {
-        return Err(error::invalid_key_usage(format!(
-            "Key {} cannot be used for verifying because its KeyUsage is {}, not SIGN_VERIFY",
-            key.key_id, key.key_usage
-        )));
-    }
-    if !signing_algorithm_matches_key_spec(signing_algorithm, &key.key_spec) {
-        return Err(error::invalid_key_usage(format!(
-            "Key {} (spec {}) does not support SigningAlgorithm {signing_algorithm}.",
-            key.key_id, key.key_spec
-        )));
+    let valid = asymmetric::verify(
+        &key.key_spec,
+        &private_key(state, &key)?,
+        algorithm,
+        &digest,
+        &signature,
+    )?;
+    // AWS reports a bad signature as an error, never SignatureValid=false.
+    if !valid {
+        return Err(AwsError::bad_request(
+            "KMSInvalidSignatureException",
+            "The signature is not valid for the message and key.",
+        ));
     }
 
-    // Stub: always report valid
     Ok(json!({
         "KeyId": key.arn,
         "SignatureValid": true,
-        "SigningAlgorithm": signing_algorithm,
+        "SigningAlgorithm": algorithm,
     }))
 }
 
@@ -170,37 +199,23 @@ pub fn get_public_key(
     if key.key_state == "PendingDeletion" {
         return Err(error::key_pending_deletion(&key.key_id));
     }
-    if key.key_spec == "SYMMETRIC_DEFAULT" {
+    if key.key_spec == "SYMMETRIC_DEFAULT" || key.key_spec.starts_with("HMAC_") {
         return Err(AwsError::bad_request(
             "UnsupportedOperationException",
             "GetPublicKey is not supported for symmetric keys",
         ));
     }
 
-    // Return a mock 294-byte DER-encoded RSA-2048 public key stub.
-    // Real callers will not cryptographically verify with this, which is fine for simulation.
-    let mut mock_der = vec![0x30u8, 0x82, 0x01, 0x22]; // SEQUENCE header
-    mock_der.extend_from_slice(&key.secret); // 32 bytes from key material
-    // Pad to ~270 bytes total with deterministic zeros
-    mock_der.resize(270, 0x00);
-    let public_key_b64 = BASE64.encode(&mock_der);
-
-    Ok(json!({
+    let public_key = asymmetric::public_key(&key.key_spec, &private_key(state, &key)?)?;
+    let mut out = json!({
         "KeyId": key.arn,
-        "PublicKey": public_key_b64,
+        "PublicKey": BASE64.encode(public_key),
+        "CustomerMasterKeySpec": key.key_spec,
         "KeySpec": key.key_spec,
         "KeyUsage": key.key_usage,
-        "EncryptionAlgorithms": if key.key_usage == "ENCRYPT_DECRYPT" {
-            json!(["RSAES_OAEP_SHA_1", "RSAES_OAEP_SHA_256"])
-        } else {
-            json!([])
-        },
-        "SigningAlgorithms": if key.key_usage == "SIGN_VERIFY" {
-            json!(["RSASSA_PKCS1_V1_5_SHA_256", "RSASSA_PSS_SHA_256"])
-        } else {
-            json!([])
-        },
-    }))
+    });
+    asymmetric::insert_algorithms(&mut out, &key.key_spec, &key.key_usage);
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
