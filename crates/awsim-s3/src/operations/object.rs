@@ -776,6 +776,38 @@ fn inject_stored_sse_fields(result: &mut Value, obj: &S3Object) {
 }
 
 /// GET /{Bucket}/{Key+}. Retrieve object data, optionally a specific version.
+/// The response header overrides GetObject takes, as a presigned GET
+/// names them in its query string: the input member, its query
+/// parameter, and the response field each replaces.
+const RESPONSE_OVERRIDES: [(&str, &str, &str); 6] = [
+    (
+        "ResponseCacheControl",
+        "response-cache-control",
+        "CacheControl",
+    ),
+    (
+        "ResponseContentDisposition",
+        "response-content-disposition",
+        "ContentDisposition",
+    ),
+    (
+        "ResponseContentEncoding",
+        "response-content-encoding",
+        "ContentEncoding",
+    ),
+    (
+        "ResponseContentLanguage",
+        "response-content-language",
+        "ContentLanguage",
+    ),
+    (
+        "ResponseContentType",
+        "response-content-type",
+        "ContentType",
+    ),
+    ("ResponseExpires", "response-expires", "Expires"),
+];
+
 pub fn get_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Result<Value, AwsError> {
     super::check_expected_bucket_owner(input, ctx)?;
     let bucket_name = require_str(input, "Bucket")?;
@@ -838,6 +870,18 @@ pub fn get_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
     }
     if let Some(ex) = &obj.expires {
         result["Expires"] = Value::String(ex.clone());
+    }
+    // A request may override those headers on its own response, as S3
+    // lets a presigned GET name `response-content-disposition` so a
+    // browser saves the object rather than showing it.
+    for (member, query, field) in RESPONSE_OVERRIDES {
+        if let Some(value) = input
+            .get(member)
+            .or_else(|| input.get(query))
+            .and_then(Value::as_str)
+        {
+            result[field] = Value::String(value.to_string());
+        }
     }
     inject_stored_sse_fields(&mut result, obj);
 

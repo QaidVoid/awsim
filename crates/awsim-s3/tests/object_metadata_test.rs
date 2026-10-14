@@ -160,3 +160,30 @@ async fn content_type_defaults_when_absent() {
         .expect("HeadObject");
     assert_eq!(head["ContentType"], "application/octet-stream");
 }
+
+#[tokio::test]
+async fn get_object_applies_the_response_overrides_a_request_names() {
+    let svc = S3Service::new();
+    put_with_metadata(&svc, "metaover", "o.txt").await;
+
+    let out = svc
+        .handle(
+            "GetObject",
+            json!({
+                "Bucket": "metaover",
+                "Key": "o.txt",
+                // As a presigned URL's query string reaches the handler.
+                "response-content-disposition": "attachment; filename=\"saved.txt\"",
+                "ResponseContentType": "application/octet-stream",
+            }),
+            &ctx(),
+        )
+        .await
+        .expect("GetObject");
+    assert_eq!(
+        out["ContentDisposition"],
+        "attachment; filename=\"saved.txt\""
+    );
+    assert_eq!(out["ContentType"], "application/octet-stream");
+    assert_eq!(out["CacheControl"], "max-age=99");
+}
