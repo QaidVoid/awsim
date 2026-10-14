@@ -208,11 +208,13 @@ pub struct PresignedCredential {
 /// [`VerifyOutcome::Ok`] when the recomputed signature matches the
 /// `X-Amz-Signature` query value AND the request landed inside the
 /// `X-Amz-Expires` window.
+#[allow(clippy::too_many_arguments)]
 pub fn verify_presigned(
     method: &str,
     canonical_uri: &str,
     raw_query: &str,
     host: &str,
+    header: impl Fn(&str) -> Option<String>,
     secret: &str,
     now: SystemTime,
     skew: Duration,
@@ -284,12 +286,20 @@ pub fn verify_presigned(
         .collect::<Vec<_>>()
         .join("&");
 
-    // Canonical headers for presigned URLs are typically just `host`.
+    // Canonical headers for presigned URLs are typically just `host`,
+    // but a signer may sign others too, such as `if-match`, whose
+    // values come from the request.
     let signed_list: Vec<&str> = signed_headers.split(';').collect();
     let mut canonical_headers = String::new();
     for name in &signed_list {
         let lower = name.to_ascii_lowercase();
-        let value = if lower == "host" { host.trim() } else { "" };
+        let value = if lower == "host" {
+            host.trim().to_string()
+        } else {
+            header(&lower)
+                .map(|v| v.trim().to_string())
+                .unwrap_or_default()
+        };
         canonical_headers.push_str(&format!("{lower}:{value}\n"));
     }
     let signed_headers_list = signed_list.join(";");
@@ -363,6 +373,20 @@ pub fn presigned_access_key(raw_query: &str) -> Option<String> {
         .find_map(|kv| kv.strip_prefix("X-Amz-Credential="))?;
     let decoded = url_unescape(cred);
     parse_presigned_credential(&decoded).map(|c| c.access_key)
+}
+
+/// The first header a presigned URL signs, besides `host`, that the
+/// request leaves out, or `None` when each is present. S3 refuses such
+/// a request with `SignatureDoesNotMatch`, since its signature cannot
+/// match without the header's value.
+pub fn presigned_missing_header(raw_query: &str, present: impl Fn(&str) -> bool) -> Option<String> {
+    let signed = raw_query
+        .split('&')
+        .find_map(|kv| kv.strip_prefix("X-Amz-SignedHeaders="))?;
+    url_unescape(signed)
+        .split(';')
+        .map(|name| name.trim().to_ascii_lowercase())
+        .find(|name| !name.is_empty() && name != "host" && !present(name))
 }
 
 /// Minimal percent-decoder for query-string values. Handles `%XX` hex
@@ -649,6 +673,7 @@ mod tests {
             "/bucket/key",
             &query,
             "s3.amazonaws.com",
+            |_| None,
             secret,
             now_at(amz_date),
             Duration::from_secs(300),
@@ -680,6 +705,7 @@ mod tests {
             "/bucket/key2",
             &query,
             "s3.amazonaws.com",
+            |_| None,
             secret,
             now_at(amz_date),
             Duration::from_secs(300),
@@ -711,6 +737,7 @@ mod tests {
             "/bucket/key",
             &query,
             "s3.amazonaws.com",
+            |_| None,
             secret,
             later,
             Duration::from_secs(300),
@@ -726,11 +753,64 @@ mod tests {
             "/bucket/key",
             query,
             "s3.amazonaws.com",
+            |_| None,
             "secret",
             now_at("20260524T120000Z"),
             Duration::from_secs(300),
         );
         assert_eq!(out, VerifyOutcome::IncompleteSignature);
+    }
+
+    #[test]
+    fn presigned_verifies_a_signed_header_from_the_request() {
+        let secret = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
+        let amz_date = "20260524T120000Z";
+        let query = "X-Amz-Algorithm=AWS4-HMAC-SHA256\
+            &X-Amz-Credential=AKID%2F20260524%2Fus-east-1%2Fs3%2Faws4_request\
+            &X-Amz-Date=20260524T120000Z&X-Amz-Expires=900\
+            &X-Amz-SignedHeaders=host%3Bif-match";
+        let canonical_request = format!(
+            "GET\n/bucket/key\n{query}\nhost:s3.amazonaws.com\nif-match:\"abc\"\n\nhost;if-match\nUNSIGNED-PAYLOAD",
+        );
+        let string_to_sign = format!(
+            "AWS4-HMAC-SHA256\n{amz_date}\n20260524/us-east-1/s3/aws4_request\n{}",
+            sha256_hex(canonical_request.as_bytes()),
+        );
+        let key = derive_signing_key(secret, "20260524", "us-east-1", "s3");
+        let signed = format!(
+            "{query}&X-Amz-Signature={}",
+            hmac_hex(&key, string_to_sign.as_bytes())
+        );
+        let verify = |if_match: Option<&str>| {
+            verify_presigned(
+                "GET",
+                "/bucket/key",
+                &signed,
+                "s3.amazonaws.com",
+                |name| {
+                    (name == "if-match")
+                        .then(|| if_match.map(str::to_string))
+                        .flatten()
+                },
+                secret,
+                now_at(amz_date),
+                Duration::from_secs(300),
+            )
+        };
+        assert_eq!(verify(Some("\"abc\"")), VerifyOutcome::Ok);
+        assert_eq!(verify(None), VerifyOutcome::SignatureMismatch);
+    }
+
+    #[test]
+    fn presigned_missing_header_names_a_signed_header_left_out() {
+        let query = "X-Amz-SignedHeaders=host%3Bif-match&X-Amz-Signature=x";
+        assert_eq!(
+            presigned_missing_header(query, |_| false).as_deref(),
+            Some("if-match")
+        );
+        assert!(presigned_missing_header(query, |name| name == "if-match").is_none());
+        assert!(presigned_missing_header("X-Amz-SignedHeaders=host", |_| false).is_none());
+        assert!(presigned_missing_header("X-Amz-Signature=x", |_| false).is_none());
     }
 
     #[test]

@@ -561,6 +561,31 @@ async fn process_request(
         }
     }
 
+    // A presigned URL whose request leaves out a header it signs,
+    // such as `if-match`, is refused as S3 refuses it, whether or not
+    // signatures are verified: no real endpoint accepts it, so a
+    // client relying on it fails here as it would against AWS.
+    if let Some(query) = uri.query()
+        && query.contains("X-Amz-Signature=")
+        && let Some(missing) =
+            crate::sigv4_verify::presigned_missing_header(query, |name| headers.contains_key(name))
+    {
+        let protocol = if service_name == "s3" {
+            Protocol::RestXml
+        } else {
+            protocol::detect_protocol(headers, body).unwrap_or(Protocol::RestJson1)
+        };
+        return Err((
+            protocol,
+            AwsError::forbidden(
+                "SignatureDoesNotMatch",
+                format!(
+                    "The request signature we calculated does not match the signature you provided. The presigned URL signs the {missing} header, which the request does not send."
+                ),
+            ),
+        ));
+    }
+
     // 1c. Cryptographic SigV4 verification when AWSIM_VERIFY_SIGV4
     // is on. The presence-check above only confirmed the access key
     // exists; this step recomputes the signature with the matching
@@ -970,6 +995,12 @@ fn verify_presigned_for_request(
         uri.path(),
         raw_query,
         &host,
+        |name| {
+            headers
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string)
+        },
         &secret,
         std::time::SystemTime::now(),
         std::time::Duration::from_secs(300),
