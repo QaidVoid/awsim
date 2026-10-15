@@ -205,15 +205,23 @@ async fn refresh_handler(
     )
 }
 
+/// How a request naming indices treats those that do not exist.
+#[derive(Deserialize)]
+struct IndicesParams {
+    ignore_unavailable: Option<bool>,
+}
+
 async fn search(
     State(state): State<Arc<OpenSearchState>>,
     Path(index): Path<String>,
+    Query(params): Query<IndicesParams>,
     body: Option<Json<Value>>,
 ) -> impl IntoResponse {
     let body = body
         .map(|b| b.0)
         .unwrap_or(json!({"query": {"match_all": {}}}));
-    let (status, result) = operations::search::search(&state, &index, &body);
+    let ignore = params.ignore_unavailable.unwrap_or(false);
+    let (status, result) = operations::search::search_with(&state, &index, &body, ignore);
     (
         StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
         Json(result),
@@ -223,12 +231,14 @@ async fn search(
 async fn count(
     State(state): State<Arc<OpenSearchState>>,
     Path(index): Path<String>,
+    Query(params): Query<IndicesParams>,
     body: Option<Json<Value>>,
 ) -> impl IntoResponse {
     let body = body
         .map(|b| b.0)
         .unwrap_or(json!({"query": {"match_all": {}}}));
-    let (status, result) = operations::search::count(&state, &index, &body);
+    let ignore = params.ignore_unavailable.unwrap_or(false);
+    let (status, result) = operations::search::count(&state, &index, &body, ignore);
     (
         StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
         Json(result),

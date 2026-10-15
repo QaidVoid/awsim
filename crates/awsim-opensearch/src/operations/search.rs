@@ -28,6 +28,17 @@ use crate::state::OpenSearchState;
 /// Also honours `sort`, `from`/`size`, `collapse` (by `field`) and
 /// `_source` filtering.
 pub fn search(state: &OpenSearchState, index_pattern: &str, body: &Value) -> (u16, Value) {
+    search_with(state, index_pattern, body, false)
+}
+
+/// [`search`], skipping a named index that does not exist when `ignore_unavailable` is set, as
+/// OpenSearch's `ignore_unavailable=true` does.
+pub fn search_with(
+    state: &OpenSearchState,
+    index_pattern: &str,
+    body: &Value,
+    ignore_unavailable: bool,
+) -> (u16, Value) {
     let size = body["size"].as_u64().unwrap_or(10) as usize;
     let from = body["from"].as_u64().unwrap_or(0) as usize;
     let query = body
@@ -35,11 +46,9 @@ pub fn search(state: &OpenSearchState, index_pattern: &str, body: &Value) -> (u1
         .cloned()
         .unwrap_or(json!({"match_all": {}}));
 
-    let matching_indices = resolve_indices(state, index_pattern);
-
-    if matching_indices.is_empty() || !matching_indices.iter().any(|n| state.index_exists(n)) {
-        let name = index_pattern.split(',').next().unwrap_or(index_pattern);
-        return (404, index_not_found(name));
+    let (matching_indices, missing) = resolve_indices(state, index_pattern);
+    if let Some(name) = missing.filter(|_| !ignore_unavailable) {
+        return (404, index_not_found(&name));
     }
 
     let mut hits: Vec<Value> = Vec::new();
@@ -126,17 +135,22 @@ pub fn search(state: &OpenSearchState, index_pattern: &str, body: &Value) -> (u1
     )
 }
 
-/// Count documents matching a query.
-pub fn count(state: &OpenSearchState, index_name: &str, body: &Value) -> (u16, Value) {
+/// Counts the documents matching `body`'s query, skipping a named index that
+/// does not exist when `ignore_unavailable` is set.
+pub fn count(
+    state: &OpenSearchState,
+    index_name: &str,
+    body: &Value,
+    ignore_unavailable: bool,
+) -> (u16, Value) {
     let query = body
         .get("query")
         .cloned()
         .unwrap_or(json!({"match_all": {}}));
 
-    let resolved = state.resolve_alias(index_name);
-
-    if !resolved.iter().any(|n| state.index_exists(n)) {
-        return (404, index_not_found(index_name));
+    let (resolved, missing) = resolve_indices(state, index_name);
+    if let Some(name) = missing.filter(|_| !ignore_unavailable) {
+        return (404, index_not_found(&name));
     }
 
     let mut count: usize = 0;
@@ -162,28 +176,45 @@ pub fn count(state: &OpenSearchState, index_name: &str, body: &Value) -> (u16, V
     )
 }
 
-/// Resolve an index pattern (wildcard, alias, or comma-separated list)
-/// down to a concrete list of index names.
+/// Resolve an index pattern (comma-separated list of names, aliases and
+/// wildcards) down to the existing indices it names, each item on its own,
+/// with the first named index that does not exist.
 ///
-/// Wildcards: `prefix*`, `*suffix`, `pre*fix`, `*` (all).
-fn resolve_indices(state: &OpenSearchState, pattern: &str) -> Vec<String> {
-    if pattern.contains('*') {
-        return state
-            .list_indices()
-            .into_iter()
-            .filter_map(|(name, _)| {
-                if wildcard_match(pattern, &name) {
-                    Some(name)
-                } else {
-                    None
-                }
-            })
-            .collect();
-    }
-    pattern
+/// Wildcards: `prefix*`, `*suffix`, `pre*fix`, `*` (all). A wildcard matching
+/// no index names none, as OpenSearch's `allow_no_indices` default does.
+fn resolve_indices(state: &OpenSearchState, pattern: &str) -> (Vec<String>, Option<String>) {
+    let mut names: Vec<String> = Vec::new();
+    let mut missing = None;
+    for item in pattern
         .split(',')
-        .flat_map(|s| state.resolve_alias(s.trim()))
-        .collect()
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+    {
+        let found: Vec<String> = if item.contains('*') {
+            state
+                .list_indices()
+                .into_iter()
+                .map(|(name, _)| name)
+                .filter(|name| wildcard_match(item, name))
+                .collect()
+        } else {
+            let resolved: Vec<String> = state
+                .resolve_alias(item)
+                .into_iter()
+                .filter(|name| state.index_exists(name))
+                .collect();
+            if resolved.is_empty() && missing.is_none() {
+                missing = Some(item.to_string());
+            }
+            resolved
+        };
+        for name in found {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    (names, missing)
 }
 
 /// Simple wildcard match supporting `*` (any chars) and `?` (single char).
@@ -923,6 +954,60 @@ mod tests {
             .put_doc("articles", "3", &json!({"title": "AWS Lambda", "body": "Serverless computing with AWS Lambda and Rust", "tags": ["aws", "lambda", "rust"]}))
             .unwrap();
         state
+    }
+
+    #[test]
+    fn test_comma_list_with_wildcard() {
+        let state = test_state();
+        for name in ["captify-search-spaces-a-1", "captify-search-spaces-b-2"] {
+            state
+                .create_index_meta(
+                    name,
+                    IndexMeta {
+                        mappings: json!({}),
+                        settings: json!({}),
+                        created_at: "2026-01-01".to_string(),
+                        uuid: format!("uuid-{name}"),
+                    },
+                )
+                .unwrap();
+            state
+                .put_doc(name, "1", &json!({"title": "Rust manual"}))
+                .unwrap();
+        }
+        let query = json!({"query": {"match": {"title": "Rust"}}});
+        let (status, result) = search(&state, "articles,captify-search-spaces-*", &query);
+        assert_eq!(status, 200);
+        let indices: Vec<&str> = result["hits"]["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["_index"].as_str().unwrap())
+            .collect();
+        assert!(indices.contains(&"captify-search-spaces-a-1"));
+        assert!(indices.contains(&"captify-search-spaces-b-2"));
+        assert!(indices.contains(&"articles"));
+        let (status, result) = count(&state, "articles,captify-search-spaces-*", &query, false);
+        assert_eq!((status, result["count"].as_u64()), (200, Some(3)));
+    }
+
+    #[test]
+    fn test_missing_and_unmatched_indices() {
+        let state = test_state();
+        let all = json!({"query": {"match_all": {}}});
+        assert_eq!(search(&state, "articles,missing", &all).0, 404);
+        let (status, result) = search_with(&state, "articles,missing", &all, true);
+        assert_eq!(
+            (status, result["hits"]["total"]["value"].as_u64()),
+            (200, Some(3))
+        );
+        let (status, result) = search(&state, "nothing-*", &all);
+        assert_eq!(
+            (status, result["hits"]["total"]["value"].as_u64()),
+            (200, Some(0))
+        );
+        assert_eq!(count(&state, "missing", &all, false).0, 404);
+        assert_eq!(count(&state, "missing", &all, true).0, 200);
     }
 
     #[test]
