@@ -88,10 +88,17 @@ fn build_session_policy(
     _inner: &dyn PrincipalLookup,
 ) -> Option<awsim_iam_policy::PolicyDocument> {
     let mut docs: Vec<awsim_iam_policy::PolicyDocument> = Vec::new();
-    if let Some(raw) = inline
-        && let Ok(doc) = awsim_iam_policy::parse(raw)
-    {
-        docs.push(doc);
+    if let Some(raw) = inline {
+        // AssumeRole rejects a policy awsim cannot parse, so this only
+        // guards sessions recorded without that check. Dropping the policy
+        // would grant the role's full permissions; deny everything instead.
+        docs.push(awsim_iam_policy::parse(raw).unwrap_or_else(|_| {
+            awsim_iam_policy::PolicyDocument {
+                version: None,
+                id: None,
+                statements: Vec::new(),
+            }
+        }));
     }
     for arn in policy_arns {
         // PolicyArns reference managed policies. Re-using
@@ -232,5 +239,37 @@ mod tests {
 
         let lookup = StsAwarePrincipalLookup::new(sessions, iam);
         assert!(lookup.resolve_access_key("ASIA-ORPHAN").is_none());
+    }
+
+    #[test]
+    fn unparseable_session_policy_denies_everything() {
+        let role_arn = "arn:aws:iam::1:role/R";
+        let iam = Arc::new(FakeIam {
+            role_by_arn: HashMap::from([(role_arn.to_string(), principal(role_arn, "1"))]),
+            user_by_key: HashMap::new(),
+        }) as Arc<dyn PrincipalLookup>;
+
+        let sessions = Arc::new(StsSessionStore::new());
+        sessions.record(AssumedRoleSession {
+            access_key: "ASIA-BADPOLICY".to_string(),
+            role_arn: role_arn.to_string(),
+            role_name: "R".to_string(),
+            session_name: "s".to_string(),
+            account_id: "1".to_string(),
+            assumed_role_id: "A:s".to_string(),
+            expiry: None,
+            inline_session_policy: Some(r#"{"Statement":"nope"}"#.to_string()),
+            session_policy_arns: Vec::new(),
+            session_tags: Vec::new(),
+            transitive_tag_keys: Vec::new(),
+        });
+
+        let lookup = StsAwarePrincipalLookup::new(sessions, iam);
+        let policy = lookup
+            .resolve_access_key("ASIA-BADPOLICY")
+            .expect("hit")
+            .session_policy
+            .expect("a session policy, not the role's full permissions");
+        assert!(policy.statements.is_empty());
     }
 }

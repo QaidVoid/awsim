@@ -594,10 +594,10 @@ fn validate_source_identity(name: &str) -> Result<(), AwsError> {
 ///     bound to a packed limit (we use 2048 chars as a rough guard)
 ///   - `PolicyArns`: max 10 entries, each must be a valid policy ARN
 ///
-/// Note: we don't yet apply session policies to credential evaluation.
-/// The IAM enforcement engine is opt-in and AssumeRole credentials are
-/// generated without consulting them. Validation here just prevents
-/// callers from getting silent acceptance of bad input.
+/// The inline policy must also parse as an IAM policy, since IAM
+/// enforcement intersects it with the role's policies on every request
+/// the session signs. AWS rejects a malformed one with
+/// `MalformedPolicyDocument`.
 fn validate_session_policies(input: &Value) -> Result<(), AwsError> {
     if let Some(policy) = input.get("Policy").and_then(Value::as_str) {
         if policy.len() > 2048 {
@@ -609,6 +609,12 @@ fn validate_session_policies(input: &Value) -> Result<(), AwsError> {
         if !policy.is_empty() {
             serde_json::from_str::<Value>(policy)
                 .map_err(|_| AwsError::validation("Session Policy must be valid JSON"))?;
+            awsim_iam_policy::parse(policy).map_err(|e| {
+                AwsError::bad_request(
+                    "MalformedPolicyDocument",
+                    format!("The session policy is malformed: {e}"),
+                )
+            })?;
         }
     }
     if let Some(arns) = input.get("PolicyArns").and_then(Value::as_array) {
@@ -1513,6 +1519,23 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(err.code, "ValidationException");
+    }
+
+    #[test]
+    fn test_assume_role_rejects_unparseable_policy() {
+        let svc = StsService::new();
+        let ctx = make_ctx();
+        let err = svc
+            .assume_role(
+                &json!({
+                    "RoleArn": "arn:aws:iam::000000000000:role/MyRole",
+                    "RoleSessionName": "session",
+                    "Policy": r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*","Condition":{"StringBogus":{"k":"v"}}}]}"#,
+                }),
+                &ctx,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "MalformedPolicyDocument");
     }
 
     #[test]
