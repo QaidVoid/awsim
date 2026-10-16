@@ -22,10 +22,11 @@ pub mod tick;
 pub mod totp;
 
 pub use authz::{
-    AuthzEngine, CloudMapRegistrar, GrantLookup, KmsKeyLookup, LambdaInvoker, NoopPrincipalLookup,
-    ParameterLookup, PrincipalLookup, ResolvedPrincipal, ResourcePolicyLookup, S3ObjectReader,
-    S3ObjectWriter, ScpLookup, SecretLookup,
+    AuthzEngine, CloudMapRegistrar, GrantLookup, IamCheck, KmsKeyLookup, LambdaInvoker,
+    NoopPrincipalLookup, ParameterLookup, PrincipalLookup, ResolvedPrincipal, ResourcePolicyLookup,
+    S3ObjectReader, S3ObjectWriter, ScpLookup, SecretLookup,
 };
+pub use awsim_iam_policy::ContextValue;
 // `HandlerByteStream` and `HandlerResult` are defined further down in
 // this file; re-exported here for crate consumers.
 pub use arn::Arn;
@@ -208,6 +209,24 @@ pub trait ServiceHandler: Send + Sync {
             (Some(action), Some(resource)) => vec![(action, resource)],
             _ => Vec::new(),
         }
+    }
+
+    /// [`Self::iam_checks`] with the service-specific condition keys each
+    /// check carries. The gateway authorizes through this method.
+    ///
+    /// The default adds no condition keys. Override when a service
+    /// derives condition keys from the request body (DynamoDB fills
+    /// `dynamodb:LeadingKeys` from the partition keys it touches).
+    fn iam_checks_with_context(
+        &self,
+        operation: &str,
+        input: &serde_json::Value,
+        ctx: &router::RequestContext,
+    ) -> Vec<IamCheck> {
+        self.iam_checks(operation, input, ctx)
+            .into_iter()
+            .map(|(action, resource)| IamCheck::new(action, resource))
+            .collect()
     }
 
     /// Periodic tick. The gateway spawns a single 1-second loop that

@@ -1,6 +1,7 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use awsim_core::{AuthzEngine, PrincipalLookup, RequestContext, ResolvedPrincipal};
+use awsim_core::{AuthzEngine, ContextValue, PrincipalLookup, RequestContext, ResolvedPrincipal};
 use awsim_iam_policy::PolicyDocument;
 
 struct StubLookup {
@@ -325,6 +326,46 @@ fn admin_access_key_unset_does_not_match_empty_key() {
     let ctx = ctx_with_key(Some(""));
     let err = engine
         .check(&ctx, "s3:GetObject", "arn:aws:s3:::bucket/key")
+        .unwrap_err();
+    assert_eq!(err.code, "AccessDenied");
+}
+
+#[test]
+fn check_with_context_evaluates_service_condition_keys() {
+    let policy = r#"{
+      "Version": "2012-10-17",
+      "Statement": [{
+        "Effect": "Allow",
+        "Action": "dynamodb:GetItem",
+        "Resource": "*",
+        "Condition": {"ForAllValues:StringLike": {"dynamodb:LeadingKeys": ["TENANT#acme#*"]}}
+      }]
+    }"#;
+    let mut engine = AuthzEngine::new(true);
+    engine.principal_lookup = Arc::new(StubLookup {
+        principal: Some(make_principal(
+            "arn:aws:iam::000000000000:user/u",
+            "000000000000",
+            vec![policy],
+            false,
+        )),
+    });
+    let ctx = ctx_with_key(Some("AKIA1"));
+    let table = "arn:aws:dynamodb:us-east-1:000000000000:table/t";
+    let leading = |key: &str| {
+        HashMap::from([(
+            "dynamodb:LeadingKeys".to_string(),
+            ContextValue::StringList(vec![key.to_string()]),
+        )])
+    };
+
+    assert!(
+        engine
+            .check_with_context(&ctx, "dynamodb:GetItem", table, &leading("TENANT#acme#1"))
+            .is_ok()
+    );
+    let err = engine
+        .check_with_context(&ctx, "dynamodb:GetItem", table, &leading("TENANT#globex#1"))
         .unwrap_err();
     assert_eq!(err.code, "AccessDenied");
 }

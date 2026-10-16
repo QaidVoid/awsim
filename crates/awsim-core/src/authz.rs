@@ -29,6 +29,28 @@ pub struct ResolvedPrincipal {
     pub session_policy: Option<PolicyDocument>,
 }
 
+/// One IAM authorization check a request must pass: an action on a
+/// resource, plus any service-specific condition keys the request
+/// supplies for it (DynamoDB's `dynamodb:LeadingKeys`, for example).
+#[derive(Debug, Clone, PartialEq)]
+pub struct IamCheck {
+    pub action: String,
+    pub resource: String,
+    /// Condition keys added to the global request context for this check.
+    pub context: HashMap<String, ContextValue>,
+}
+
+impl IamCheck {
+    /// A check that adds no service-specific condition keys.
+    pub fn new(action: impl Into<String>, resource: impl Into<String>) -> Self {
+        Self {
+            action: action.into(),
+            resource: resource.into(),
+            context: HashMap::new(),
+        }
+    }
+}
+
 pub trait PrincipalLookup: Send + Sync {
     fn resolve_access_key(&self, access_key: &str) -> Option<ResolvedPrincipal>;
 
@@ -279,6 +301,18 @@ impl AuthzEngine {
         action: &str,
         resource: &str,
     ) -> Result<(), AwsError> {
+        self.check_with_context(ctx, action, resource, &HashMap::new())
+    }
+
+    /// [`Self::check`] with service-specific condition keys added to the
+    /// request context the policies are evaluated against.
+    pub fn check_with_context(
+        &self,
+        ctx: &RequestContext,
+        action: &str,
+        resource: &str,
+        extra_context: &HashMap<String, ContextValue>,
+    ) -> Result<(), AwsError> {
         if !self.enabled() {
             return Ok(());
         }
@@ -326,7 +360,8 @@ impl AuthzEngine {
             .get(&ctx.service)
             .and_then(|lookup| lookup.lookup(resource));
 
-        let context = build_request_context(ctx, &principal);
+        let mut context = build_request_context(ctx, &principal);
+        context.extend(extra_context.iter().map(|(k, v)| (k.clone(), v.clone())));
 
         let req = AuthzRequest {
             principal_arn: &principal.arn,

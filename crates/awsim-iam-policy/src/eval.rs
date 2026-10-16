@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::str::FromStr;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ContextValue {
     String(String),
     StringList(Vec<String>),

@@ -748,11 +748,11 @@ async fn process_request(
 
     // 6b. IAM authorization (opt-in via AWSIM_IAM_ENFORCE)
     if state.authz.enabled() {
-        let checks = handler.iam_checks(&parsed.operation, &parsed.input, &ctx);
-        for (action, resource) in &checks {
+        let checks = handler.iam_checks_with_context(&parsed.operation, &parsed.input, &ctx);
+        for check in &checks {
             state
                 .authz
-                .check(&ctx, action, resource)
+                .check_with_context(&ctx, &check.action, &check.resource, &check.context)
                 .map_err(|e| (detected, e))?;
         }
         if checks.is_empty() {
