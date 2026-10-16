@@ -3,6 +3,7 @@
 pub mod error;
 mod expressions;
 mod keys;
+mod leading_keys;
 mod numkey;
 mod operations;
 mod sqlite_store;
@@ -16,7 +17,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler, arn};
+use awsim_core::{
+    AccountRegionStore, AwsError, IamCheck, Protocol, RequestContext, ServiceHandler, arn,
+};
 use serde_json::Value;
 use tracing::{debug, warn};
 
@@ -991,19 +994,59 @@ impl ServiceHandler for DynamoDbService {
         ctx: &RequestContext,
     ) -> Vec<(String, String)> {
         let mut checks: Vec<(String, String)> = Vec::new();
-        let mut push = |action: &str, resource: String| {
-            let check = (action.to_string(), resource);
+        for check in self.iam_checks_with_context(operation, input, ctx) {
+            let check = (check.action, check.resource);
+            if !checks.contains(&check) {
+                checks.push(check);
+            }
+        }
+        checks
+    }
+
+    fn iam_checks_with_context(
+        &self,
+        operation: &str,
+        input: &Value,
+        ctx: &RequestContext,
+    ) -> Vec<IamCheck> {
+        let state = self.get_state(ctx);
+        let mut checks: Vec<IamCheck> = Vec::new();
+        // Each partition key a request touches is its own check, so every
+        // item must satisfy a `dynamodb:LeadingKeys` condition.
+        let mut push = |action: &str, resource: String, leading_key: Option<String>| {
+            let check = IamCheck {
+                action: action.to_string(),
+                resource,
+                context: leading_keys::context(leading_key),
+            };
             if !checks.contains(&check) {
                 checks.push(check);
             }
         };
         match operation {
-            // Batch calls are checked once per table they touch.
+            // Batch calls are checked once per table and item they touch.
             "BatchGetItem" | "BatchWriteItem" => {
                 let action = format!("dynamodb:{operation}");
                 let tables = input.get("RequestItems").and_then(Value::as_object);
-                for table in tables.into_iter().flat_map(|m| m.keys()) {
-                    push(&action, table_arn(ctx, table));
+                for (table, requests) in tables.into_iter().flatten() {
+                    let items: Vec<&Value> = if operation == "BatchGetItem" {
+                        requests["Keys"].as_array().into_iter().flatten().collect()
+                    } else {
+                        let requests = requests.as_array().into_iter().flatten();
+                        requests
+                            .map(|r| match r.get("PutRequest") {
+                                Some(put) => &put["Item"],
+                                None => &r["DeleteRequest"]["Key"],
+                            })
+                            .collect()
+                    };
+                    if items.is_empty() {
+                        push(&action, table_arn(ctx, table), None);
+                    }
+                    for item in items {
+                        let leading_key = leading_keys::of_item(&state, table, item);
+                        push(&action, table_arn(ctx, table), leading_key);
+                    }
                 }
             }
             // Transactions need the single-item action for each item.
@@ -1017,8 +1060,15 @@ impl ServiceHandler for DynamoDbService {
                         ("Delete", "dynamodb:DeleteItem"),
                         ("ConditionCheck", "dynamodb:ConditionCheckItem"),
                     ] {
-                        if let Some(table) = item[kind]["TableName"].as_str() {
-                            push(action, table_arn(ctx, table));
+                        let request = &item[kind];
+                        if let Some(table) = request["TableName"].as_str() {
+                            let key = if kind == "Put" {
+                                &request["Item"]
+                            } else {
+                                &request["Key"]
+                            };
+                            let leading_key = leading_keys::of_item(&state, table, key);
+                            push(action, table_arn(ctx, table), leading_key);
                         }
                     }
                 }
@@ -1041,25 +1091,39 @@ impl ServiceHandler for DynamoDbService {
                         .as_str()
                         .and_then(operations::partiql::statement_iam_target);
                     if let Some((action, table)) = target {
-                        push(action, table_arn(ctx, &table));
+                        push(action, table_arn(ctx, &table), None);
                     }
                 }
             }
-            // Reading an index is checked against the index ARN.
-            "Query" | "Scan" if input.get("IndexName").is_some() => {
-                let table = input["TableName"].as_str().unwrap_or_default();
-                let index = input["IndexName"].as_str().unwrap_or_default();
-                push(
-                    &format!("dynamodb:{operation}"),
-                    format!("{}/index/{index}", table_arn(ctx, table)),
-                );
+            // Reading an index is checked against the index ARN. A Scan
+            // touches no single partition, so it carries no leading key.
+            "Query" | "Scan" => {
+                if let Some(table) = input["TableName"].as_str() {
+                    let resource = match input["IndexName"].as_str() {
+                        Some(index) => format!("{}/index/{index}", table_arn(ctx, table)),
+                        None => table_arn(ctx, table),
+                    };
+                    let leading_key = match operation {
+                        "Query" => leading_keys::of_query(&state, input),
+                        _ => None,
+                    };
+                    push(&format!("dynamodb:{operation}"), resource, leading_key);
+                }
             }
             _ => {
+                let item = match operation {
+                    "GetItem" | "UpdateItem" | "DeleteItem" => Some(&input["Key"]),
+                    "PutItem" => Some(&input["Item"]),
+                    _ => None,
+                };
+                let leading_key = item.and_then(|item| {
+                    leading_keys::of_item(&state, input["TableName"].as_str()?, item)
+                });
                 if let (Some(action), Some(resource)) = (
                     self.iam_action(operation),
                     self.iam_resource(operation, input, ctx),
                 ) {
-                    push(&action, resource);
+                    push(&action, resource, leading_key);
                 }
             }
         }
@@ -1244,6 +1308,102 @@ mod tests {
                 ("dynamodb:PartiQLDelete", "d"),
             ]
             .map(|(a, t)| (a.to_string(), t.to_string()))
+        );
+    }
+
+    fn leading_keys_of(checks: &[IamCheck]) -> Vec<(String, Option<String>)> {
+        checks
+            .iter()
+            .map(|c| {
+                let key = match c.context.get("dynamodb:LeadingKeys") {
+                    Some(awsim_core::ContextValue::StringList(keys)) => Some(keys.join(",")),
+                    _ => None,
+                };
+                (c.action.clone(), key)
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_iam_checks_carry_leading_keys() {
+        let svc = DynamoDbService::new();
+        let ctx = RequestContext::new("dynamodb", "us-east-1");
+        svc.handle(
+            "CreateTable",
+            json!({
+                "TableName": "t",
+                "BillingMode": "PAY_PER_REQUEST",
+                "AttributeDefinitions": [
+                    {"AttributeName": "pk", "AttributeType": "N"},
+                    {"AttributeName": "owner", "AttributeType": "S"},
+                ],
+                "KeySchema": [{"AttributeName": "pk", "KeyType": "HASH"}],
+                "GlobalSecondaryIndexes": [{
+                    "IndexName": "by-owner",
+                    "KeySchema": [{"AttributeName": "owner", "KeyType": "HASH"}],
+                    "Projection": {"ProjectionType": "ALL"},
+                }],
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+        let checks = |op: &str, input: Value| {
+            leading_keys_of(&svc.iam_checks_with_context(op, &input, &ctx))
+        };
+        let check = |action: &str, key: Option<&str>| (action.to_string(), key.map(str::to_string));
+
+        assert_eq!(
+            checks(
+                "GetItem",
+                json!({"TableName": "t", "Key": {"pk": {"N": "42"}}})
+            ),
+            [check("dynamodb:GetItem", Some("42"))]
+        );
+        assert_eq!(
+            checks(
+                "Query",
+                json!({
+                    "TableName": "t",
+                    "IndexName": "by-owner",
+                    "KeyConditions": {"owner": {
+                        "ComparisonOperator": "EQ",
+                        "AttributeValueList": [{"S": "USER#x"}],
+                    }},
+                })
+            ),
+            [check("dynamodb:Query", Some("USER#x"))]
+        );
+        assert_eq!(
+            checks("Scan", json!({"TableName": "t"})),
+            [check("dynamodb:Scan", None)]
+        );
+        assert_eq!(
+            checks(
+                "BatchWriteItem",
+                json!({"RequestItems": {"t": [
+                    {"PutRequest": {"Item": {"pk": {"N": "1"}, "owner": {"S": "o"}}}},
+                    {"DeleteRequest": {"Key": {"pk": {"N": "2"}}}},
+                    {"DeleteRequest": {"Key": {"pk": {"N": "2"}}}},
+                ]}})
+            ),
+            [
+                check("dynamodb:BatchWriteItem", Some("1")),
+                check("dynamodb:BatchWriteItem", Some("2")),
+            ]
+        );
+        assert_eq!(
+            checks(
+                "TransactWriteItems",
+                json!({"TransactItems": [
+                    {"Put": {"TableName": "t", "Item": {"pk": {"N": "3"}}}},
+                    {"ConditionCheck": {"TableName": "t", "Key": {"pk": {"N": "4"}}}},
+                ]})
+            ),
+            [
+                check("dynamodb:PutItem", Some("3")),
+                check("dynamodb:ConditionCheckItem", Some("4")),
+            ]
         );
     }
 }

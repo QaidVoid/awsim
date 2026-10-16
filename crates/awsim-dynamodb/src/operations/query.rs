@@ -1222,6 +1222,36 @@ fn segment_index(pk: &str, sk: &str, total: u32) -> u32 {
     (hasher.finish() % total as u64) as u32
 }
 
+/// The partition key value a Query reads, as IAM's `dynamodb:LeadingKeys`
+/// sees it. A Query on an index reads the index's partition key. `None`
+/// when the request names no known index or no `pk = :v` term, which the
+/// handler then rejects.
+pub(crate) fn partition_key_value(table: &crate::state::Table, input: &Value) -> Option<String> {
+    let input = super::legacy::rewrite(input).ok()?;
+    let index = resolve_index(table, opt_str(&input, "IndexName")).ok()?;
+    let condition = parse_condition(opt_str(&input, "KeyConditionExpression")?).ok()?;
+    let names = get_expr_attr_names(&input);
+    let terms = match &condition {
+        ConditionExpr::Logical {
+            op: LogicalOp::And,
+            children,
+        } => children.as_slice(),
+        term => std::slice::from_ref(term),
+    };
+    let placeholder = terms.iter().find_map(|term| match term {
+        ConditionExpr::Comparison {
+            op: CompareOp::Eq,
+            left,
+            right: Operand::Value(placeholder),
+        } if operand_resolved_name(left, &names).as_deref() == Some(&index.hash_key) => {
+            Some(placeholder)
+        }
+        _ => None,
+    })?;
+    let values = get_expr_attr_values(&input);
+    crate::state::extract_scalar_str(values.get(placeholder)?).map(str::to_string)
+}
+
 /// Try to extract the partition key value from a KeyConditionExpression.
 /// This enables a single-partition lookup against SQLite instead of a
 /// full table scan.
