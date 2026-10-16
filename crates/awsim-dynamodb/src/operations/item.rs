@@ -6,22 +6,24 @@ use uuid::Uuid;
 use crate::{
     expressions::{evaluate_condition, parse_condition},
     keys::{item_to_storage_value, resolve_key, storage_value_to_item},
-    sqlite_store::SqliteStore,
+    sqlite_store::{SqliteStore, WriteTx},
     state::{DynamoItem, DynamoState, StreamRecord, StreamRecordData},
     throttle::BucketKind,
 };
 
 /// Look up an item by `(pk, sk)` in SQLite and decode it back to a
 /// `DynamoItem`. Used by the conditional-check + update-expression paths
-/// now that items live only in the SQLite mirror.
+/// now that items live only in the SQLite mirror. It reads inside the
+/// caller's write transaction, so no other write lands between this read
+/// and the write that depends on it (a counter's `ADD`, a condition).
 fn fetch_existing(
-    sqlite: &SqliteStore,
+    tx: &WriteTx<'_>,
     ctx: &RequestContext,
     table_name: &str,
     pk: &str,
     sk: &str,
 ) -> Result<Option<DynamoItem>, AwsError> {
-    let raw = sqlite.get_item(&ctx.account_id, &ctx.region, table_name, pk, sk)?;
+    let raw = tx.get_item(&ctx.account_id, &ctx.region, table_name, pk, sk)?;
     raw.map(|stored| {
         storage_value_to_item(stored)
             .ok_or_else(|| AwsError::internal("DynamoDB stored attrs is not an object"))
@@ -576,28 +578,30 @@ pub fn put_item(
     let expr_attr_names = get_expr_attr_names(input);
     let expr_attr_values = get_expr_attr_values(input);
 
-    // Conditional check + old-image lookup against the SQLite mirror.
-    let old_item = fetch_existing(sqlite, ctx, &table_name, &sqlite_keys.pk, &sqlite_keys.sk)?;
-
-    if let Some(cond_expr) = opt_str(input, "ConditionExpression") {
-        let condition = parse_condition(cond_expr)?;
-        let empty_item: DynamoItem = DynamoItem::new();
-        let check_item = old_item.as_ref().unwrap_or(&empty_item);
-        if !evaluate_condition(&condition, check_item, &expr_attr_names, &expr_attr_values)? {
-            return Err(conditional_check_failed(input, old_item.as_ref()));
-        }
-    }
-
+    // Conditional check + old-image lookup against the SQLite mirror, in
+    // the same write transaction as the write.
     let attrs_value = item_to_storage_value(&item);
-    sqlite.put_item(
-        &ctx.account_id,
-        &ctx.region,
-        &table_name,
-        &sqlite_keys.pk,
-        &sqlite_keys.sk,
-        &attrs_value,
-        &sqlite_keys.gsi,
-    )?;
+    let old_item = sqlite.with_write_transaction(|tx| {
+        let old_item = fetch_existing(tx, ctx, &table_name, &sqlite_keys.pk, &sqlite_keys.sk)?;
+        if let Some(cond_expr) = opt_str(input, "ConditionExpression") {
+            let condition = parse_condition(cond_expr)?;
+            let empty_item: DynamoItem = DynamoItem::new();
+            let check_item = old_item.as_ref().unwrap_or(&empty_item);
+            if !evaluate_condition(&condition, check_item, &expr_attr_names, &expr_attr_values)? {
+                return Err(conditional_check_failed(input, old_item.as_ref()));
+            }
+        }
+        tx.put_item(
+            &ctx.account_id,
+            &ctx.region,
+            &table_name,
+            &sqlite_keys.pk,
+            &sqlite_keys.sk,
+            &attrs_value,
+            &sqlite_keys.gsi,
+        )?;
+        Ok(old_item)
+    })?;
 
     let return_values = opt_str(input, "ReturnValues").unwrap_or("NONE");
 
@@ -723,26 +727,28 @@ pub fn delete_item(
     let expr_attr_names = get_expr_attr_names(input);
     let expr_attr_values = get_expr_attr_values(input);
 
-    // Snapshot the existing item before delete. Needed for both
-    // ConditionExpression evaluation and the REMOVE stream record.
-    let old_item = fetch_existing(sqlite, ctx, &table_name, &sqlite_pk_sk.0, &sqlite_pk_sk.1)?;
-
-    if let Some(cond_expr) = opt_str(input, "ConditionExpression") {
-        let condition = parse_condition(cond_expr)?;
-        let empty_item: DynamoItem = DynamoItem::new();
-        let existing = old_item.as_ref().unwrap_or(&empty_item);
-        if !evaluate_condition(&condition, existing, &expr_attr_names, &expr_attr_values)? {
-            return Err(conditional_check_failed(input, old_item.as_ref()));
+    // Snapshot the existing item before delete, in the same write
+    // transaction. Needed for both ConditionExpression evaluation and the
+    // REMOVE stream record.
+    let old_item = sqlite.with_write_transaction(|tx| {
+        let old_item = fetch_existing(tx, ctx, &table_name, &sqlite_pk_sk.0, &sqlite_pk_sk.1)?;
+        if let Some(cond_expr) = opt_str(input, "ConditionExpression") {
+            let condition = parse_condition(cond_expr)?;
+            let empty_item: DynamoItem = DynamoItem::new();
+            let existing = old_item.as_ref().unwrap_or(&empty_item);
+            if !evaluate_condition(&condition, existing, &expr_attr_names, &expr_attr_values)? {
+                return Err(conditional_check_failed(input, old_item.as_ref()));
+            }
         }
-    }
-
-    let _ = sqlite.delete_item(
-        &ctx.account_id,
-        &ctx.region,
-        &table_name,
-        &sqlite_pk_sk.0,
-        &sqlite_pk_sk.1,
-    )?;
+        tx.delete_item(
+            &ctx.account_id,
+            &ctx.region,
+            &table_name,
+            &sqlite_pk_sk.0,
+            &sqlite_pk_sk.1,
+        )?;
+        Ok(old_item)
+    })?;
 
     let return_values = opt_str(input, "ReturnValues").unwrap_or("NONE");
 
@@ -791,7 +797,9 @@ pub fn update_item(
 
     let key = parse_item(&input["Key"]).ok_or_else(|| AwsError::validation("Key is required"))?;
 
-    let (sqlite_pk_sk, keys_item, item_collection) = {
+    // The table's definition is copied out, so the write transaction below
+    // never waits on the table map while it holds the writer.
+    let (table_def, sqlite_pk_sk, keys_item, item_collection) = {
         let table = state.tables.get(&table_name).ok_or_else(|| {
             AwsError::service_not_found(
                 "ResourceNotFoundException",
@@ -809,77 +817,75 @@ pub fn update_item(
             }
         }
         let item_collection = item_collection_metrics(input, &table, &key);
-        (sqlite_pk_sk, keys_item, item_collection)
+        (table.clone(), sqlite_pk_sk, keys_item, item_collection)
     };
 
     let expr_attr_names = get_expr_attr_names(input);
     let expr_attr_values = get_expr_attr_values(input);
 
-    // Load the existing item (upsert semantics. Update creates the row
-    // when it doesn't yet exist, with just the key attributes populated).
-    let old_item = fetch_existing(sqlite, ctx, &table_name, &sqlite_pk_sk.0, &sqlite_pk_sk.1)?;
+    // Read, check, apply and write in one write transaction, so a
+    // concurrent update can't read the same old item and lose this one's
+    // change (two `ADD n :one` must both count).
+    let (old_item, new_item, new_item_bytes) = sqlite.with_write_transaction(|tx| {
+        // Load the existing item (upsert semantics. Update creates the row
+        // when it doesn't yet exist, with just the key attributes populated).
+        let old_item = fetch_existing(tx, ctx, &table_name, &sqlite_pk_sk.0, &sqlite_pk_sk.1)?;
 
-    if let Some(cond_expr) = opt_str(input, "ConditionExpression") {
-        let condition = parse_condition(cond_expr)?;
-        let empty_item: DynamoItem = DynamoItem::new();
-        let existing = old_item.as_ref().unwrap_or(&empty_item);
-        if !evaluate_condition(&condition, existing, &expr_attr_names, &expr_attr_values)? {
-            return Err(conditional_check_failed(input, old_item.as_ref()));
+        if let Some(cond_expr) = opt_str(input, "ConditionExpression") {
+            let condition = parse_condition(cond_expr)?;
+            let empty_item: DynamoItem = DynamoItem::new();
+            let existing = old_item.as_ref().unwrap_or(&empty_item);
+            if !evaluate_condition(&condition, existing, &expr_attr_names, &expr_attr_values)? {
+                return Err(conditional_check_failed(input, old_item.as_ref()));
+            }
         }
-    }
 
-    let mut new_item = old_item.clone().unwrap_or_else(|| key.clone());
+        let mut new_item = old_item.clone().unwrap_or_else(|| key.clone());
 
-    if let Some(update_expr) = opt_str(input, "UpdateExpression") {
-        crate::expressions::apply_update_expression(
-            &mut new_item,
-            update_expr,
-            &expr_attr_names,
-            &expr_attr_values,
+        if let Some(update_expr) = opt_str(input, "UpdateExpression") {
+            crate::expressions::apply_update_expression(
+                &mut new_item,
+                update_expr,
+                &expr_attr_names,
+                &expr_attr_values,
+            )?;
+        }
+
+        // Key attributes always survive an UpdateExpression (DynamoDB semantics).
+        for (k, v) in &key {
+            new_item.insert(k.clone(), v.clone());
+        }
+
+        // The UpdateExpression may have left a set in an invalid state (empty
+        // after DELETE, duplicates after ADD, etc.). Re-validate the merged
+        // item so we don't persist something the AWS API would have rejected.
+        validate_item(&new_item)?;
+
+        // Re-extract SQLite keys from the merged item. UpdateExpression may
+        // have introduced or changed GSI key attributes, which have to clear the
+        // same value rules a PutItem would have applied: an update must not be a
+        // way to smuggle an empty or oversized key into an index.
+        let sqlite_keys = validate_and_extract_keys(&table_def, &new_item)?;
+
+        let new_item_bytes = estimate_item_bytes(&new_item);
+        if new_item_bytes > ITEM_MAX_BYTES {
+            return Err(AwsError::validation(format!(
+                "Updated item size {new_item_bytes} bytes exceeds the {ITEM_MAX_BYTES}-byte (400 KB) per-item cap"
+            )));
+        }
+
+        let attrs_value = item_to_storage_value(&new_item);
+        tx.put_item(
+            &ctx.account_id,
+            &ctx.region,
+            &table_name,
+            &sqlite_keys.pk,
+            &sqlite_keys.sk,
+            &attrs_value,
+            &sqlite_keys.gsi,
         )?;
-    }
-
-    // Key attributes always survive an UpdateExpression (DynamoDB semantics).
-    for (k, v) in &key {
-        new_item.insert(k.clone(), v.clone());
-    }
-
-    // The UpdateExpression may have left a set in an invalid state (empty
-    // after DELETE, duplicates after ADD, etc.). Re-validate the merged
-    // item so we don't persist something the AWS API would have rejected.
-    validate_item(&new_item)?;
-
-    // Re-extract SQLite keys from the merged item. UpdateExpression may
-    // have introduced or changed GSI key attributes, which have to clear the
-    // same value rules a PutItem would have applied: an update must not be a
-    // way to smuggle an empty or oversized key into an index.
-    let sqlite_keys = {
-        let table = state.tables.get(&table_name).ok_or_else(|| {
-            AwsError::service_not_found(
-                "ResourceNotFoundException",
-                format!("Cannot do operations on a non-existent table: {table_name}"),
-            )
-        })?;
-        validate_and_extract_keys(&table, &new_item)?
-    };
-
-    let new_item_bytes = estimate_item_bytes(&new_item);
-    if new_item_bytes > ITEM_MAX_BYTES {
-        return Err(AwsError::validation(format!(
-            "Updated item size {new_item_bytes} bytes exceeds the {ITEM_MAX_BYTES}-byte (400 KB) per-item cap"
-        )));
-    }
-
-    let attrs_value = item_to_storage_value(&new_item);
-    sqlite.put_item(
-        &ctx.account_id,
-        &ctx.region,
-        &table_name,
-        &sqlite_keys.pk,
-        &sqlite_keys.sk,
-        &attrs_value,
-        &sqlite_keys.gsi,
-    )?;
+        Ok((old_item, new_item, new_item_bytes))
+    })?;
 
     debug!(table = %table_name, "Updated item");
 
@@ -1713,6 +1719,40 @@ mod tests {
             .unwrap()
             .expect("sqlite mirror");
         assert_eq!(stored["value"], json!({"S": "hello"}));
+    }
+
+    /// Concurrent `ADD` updates of one item each count: none reads the
+    /// item another is about to write and loses that write.
+    #[test]
+    fn concurrent_add_updates_all_count() {
+        let state = make_state_with_table();
+        let sqlite = SqliteStore::in_memory().unwrap();
+        let input = json!({
+            "TableName": "t",
+            "Key": {"pk": {"S": "p"}, "sk": {"S": "s"}},
+            "UpdateExpression": "ADD hits :one",
+            "ExpressionAttributeValues": {":one": {"N": "1"}},
+            "ReturnValues": "UPDATED_NEW"
+        });
+        let seen = std::sync::Mutex::new(Vec::new());
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| {
+                    for _ in 0..25 {
+                        let out = update_item(&state, &sqlite, &input, &ctx()).unwrap();
+                        let n: u32 = out["Attributes"]["hits"]["N"]
+                            .as_str()
+                            .unwrap()
+                            .parse()
+                            .unwrap();
+                        seen.lock().unwrap().push(n);
+                    }
+                });
+            }
+        });
+        let mut seen = seen.into_inner().unwrap();
+        seen.sort_unstable();
+        assert_eq!(seen, (1..=200).collect::<Vec<u32>>());
     }
 
     /// PROVISIONED tables pay for capacity-hours, not per request, so
