@@ -209,32 +209,22 @@ pub fn parse(json: &str) -> Result<PolicyDocument, ParseError> {
     parse_cached(json)
 }
 
-/// Parsed-policy cache, keyed by a hash of the raw JSON. Looked up
-/// from [`parse`] on every call. Hit ratio is high in practice
-/// because the same managed-policy / inline-policy JSON gets parsed
-/// once per request through the AuthzEngine, so caching collapses
-/// that to once-per-distinct-document for the lifetime of the
-/// process. Negative entries (parse failures) are also cached so a
-/// malformed policy doesn't re-allocate the ParseError chain on
-/// every request that touches it.
+/// Parsed-policy cache, keyed by the raw JSON. Looked up from [`parse`]
+/// on every call. Hit ratio is high in practice because the AuthzEngine
+/// parses the same managed, inline and session policy JSON on every
+/// request, so caching collapses that to once per distinct document for
+/// the lifetime of the process.
 ///
-/// Keyed by SipHash of the input string. Collisions are
-/// vanishingly unlikely for the volumes of JSON policy documents
-/// AWSim ever sees, and the cost of a collision is just a single
-/// redundant parse. No eviction: the working set of distinct
-/// policy documents in a local-dev instance is bounded by what the
-/// developer's tests provision, which is small.
-static PARSE_CACHE: std::sync::OnceLock<dashmap::DashMap<u64, PolicyDocument>> =
+/// Keyed by the full document rather than a hash of it, so a hash
+/// collision can never hand back another document's policy. No eviction:
+/// the working set of distinct policy documents in a local-dev instance
+/// is bounded by what the developer's tests provision, which is small.
+static PARSE_CACHE: std::sync::OnceLock<dashmap::DashMap<String, PolicyDocument>> =
     std::sync::OnceLock::new();
 
 fn parse_cached(json: &str) -> Result<PolicyDocument, ParseError> {
-    use std::hash::{BuildHasher, Hasher};
     let cache = PARSE_CACHE.get_or_init(dashmap::DashMap::new);
-    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
-    hasher.write(json.as_bytes());
-    let key = hasher.finish();
-
-    if let Some(entry) = cache.get(&key) {
+    if let Some(entry) = cache.get(json) {
         return Ok(entry.value().clone());
     }
     // Only successful parses are cached. ParseError contains a
@@ -243,15 +233,15 @@ fn parse_cached(json: &str) -> Result<PolicyDocument, ParseError> {
     // so the simpler design wins.
     let value: Value = serde_json::from_str(json)?;
     let parsed = parse_value(&value)?;
-    cache.insert(key, parsed.clone());
+    cache.insert(json.to_string(), parsed.clone());
     Ok(parsed)
 }
 
 /// Drop every entry from the parse cache. Tests use this to make
 /// assertions about parse-call counts independent of prior test
 /// runs in the same process; production code doesn't need it because
-/// the cache key is a content hash and stale entries can't return
-/// the wrong result.
+/// the cache is keyed by content and stale entries can't return the
+/// wrong result.
 #[doc(hidden)]
 pub fn _clear_parse_cache() {
     if let Some(cache) = PARSE_CACHE.get() {
@@ -477,5 +467,21 @@ impl<'de> Deserialize<'de> for PolicyDocument {
     {
         let value = Value::deserialize(deserializer)?;
         parse_value(&value).map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_cache_reuses_an_entry_per_document() {
+        let json = r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"cache:Test","Resource":"*"}]}"#;
+        let first = parse(json).unwrap();
+        let cache = PARSE_CACHE.get().expect("cache initialised");
+        let entries = cache.iter().filter(|e| e.key() == json).count();
+        assert_eq!(parse(json).unwrap(), first);
+        assert_eq!(cache.iter().filter(|e| e.key() == json).count(), entries);
+        assert_eq!(entries, 1);
     }
 }
