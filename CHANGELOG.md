@@ -1,4 +1,42 @@
 
+## 0.8.0 — 2026-10-17
+
+### Bug Fixes
+
+- **iam-policy:** Key the parse cache by document so it hits
+- **sts:** Fail closed on a session policy awsim cannot parse
+- **dynamodb:** Read and write an item in one write transaction
+- **opensearch:** Resolve each index of a list, honouring ignore_unavailable
+- **s3:** Apply response header overrides on GetObject
+- **core:** Refuse presigned requests missing a signed header
+- **iam:** Return DefaultVersionId from GetPolicy and ListPolicies
+- **iam:** Read awsQuery booleans and numbers such as SetAsDefault
+- **kms:** Check aliases and ciphertexts against their key ARN
+- **dynamodb:** Check batch, transact and PartiQL calls per table
+- **secretsmanager:** Check secrets by full ARN and per batch entry
+- **sns:** Check PublishBatch as sns:Publish
+- **sqs:** Check batch calls and queue lookups as AWS does
+- **lambda:** Check Invoke as lambda:InvokeFunction
+- **s3:** Check IAM action names, not API operation names
+- **kms:** Sign and verify with real RSA and ECC key material
+- **core:** Keep every repeated XML element, not only the last
+- **sts:** Admit a role's sessions where its trust policy names it
+- **s3:** Honor If-None-Match on PutObject
+- **s3:** Accept aws-chunked uploads and decode them in UploadPart
+- **core:** Prefer REST services' declared protocol over content-type
+- **opensearch:** Support knn clauses inside bool queries
+
+### Features
+
+- **dynamodb:** Supply dynamodb:LeadingKeys to IAM checks
+- **core:** Let services add condition keys to IAM checks
+- **core:** Let services return several IAM checks per request
+- **opensearch:** Support collapse and _source filtering in search
+
+### Tests
+
+- **enforcement-tests:** Cover dynamodb:LeadingKeys in session policies
+
 ## 0.7.1 — 2026-09-23
 
 ### Bug Fixes
