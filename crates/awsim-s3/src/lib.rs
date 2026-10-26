@@ -1378,6 +1378,25 @@ impl ServiceHandler for S3Service {
         authz::iam_checks(operation, input, ctx)
     }
 
+    fn iam_checks_with_context(
+        &self,
+        operation: &str,
+        input: &Value,
+        ctx: &RequestContext,
+    ) -> Vec<awsim_core::IamCheck> {
+        let listing = authz::listing_context(operation, input);
+        authz::iam_checks(operation, input, ctx)
+            .into_iter()
+            .map(|(action, resource)| {
+                let mut check = awsim_core::IamCheck::new(action, resource);
+                if check.action.starts_with("s3:ListBucket") {
+                    check.context = listing.clone();
+                }
+                check
+            })
+            .collect()
+    }
+
     fn restore(&self, data: &[u8]) -> Result<(), String> {
         use awsim_core::Snapshottable;
         use state::S3RegionSnapshot;

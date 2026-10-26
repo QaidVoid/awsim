@@ -806,6 +806,60 @@ async fn s3_bucket_arn_does_not_grant_object_access() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn s3_listing_is_checked_with_its_prefix() {
+    // A credential broker narrows a session's listing to a folder with
+    // `s3:prefix`, which AWS fills from the request's `prefix`.
+    let folder_only = r#"{
+        "Version":"2012-10-17",
+        "Statement":[{
+            "Effect":"Allow",
+            "Action":"s3:ListBucket",
+            "Resource":"arn:aws:s3:::test-bucket",
+            "Condition":{"StringLike":{"s3:prefix":["tenants/acme/*-attachments/*"]}}
+        }]
+    }"#;
+
+    let iam = Arc::new(awsim_iam::IamService::new());
+    let (srv, port) = start_server_unenforced(iam.clone()).await;
+    let admin_cfg = make_sdk_config(port, "admin", "admin");
+    s3_client(&admin_cfg)
+        .create_bucket()
+        .bucket("test-bucket")
+        .send()
+        .await
+        .expect("create_bucket");
+    let (ak, sk) = bootstrap_user(
+        &iam_client(&admin_cfg),
+        "broker",
+        &[("FolderOnly".into(), folder_only.into())],
+    )
+    .await;
+
+    srv.set_enforcement(true);
+    let s3 = s3_client(&make_sdk_config(port, &ak, &sk));
+
+    s3.list_objects_v2()
+        .bucket("test-bucket")
+        .prefix("tenants/acme/parts-attachments/2026/")
+        .send()
+        .await
+        .expect("a listing under the folder is allowed");
+    for prefix in [Some("tenants/globex/parts-attachments/"), None] {
+        let mut ask = s3.list_objects_v2().bucket("test-bucket");
+        if let Some(prefix) = prefix {
+            ask = ask.prefix(prefix);
+        }
+        let err = ask
+            .send()
+            .await
+            .expect_err("a listing elsewhere is refused");
+        assert!(sdk_err_is_access_denied(&err), "{prefix:?}: {err}");
+    }
+
+    srv.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn s3_operations_are_checked_as_iam_actions() {
     let policy = r#"{
         "Version":"2012-10-17",

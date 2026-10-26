@@ -168,6 +168,36 @@ fn copy_source_check(copy_source: &str, ctx: &RequestContext) -> Option<(String,
     Some((action.to_string(), arn::build_partition(ctx, "s3", path)))
 }
 
+/// The condition keys AWS adds to a listing's `s3:ListBucket` (or `s3:ListBucketVersions`)
+/// check from its query: `s3:prefix`, `s3:delimiter` and `s3:max-keys`, each only when the
+/// request names it, so a policy allowing a listing under some prefixes can be met.
+pub(crate) fn listing_context(
+    operation: &str,
+    input: &Value,
+) -> std::collections::HashMap<String, awsim_core::ContextValue> {
+    use awsim_core::ContextValue;
+    let mut context = std::collections::HashMap::new();
+    if !matches!(
+        operation,
+        "ListObjects" | "ListObjectsV2" | "ListObjectVersions"
+    ) {
+        return context;
+    }
+    for (param, key) in [("prefix", "s3:prefix"), ("delimiter", "s3:delimiter")] {
+        if let Some(value) = input.get(param).and_then(Value::as_str) {
+            context.insert(key.to_string(), ContextValue::String(value.to_string()));
+        }
+    }
+    let max_keys = input.get("max-keys").and_then(|v| {
+        v.as_f64()
+            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+    });
+    if let Some(max_keys) = max_keys {
+        context.insert("s3:max-keys".to_string(), ContextValue::Number(max_keys));
+    }
+    context
+}
+
 /// Every `(action, resource)` pair IAM must allow for an S3 request,
 /// per the S3 service authorization reference. Empty for operations
 /// awsim does not enforce.
