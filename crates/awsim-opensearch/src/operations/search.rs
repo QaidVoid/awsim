@@ -99,6 +99,15 @@ pub fn search_with(
 
     if let Some(sort_spec) = body.get("sort") {
         sort_hits(&mut hits, sort_spec);
+        // Each hit carries its sort values, as a `search_after` cursor is built from them.
+        let keys = sort_keys(sort_spec);
+        for hit in &mut hits {
+            let values: Vec<Value> = keys
+                .iter()
+                .map(|(key, _)| get_sort_value(hit, key))
+                .collect();
+            hit["sort"] = Value::Array(values);
+        }
     } else {
         hits.sort_by(|a, b| {
             let sa = a["_score"].as_f64().unwrap_or(0.0);
@@ -627,33 +636,38 @@ fn range_match(conditions: &Value, field_val: &Value) -> bool {
     true
 }
 
-/// Sort hits by the `sort` specification from the query body.
-///
-/// Supports array format: `["field1", {"field2": "asc"}]`
-/// and the special `_score` / `_doc` sort keys.
-fn sort_hits(hits: &mut [Value], sort_spec: &Value) {
-    let sort_keys: Vec<(String, bool)> = if let Some(arr) = sort_spec.as_array() {
-        arr.iter()
-            .map(|entry| {
-                if let Some(s) = entry.as_str() {
-                    (s.to_string(), false) // default asc for string entries
-                } else if let Some(obj) = entry.as_object() {
-                    if let Some((field, order)) = obj.iter().next() {
-                        let asc = order.as_str().map(|o| o == "asc").unwrap_or(false);
-                        (field.clone(), asc)
-                    } else {
-                        ("_score".to_string(), false)
-                    }
-                } else {
-                    ("_score".to_string(), false)
-                }
-            })
-            .collect()
-    } else if let Some(s) = sort_spec.as_str() {
-        vec![(s.to_string(), false)]
-    } else {
-        return;
+/// The keys of a `sort` specification, each with whether it is ascending: `"field"`,
+/// `{"field": "asc"}` or `{"field": {"order": "asc"}}`, in an array or alone. As in
+/// OpenSearch, `_score` is descending and any other key ascending unless an order is given.
+fn sort_keys(sort_spec: &Value) -> Vec<(String, bool)> {
+    let key = |entry: &Value| {
+        let (field, order) = match entry {
+            Value::String(field) => (field.clone(), None),
+            Value::Object(obj) => {
+                let (field, spec) = obj.iter().next()?;
+                let order = spec
+                    .as_str()
+                    .or_else(|| spec.get("order").and_then(Value::as_str));
+                (field.clone(), order)
+            }
+            _ => return None,
+        };
+        let asc = order.map_or(field != "_score", |o| o == "asc");
+        Some((field, asc))
     };
+    match sort_spec {
+        Value::Array(entries) => entries.iter().filter_map(key).collect(),
+        other => key(other).into_iter().collect(),
+    }
+}
+
+/// Sort hits by the `sort` specification from the query body, including the special `_score` and
+/// `_doc` keys.
+fn sort_hits(hits: &mut [Value], sort_spec: &Value) {
+    let sort_keys = sort_keys(sort_spec);
+    if sort_keys.is_empty() {
+        return;
+    }
 
     hits.sort_by(|a, b| {
         for (key, asc) in &sort_keys {
@@ -990,6 +1004,34 @@ mod tests {
             json!(["<mark>Python</mark> is great for data science"])
         );
         assert!(hit["_source"].get("body").is_none());
+    }
+
+    #[test]
+    fn test_sort_orders_and_values() {
+        let state = test_state();
+        let (_, found) = search(
+            &state,
+            "articles",
+            &json!({
+                "query": {"match_all": {}},
+                "sort": [{"_score": {"order": "desc"}}, {"title": {"order": "asc"}}]
+            }),
+        );
+        let hits = found["hits"]["hits"].as_array().unwrap();
+        let titles: Vec<&str> = hits
+            .iter()
+            .map(|h| h["_source"]["title"].as_str().unwrap())
+            .collect();
+        assert_eq!(titles, ["AWS Lambda", "Python Guide", "Rust Programming"]);
+        assert_eq!(hits[0]["sort"], json!([1.0, "AWS Lambda"]));
+        let (_, plain) = search(
+            &state,
+            "articles",
+            &json!({"query": {"match_all": {}}, "sort": ["title"]}),
+        );
+        assert_eq!(plain["hits"]["hits"][0]["_source"]["title"], "AWS Lambda");
+        let (_, unsorted) = search(&state, "articles", &json!({"query": {"match_all": {}}}));
+        assert!(unsorted["hits"]["hits"][0].get("sort").is_none());
     }
 
     #[test]
