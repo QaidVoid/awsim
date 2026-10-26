@@ -477,6 +477,17 @@ impl ServiceHandler for StsService {
         "sts"
     }
 
+    /// The live sessions it issued, and those Cognito Identity issued through the shared store.
+    fn snapshot(&self) -> Option<Vec<u8>> {
+        serde_json::to_vec(&self.sessions.live()).ok()
+    }
+
+    fn restore(&self, data: &[u8]) -> Result<(), String> {
+        let sessions = serde_json::from_slice(data).map_err(|e| e.to_string())?;
+        self.sessions.restore(sessions);
+        Ok(())
+    }
+
     fn protocol(&self) -> Protocol {
         Protocol::AwsQuery
     }

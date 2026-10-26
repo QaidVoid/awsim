@@ -17,11 +17,12 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 
 /// One issued assumed-role session: enough information to materialise
 /// the assumed-role principal ARN and to find the role's identity
 /// policies via an IAM lookup.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AssumedRoleSession {
     /// `ASIA...` access key returned to the caller. Used as the lookup
     /// key on subsequent signed requests.
@@ -118,6 +119,26 @@ impl StsSessionStore {
         Some(session)
     }
 
+    /// The sessions still live, as a snapshot keeps them, so credentials issued before a restart
+    /// keep working until they expire, as real AWS's do.
+    pub fn live(&self) -> Vec<AssumedRoleSession> {
+        let now = SystemTime::now();
+        self.sessions
+            .iter()
+            .filter(|entry| !entry.is_expired(now))
+            .map(|entry| entry.value().clone())
+            .collect()
+    }
+
+    /// Replaces the sessions held with the live ones of `sessions`, as a snapshot is restored.
+    pub fn restore(&self, sessions: Vec<AssumedRoleSession>) {
+        let now = SystemTime::now();
+        self.sessions.clear();
+        for session in sessions.into_iter().filter(|s| !s.is_expired(now)) {
+            self.record(session);
+        }
+    }
+
     /// Drop every expired entry. Cheap to call periodically from a
     /// background tick; not on the hot path.
     pub fn purge_expired(&self) {
@@ -185,6 +206,24 @@ mod tests {
         assert!(store.lookup("ASIA-EXP").is_none());
         // Side-effect: lookup also evicts.
         assert!(store.is_empty());
+    }
+
+    #[test]
+    fn live_sessions_survive_a_snapshot_round_trip() {
+        let store = StsSessionStore::new();
+        let past = SystemTime::now() - Duration::from_secs(10);
+        let future = SystemTime::now() + Duration::from_secs(60);
+        store.record(session("OLD", Some(past)));
+        store.record(session("NEW", Some(future)));
+        store.record(session("FOREVER", None));
+        let saved = serde_json::to_vec(&store.live()).unwrap();
+        let restored = StsSessionStore::new();
+        restored.record(session("STALE", None));
+        restored.restore(serde_json::from_slice(&saved).unwrap());
+        assert_eq!(restored.len(), 2);
+        assert!(restored.lookup("NEW").is_some());
+        assert!(restored.lookup("FOREVER").is_some());
+        assert!(restored.lookup("STALE").is_none());
     }
 
     #[test]
