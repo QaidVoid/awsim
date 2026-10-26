@@ -62,6 +62,7 @@ pub fn router(state: Arc<OpenSearchState>) -> Router {
         .route("/_mget", post(mget_global_handler))
         // Cat APIs
         .route("/_cat/indices", get(cat_indices))
+        .route("/_cat/indices/{pattern}", get(cat_indices_named))
         // Bulk API
         .route("/_bulk", post(bulk_handler))
         // Index operations
@@ -123,7 +124,15 @@ async fn cluster_info() -> Json<Value> {
 }
 
 async fn cat_indices(State(state): State<Arc<OpenSearchState>>) -> Json<Value> {
-    let (_, body) = operations::index::cat_indices(&state);
+    let (_, body) = operations::index::cat_indices(&state, None);
+    Json(body)
+}
+
+async fn cat_indices_named(
+    State(state): State<Arc<OpenSearchState>>,
+    Path(pattern): Path<String>,
+) -> Json<Value> {
+    let (_, body) = operations::index::cat_indices(&state, Some(&pattern));
     Json(body)
 }
 

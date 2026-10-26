@@ -138,10 +138,18 @@ pub fn index_exists(state: &OpenSearchState, index_name: &str) -> u16 {
 }
 
 /// List all indices (cat/indices).
-pub fn cat_indices(state: &OpenSearchState) -> (u16, Value) {
+/// Every index, or those `pattern` names: a comma list of names, each with `*` and `?` wildcards.
+pub fn cat_indices(state: &OpenSearchState, pattern: Option<&str>) -> (u16, Value) {
+    let named = |name: &str| {
+        pattern.is_none_or(|p| {
+            p.split(',')
+                .any(|one| super::search::wildcard_match(one.trim(), name))
+        })
+    };
     let indices: Vec<Value> = state
         .list_indices()
         .into_iter()
+        .filter(|(name, _)| named(name))
         .map(|(name, _meta)| {
             let count = state.count_docs(&name).unwrap_or(0);
             json!({

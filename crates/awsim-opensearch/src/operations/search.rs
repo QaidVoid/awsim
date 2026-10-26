@@ -3,13 +3,16 @@ use std::collections::HashSet;
 use serde_json::{Map, Value, json};
 
 use super::index::index_not_found;
+use super::text::{self, Fuzziness};
 use crate::state::OpenSearchState;
 
 /// Search documents in an index (or multiple indices).
 ///
 /// Supports:
-/// - `match` queries (single field)
-/// - `multi_match` queries (multiple fields)
+/// - `match` queries (single field) and `multi_match` queries (multiple fields), on the terms
+///   of the standard analyzer, with `fuzziness` and `prefix_length`
+/// - `min_score`, and `highlight` with `pre_tags`, `post_tags`, `fragment_size` and
+///   `number_of_fragments`
 /// - `match_all` queries
 /// - `bool` queries with `must`, `should`, `filter`
 /// - `term` queries (exact match)
@@ -90,6 +93,10 @@ pub fn search_with(
         });
     }
 
+    if let Some(least) = body.get("min_score").and_then(Value::as_f64) {
+        hits.retain(|hit| hit["_score"].as_f64().unwrap_or(0.0) >= least);
+    }
+
     if let Some(sort_spec) = body.get("sort") {
         sort_hits(&mut hits, sort_spec);
     } else {
@@ -110,6 +117,9 @@ pub fn search_with(
         .skip(from)
         .take(size)
         .map(|mut hit| {
+            if let Some(found) = text::highlight(body, &query, &hit["_source"]) {
+                hit["highlight"] = found;
+            }
             if let Some(obj) = hit.as_object_mut()
                 && let Some(source) = obj.remove("_source")
                 && let Some(filtered) = filter_source(source, body.get("_source"))
@@ -218,7 +228,7 @@ fn resolve_indices(state: &OpenSearchState, pattern: &str) -> (Vec<String>, Opti
 }
 
 /// Simple wildcard match supporting `*` (any chars) and `?` (single char).
-fn wildcard_match(pattern: &str, text: &str) -> bool {
+pub(crate) fn wildcard_match(pattern: &str, text: &str) -> bool {
     let p: Vec<char> = pattern.chars().collect();
     let t: Vec<char> = text.chars().collect();
     wildcard_match_inner(&p, &t, 0, 0)
@@ -258,9 +268,10 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
                     .as_str()
                     .or_else(|| match_val.get("query").and_then(|q| q.as_str()))
                     .unwrap_or("");
+                let fuzziness = match_val.as_object().and_then(Fuzziness::of);
                 if let Some(field_val) = get_nested_field(doc, field) {
                     let field_str = value_to_string(field_val);
-                    total_score += text_match_score(query_text, &field_str);
+                    total_score += text::match_score(query_text, &field_str, fuzziness);
                 }
             }
             return total_score;
@@ -269,6 +280,7 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
         // multi_match: { "query": "text", "fields": ["f1", "f2"] }
         if let Some(mm) = obj.get("multi_match").and_then(|m| m.as_object()) {
             let query_text = mm.get("query").and_then(|q| q.as_str()).unwrap_or("");
+            let fuzziness = Fuzziness::of(mm);
             let fields = mm
                 .get("fields")
                 .and_then(|f| f.as_array())
@@ -287,7 +299,7 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
 
                 if let Some(field_val) = get_nested_field(doc, field_name) {
                     let field_str = value_to_string(field_val);
-                    let score = text_match_score(query_text, &field_str) * boost;
+                    let score = text::match_score(query_text, &field_str, fuzziness) * boost;
                     if score > best_score {
                         best_score = score;
                     }
@@ -615,28 +627,6 @@ fn range_match(conditions: &Value, field_val: &Value) -> bool {
     true
 }
 
-/// Simple text matching score.
-fn text_match_score(query: &str, field: &str) -> f64 {
-    let query_lower = query.to_lowercase();
-    let field_lower = field.to_lowercase();
-    let terms: Vec<&str> = query_lower.split_whitespace().collect();
-
-    if terms.is_empty() {
-        return 0.0;
-    }
-
-    let matched = terms
-        .iter()
-        .filter(|term| field_lower.contains(*term))
-        .count();
-
-    if matched == 0 {
-        return 0.0;
-    }
-
-    (matched as f64) / (terms.len() as f64)
-}
-
 /// Sort hits by the `sort` specification from the query body.
 ///
 /// Supports array format: `["field1", {"field2": "asc"}]`
@@ -954,6 +944,52 @@ mod tests {
             .put_doc("articles", "3", &json!({"title": "AWS Lambda", "body": "Serverless computing with AWS Lambda and Rust", "tags": ["aws", "lambda", "rust"]}))
             .unwrap();
         state
+    }
+
+    #[test]
+    fn test_escaped_typo_min_score_and_highlight() {
+        let state = test_state();
+        let ask = |query: Value| search(&state, "articles", &query).1;
+        let titles = |found: &Value| -> Vec<String> {
+            found["hits"]["hits"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|h| h["_source"]["title"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let words = |text: &str| json!({"multi_match": {"query": text, "fields": ["title^3", "body"], "fuzziness": "AUTO", "prefix_length": 2}});
+        // An escaped query matches on its terms, as OpenSearch's analyzer reads it.
+        assert_eq!(
+            titles(&ask(json!({"query": words(r"AWS\-Lambda")}))),
+            ["AWS Lambda"]
+        );
+        // A typo within the allowed edits still matches, below an exact match.
+        let typo = ask(json!({"query": words("pythn")}));
+        assert_eq!(titles(&typo), ["Python Guide"]);
+        // min_score drops weaker hits and the total with them.
+        let all = ask(json!({"query": words("rust systems")}));
+        assert_eq!(all["hits"]["total"]["value"], 2);
+        let best = all["hits"]["max_score"].as_f64().unwrap();
+        let strong = ask(json!({"query": words("rust systems"), "min_score": best}));
+        assert_eq!(titles(&strong), ["Rust Programming"]);
+        assert_eq!(strong["hits"]["total"]["value"], 1);
+        // Highlights mark the matched words, typos included.
+        let lit = ask(json!({
+            "query": {"bool": {"must": [words("pythn")], "filter": [{"exists": {"field": "title"}}]}},
+            "highlight": {"pre_tags": ["<mark>"], "post_tags": ["</mark>"], "fields": {"title": {}, "body": {}}},
+            "_source": ["title"]
+        }));
+        let hit = &lit["hits"]["hits"][0];
+        assert_eq!(
+            hit["highlight"]["title"],
+            json!(["<mark>Python</mark> Guide"])
+        );
+        assert_eq!(
+            hit["highlight"]["body"],
+            json!(["<mark>Python</mark> is great for data science"])
+        );
+        assert!(hit["_source"].get("body").is_none());
     }
 
     #[test]
