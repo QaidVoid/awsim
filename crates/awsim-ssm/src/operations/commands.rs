@@ -101,6 +101,7 @@ pub fn send_command(
         created_time: now,
         std_out: String::new(),
         std_err: String::new(),
+        invocations: Vec::new(),
     };
 
     info!(command_id = %command_id, document_name, "SendCommand (stub)");
@@ -167,6 +168,13 @@ pub fn get_command_invocation(
             format!("Command {command_id} not found"),
         )
     })?;
+
+    if !command.invocations.is_empty() {
+        return crate::operations::run_command::get_invocation(
+            &command,
+            input["InstanceId"].as_str(),
+        );
+    }
 
     let instance_id = input["InstanceId"]
         .as_str()

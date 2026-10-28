@@ -57,7 +57,8 @@ mod tests {
     use serde_json::json;
 
     use super::handler::SsmService;
-    use awsim_core::ServiceHandler;
+    use awsim_core::{AwsError, ServiceHandler};
+    use serde_json::Value;
 
     fn ctx() -> RequestContext {
         RequestContext::new("ssm", "us-east-1")
@@ -896,5 +897,234 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs()
+    }
+
+    // -----------------------------------------------------------------------
+    // Run Command through instance agents
+    // -----------------------------------------------------------------------
+
+    struct FakeAgents {
+        polls: dashmap::DashMap<i64, u32>,
+        scripts: dashmap::DashMap<i64, String>,
+    }
+
+    impl FakeAgents {
+        fn new() -> std::sync::Arc<Self> {
+            std::sync::Arc::new(Self {
+                polls: dashmap::DashMap::new(),
+                scripts: dashmap::DashMap::new(),
+            })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl awsim_core::InstanceAgents for FakeAgents {
+        fn managed_instances(&self, _: &str, _: &str) -> Vec<awsim_core::ManagedInstance> {
+            ["i-0000000a", "i-0000000b"]
+                .iter()
+                .map(|id| awsim_core::ManagedInstance {
+                    instance_id: id.to_string(),
+                    ping_status: if *id == "i-0000000a" {
+                        "Online"
+                    } else {
+                        "ConnectionLost"
+                    }
+                    .to_string(),
+                    last_ping: 1,
+                    ip_address: "192.168.122.50".to_string(),
+                    computer_name: id.to_string(),
+                    platform_name: "Ubuntu".to_string(),
+                    platform_version: "24.04".to_string(),
+                    iam_role: "owner".to_string(),
+                })
+                .collect()
+        }
+
+        async fn run_shell(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            script: &str,
+        ) -> Result<i64, AwsError> {
+            let pid = self.scripts.len() as i64 + 1;
+            self.scripts.insert(pid, script.to_string());
+            Ok(pid)
+        }
+
+        async fn command_exit(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            handle: i64,
+        ) -> Result<Option<awsim_core::CommandExit>, AwsError> {
+            let mut polls = self.polls.entry(handle).or_default();
+            *polls += 1;
+            if *polls < 2 {
+                return Ok(None);
+            }
+            if *polls > 2 {
+                return Err(AwsError::internal("Invalid parameter 'pid'"));
+            }
+            let script = self.scripts.get(&handle).unwrap().clone();
+            let failed = script.contains("false");
+            Ok(Some(awsim_core::CommandExit {
+                exit_code: if failed { 1 } else { 0 },
+                stdout: format!("ran {}", script.trim()),
+                stderr: if failed {
+                    "boom".to_string()
+                } else {
+                    String::new()
+                },
+            }))
+        }
+    }
+
+    fn send(svc: &SsmService, instance: &str, commands: &[&str]) -> Result<String, AwsError> {
+        let sent = block_on(svc.handle(
+            "SendCommand",
+            json!({
+                "DocumentName": "AWS-RunShellScript",
+                "InstanceIds": [instance],
+                "Parameters": { "commands": commands },
+                "TimeoutSeconds": 600,
+            }),
+            &ctx(),
+        ))?;
+        Ok(sent["Command"]["CommandId"].as_str().unwrap().to_string())
+    }
+
+    fn invocation(svc: &SsmService, command_id: &str) -> Value {
+        block_on(svc.handle(
+            "GetCommandInvocation",
+            json!({ "CommandId": command_id, "InstanceId": "i-0000000a" }),
+            &ctx(),
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn shell_command_runs_on_agent_and_reports_output() {
+        let svc = SsmService::new().with_instance_agents(FakeAgents::new());
+        let command_id = send(&svc, "i-0000000a", &["echo one", "echo two"]).unwrap();
+
+        let first = invocation(&svc, &command_id);
+        assert_eq!(first["Status"], "InProgress");
+        assert_eq!(first["ResponseCode"], -1);
+
+        let done = invocation(&svc, &command_id);
+        assert_eq!(done["Status"], "Success");
+        assert_eq!(done["ResponseCode"], 0);
+        assert_eq!(done["StandardOutputContent"], "ran echo one\necho two");
+
+        // The agent has forgotten the process; the stored result stands.
+        let again = invocation(&svc, &command_id);
+        assert_eq!(again["Status"], "Success");
+
+        // The synthetic tick leaves real commands alone.
+        block_on(svc.tick());
+        assert_eq!(invocation(&svc, &command_id)["Status"], "Success");
+
+        let listed = block_on(svc.handle(
+            "ListCommandInvocations",
+            json!({ "CommandId": command_id, "Details": true }),
+            &ctx(),
+        ))
+        .unwrap();
+        let item = &listed["CommandInvocations"][0];
+        assert_eq!(item["InstanceId"], "i-0000000a");
+        assert_eq!(item["CommandPlugins"][0]["ResponseCode"], 0);
+
+        let commands =
+            block_on(svc.handle("ListCommands", json!({ "CommandId": command_id }), &ctx()))
+                .unwrap();
+        assert_eq!(commands["Commands"][0]["Status"], "Success");
+    }
+
+    #[test]
+    fn failing_shell_command_reports_exit_code_and_stderr() {
+        let svc = SsmService::new().with_instance_agents(FakeAgents::new());
+        let command_id = send(&svc, "i-0000000a", &["false"]).unwrap();
+        invocation(&svc, &command_id);
+        let done = invocation(&svc, &command_id);
+        assert_eq!(done["Status"], "Failed");
+        assert_eq!(done["ResponseCode"], 1);
+        assert_eq!(done["StandardErrorContent"], "boom");
+    }
+
+    #[test]
+    fn shell_command_to_offline_instance_is_refused() {
+        let svc = SsmService::new().with_instance_agents(FakeAgents::new());
+        for instance in ["i-0000000b", "i-0000000c"] {
+            let err = send(&svc, instance, &["true"]).unwrap_err();
+            assert_eq!(err.code, "InvalidInstanceId");
+        }
+        let err = block_on(svc.handle(
+            "SendCommand",
+            json!({
+                "DocumentName": "AWS-RunShellScript",
+                "InstanceIds": ["i-0000000a"],
+                "Parameters": {},
+            }),
+            &ctx(),
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameters");
+    }
+
+    #[test]
+    fn unknown_invocation_instance_does_not_exist() {
+        let svc = SsmService::new().with_instance_agents(FakeAgents::new());
+        let command_id = send(&svc, "i-0000000a", &["true"]).unwrap();
+        let err = block_on(svc.handle(
+            "GetCommandInvocation",
+            json!({ "CommandId": command_id, "InstanceId": "i-0000000b" }),
+            &ctx(),
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, "InvocationDoesNotExist");
+    }
+
+    #[test]
+    fn instance_information_lists_agents_with_filters() {
+        let svc = SsmService::new().with_instance_agents(FakeAgents::new());
+        let all = block_on(svc.handle("DescribeInstanceInformation", json!({}), &ctx())).unwrap();
+        assert_eq!(all["InstanceInformationList"].as_array().unwrap().len(), 2);
+
+        let one = block_on(svc.handle(
+            "DescribeInstanceInformation",
+            json!({ "Filters": [{ "Key": "InstanceIds", "Values": ["i-0000000a"] }] }),
+            &ctx(),
+        ))
+        .unwrap();
+        let list = one["InstanceInformationList"].as_array().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0]["PingStatus"], "Online");
+        assert_eq!(list[0]["ResourceType"], "EC2Instance");
+        assert_eq!(list[0]["IPAddress"], "192.168.122.50");
+
+        let legacy = block_on(svc.handle(
+            "DescribeInstanceInformation",
+            json!({ "InstanceInformationFilterList": [{ "key": "PingStatus", "valueSet": ["ConnectionLost"] }] }),
+            &ctx(),
+        ))
+        .unwrap();
+        assert_eq!(
+            legacy["InstanceInformationList"][0]["InstanceId"],
+            "i-0000000b"
+        );
+    }
+
+    #[test]
+    fn without_agents_instance_information_is_unchanged() {
+        let svc = SsmService::new();
+        let all = block_on(svc.handle("DescribeInstanceInformation", json!({}), &ctx())).unwrap();
+        assert!(
+            all["InstanceInformationList"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 }

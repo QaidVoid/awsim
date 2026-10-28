@@ -1,24 +1,58 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler};
+use std::sync::Arc;
+
+use awsim_core::{
+    AccountRegionStore, AwsError, InstanceAgents, Protocol, RequestContext, ServiceHandler,
+};
 use serde_json::Value;
 use tracing::debug;
 
 use crate::operations::{
     activations, automation, commands, compliance, documents, maintenance, opsmeta, parameters,
-    patch_baselines, policies, sessions, tags,
+    patch_baselines, policies, run_command, sessions, tags,
 };
 use crate::state::SsmState;
 
 /// The SSM Parameter Store service handler.
 pub struct SsmService {
     store: AccountRegionStore<SsmState>,
+    agents: Option<Arc<dyn InstanceAgents>>,
 }
 
 impl SsmService {
     pub fn new() -> Self {
         Self {
             store: AccountRegionStore::new(),
+            agents: None,
+        }
+    }
+
+    /// Run `AWS-RunShellScript` commands for real through the agents on
+    /// EC2 instances, and list those instances in
+    /// `DescribeInstanceInformation`.
+    pub fn with_instance_agents(mut self, agents: Arc<dyn InstanceAgents>) -> Self {
+        self.agents = Some(agents);
+        self
+    }
+
+    /// Settle unfinished real invocations of the commands a read is about.
+    async fn settle(&self, state: &SsmState, input: &Value, ctx: &RequestContext) {
+        let Some(agents) = &self.agents else {
+            return;
+        };
+        let command_ids: Vec<String> = match input["CommandId"].as_str() {
+            Some(id) => vec![id.to_string()],
+            None => state
+                .commands
+                .iter()
+                .filter(|c| c.status == "InProgress" && !c.invocations.is_empty())
+                .map(|c| c.command_id.clone())
+                .collect(),
+        };
+        let instance_id = input["InstanceId"].as_str();
+        for id in command_ids {
+            run_command::settle(state, &id, instance_id, ctx, agents.as_ref()).await;
         }
     }
 
@@ -73,9 +107,23 @@ impl ServiceHandler for SsmService {
             "PutInventory" => commands::put_inventory(&state, &input, ctx),
             "GetInventory" => commands::get_inventory(&state, &input, ctx),
             "GetInventorySchema" => commands::get_inventory_schema(&state, &input, ctx),
-            "SendCommand" => commands::send_command(&state, &input, ctx),
-            "ListCommands" => commands::list_commands(&state, &input, ctx),
-            "GetCommandInvocation" => commands::get_command_invocation(&state, &input, ctx),
+            "SendCommand" => match &self.agents {
+                Some(agents)
+                    if input["DocumentName"].as_str() == Some(run_command::SHELL_DOCUMENT)
+                        && !run_command::target_instance_ids(&input).is_empty() =>
+                {
+                    run_command::send_command(&state, &input, ctx, agents.as_ref()).await
+                }
+                _ => commands::send_command(&state, &input, ctx),
+            },
+            "ListCommands" => {
+                self.settle(&state, &input, ctx).await;
+                commands::list_commands(&state, &input, ctx)
+            }
+            "GetCommandInvocation" => {
+                self.settle(&state, &input, ctx).await;
+                commands::get_command_invocation(&state, &input, ctx)
+            }
 
             // Documents
             "CreateDocument" => documents::create_document(&state, &input, ctx),
@@ -194,7 +242,16 @@ impl ServiceHandler for SsmService {
             "DeleteActivation" => activations::delete_activation(&state, &input, ctx),
             "DescribeActivations" => activations::describe_activations(&state, &input, ctx),
             "DescribeInstanceInformation" => {
-                activations::describe_instance_information(&state, &input, ctx)
+                let ec2 = self
+                    .agents
+                    .as_ref()
+                    .map(|a| {
+                        run_command::instance_information(
+                            &a.managed_instances(&ctx.account_id, &ctx.region),
+                        )
+                    })
+                    .unwrap_or_default();
+                activations::describe_instance_information(&state, &input, ctx, ec2)
             }
             "DescribeInstanceProperties" => {
                 activations::describe_instance_properties(&state, &input, ctx)
@@ -285,7 +342,10 @@ impl ServiceHandler for SsmService {
 
             // Commands extras
             "CancelCommand" => maintenance::cancel_command(&state, &input, ctx),
-            "ListCommandInvocations" => maintenance::list_command_invocations(&state, &input, ctx),
+            "ListCommandInvocations" => {
+                self.settle(&state, &input, ctx).await;
+                maintenance::list_command_invocations(&state, &input, ctx)
+            }
 
             // Parameter / document extras
             "UnlabelParameterVersion" => {
@@ -318,6 +378,10 @@ impl ServiceHandler for SsmService {
         for (_key, state) in self.store.iter_all() {
             for mut entry in state.commands.iter_mut() {
                 let c = entry.value_mut();
+                // Commands that ran on a real agent settle from its answer.
+                if !c.invocations.is_empty() {
+                    continue;
+                }
                 let age = now.saturating_sub(c.created_time);
                 match c.status.as_str() {
                     "Pending" if age >= COMMAND_SUCCESS_SECS => {

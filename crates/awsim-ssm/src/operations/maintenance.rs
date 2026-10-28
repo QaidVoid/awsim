@@ -1123,20 +1123,25 @@ pub fn list_command_invocations(
     _ctx: &RequestContext,
 ) -> Result<Value, AwsError> {
     let command_id = input["CommandId"].as_str();
+    let instance_id = input["InstanceId"].as_str();
+    let details = input["Details"].as_bool().unwrap_or(false);
     let max_results = input["MaxResults"].as_u64().unwrap_or(50) as usize;
 
     let invocations: Vec<Value> = state
         .commands
         .iter()
         .filter(|e| command_id.is_none_or(|id| e.command_id == id))
-        .map(|e| {
+        .flat_map(|e| {
             let c = e.value();
+            if !c.invocations.is_empty() {
+                return crate::operations::run_command::list_invocations(c, instance_id, details);
+            }
             let instance_id = c
                 .instance_ids
                 .first()
                 .cloned()
                 .unwrap_or_else(|| "i-0000000000000000".to_string());
-            json!({
+            vec![json!({
                 "CommandId": c.command_id,
                 "InstanceId": instance_id,
                 "DocumentName": c.document_name,
@@ -1144,7 +1149,7 @@ pub fn list_command_invocations(
                 "StandardOutputContent": c.std_out,
                 "StandardErrorContent": c.std_err,
                 "RequestedDateTime": c.created_time,
-            })
+            })]
         })
         .take(max_results)
         .collect();

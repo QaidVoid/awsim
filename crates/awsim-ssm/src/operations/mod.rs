@@ -8,5 +8,6 @@ pub mod opsmeta;
 pub mod parameters;
 pub mod patch_baselines;
 pub mod policies;
+pub mod run_command;
 pub mod sessions;
 pub mod tags;

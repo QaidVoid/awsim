@@ -62,6 +62,28 @@ pub struct Command {
     pub std_out: String,
     /// Synthetic stderr (empty for the success path).
     pub std_err: String,
+    /// One per target instance when the command really ran through an
+    /// instance agent. Empty for the synthetic path.
+    #[serde(default)]
+    pub invocations: Vec<Invocation>,
+}
+
+/// A command's run on one instance.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Invocation {
+    pub instance_id: String,
+    /// The agent's handle for the running process.
+    pub handle: i64,
+    /// `InProgress`, `Success`, `Failed` or `TimedOut`.
+    pub status: String,
+    /// The exit code, or -1 until there is one.
+    pub response_code: i32,
+    pub std_out: String,
+    pub std_err: String,
+    /// Unix milliseconds.
+    pub started: u64,
+    pub ended: Option<u64>,
+    pub timeout_secs: u64,
 }
 
 /// An SSM Document.

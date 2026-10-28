@@ -103,38 +103,89 @@ pub fn describe_activations(
     Ok(json!({ "ActivationList": items }))
 }
 
+/// `DescribeInstanceInformation` over hybrid activations plus `ec2`, the
+/// entries for EC2 instances whose agent answers.
 pub fn describe_instance_information(
     state: &SsmState,
     input: &Value,
     _ctx: &RequestContext,
+    ec2: Vec<Value>,
 ) -> Result<Value, AwsError> {
     let max_results = input["MaxResults"].as_u64().unwrap_or(50) as usize;
+    let filters = instance_information_filters(input);
 
-    let items: Vec<Value> = state
-        .managed_instances
-        .iter()
-        .map(|e| {
-            let m = e.value();
-            json!({
-                "InstanceId": m.instance_id,
-                "PingStatus": m.ping_status,
-                "LastPingDateTime": m.last_ping_date_time,
-                "AgentVersion": m.agent_version,
-                "PlatformType": m.platform_type,
-                "PlatformName": m.platform_name,
-                "PlatformVersion": m.platform_version,
-                "IamRole": m.iam_role,
-                "RegistrationDate": m.registration_date,
-                "ResourceType": m.resource_type,
-                "Name": m.name,
-                "ComputerName": m.computer_name,
-                "IPAddress": m.ip_address,
+    let hybrid = state.managed_instances.iter().map(|e| {
+        let m = e.value();
+        json!({
+            "InstanceId": m.instance_id,
+            "PingStatus": m.ping_status,
+            "LastPingDateTime": m.last_ping_date_time,
+            "AgentVersion": m.agent_version,
+            "PlatformType": m.platform_type,
+            "PlatformName": m.platform_name,
+            "PlatformVersion": m.platform_version,
+            "IamRole": m.iam_role,
+            "RegistrationDate": m.registration_date,
+            "ResourceType": m.resource_type,
+            "Name": m.name,
+            "ComputerName": m.computer_name,
+            "IPAddress": m.ip_address,
+        })
+    });
+    let items: Vec<Value> = ec2
+        .into_iter()
+        .chain(hybrid)
+        .filter(|item| {
+            filters.iter().all(|(field, values)| {
+                item[field.as_str()]
+                    .as_str()
+                    .is_some_and(|v| values.iter().any(|w| w == v))
             })
         })
         .take(max_results)
         .collect();
 
     Ok(json!({ "InstanceInformationList": items }))
+}
+
+/// The `InstanceIds`, `PingStatus` and `PlatformTypes` filters, from either
+/// `Filters` or the older `InstanceInformationFilterList`, as response
+/// field names and accepted values.
+fn instance_information_filters(input: &Value) -> Vec<(String, Vec<String>)> {
+    let strings = |v: &Value| -> Vec<String> {
+        v.as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|s| s.as_str().map(String::from))
+            .collect()
+    };
+    let field = |key: &str| match key {
+        "InstanceIds" => Some("InstanceId"),
+        "PingStatus" => Some("PingStatus"),
+        "PlatformTypes" | "PlatformType" => Some("PlatformType"),
+        _ => None,
+    };
+    let modern = input["Filters"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|f| {
+            Some((
+                field(f["Key"].as_str()?)?.to_string(),
+                strings(&f["Values"]),
+            ))
+        });
+    let legacy = input["InstanceInformationFilterList"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|f| {
+            Some((
+                field(f["key"].as_str()?)?.to_string(),
+                strings(&f["valueSet"]),
+            ))
+        });
+    modern.chain(legacy).collect()
 }
 
 pub fn deregister_managed_instance(
