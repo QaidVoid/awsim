@@ -2176,6 +2176,7 @@ version = "0.8.0"
 dependencies = [
  "async-trait",
  "awsim-core",
+ "awsim-ssm",
  "base64",
  "dashmap",
  "flate2",
