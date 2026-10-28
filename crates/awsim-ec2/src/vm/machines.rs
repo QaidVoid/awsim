@@ -17,6 +17,11 @@ use crate::operations::instances::{
     LaunchRequest, collect_id_param, instance_to_value, launched_with_token, new_instance,
     release_volumes,
 };
+use crate::operations::volumes::{
+    CreatePlan, commit_attach_volume, commit_create_volume, commit_delete_volume,
+    commit_detach_volume, device_serial, plan_attach_volume, plan_create_volume,
+    plan_delete_volume, plan_detach_volume,
+};
 use crate::state::{Ec2State, Instance};
 
 /// Seconds between reconcile passes.
@@ -432,6 +437,74 @@ impl Machines {
             changes.push(state_change(&i.instance_id, &i.state, now));
         }
         Ok(json!({ "instancesSet": { "item": changes } }))
+    }
+
+    // -----------------------------------------------------------------------
+    // Volumes
+    // -----------------------------------------------------------------------
+
+    pub(crate) async fn create_volume(
+        &self,
+        state: &Ec2State,
+        input: &Value,
+        ctx: &RequestContext,
+    ) -> Result<Value, AwsError> {
+        match plan_create_volume(state, input, ctx)? {
+            CreatePlan::Existing(value) => Ok(value),
+            CreatePlan::New(volume) => {
+                self.hv
+                    .create_volume(&volume.volume_id, volume.size_gib)
+                    .await
+                    .map_err(|e| {
+                        internal_error(format!("cannot create {}: {e}", volume.volume_id))
+                    })?;
+                Ok(commit_create_volume(state, *volume))
+            }
+        }
+    }
+
+    pub(crate) async fn delete_volume(
+        &self,
+        state: &Ec2State,
+        input: &Value,
+    ) -> Result<Value, AwsError> {
+        let volume_id = plan_delete_volume(state, input)?;
+        self.hv
+            .delete_volume(&volume_id)
+            .await
+            .map_err(|e| internal_error(format!("cannot delete {volume_id}: {e}")))?;
+        Ok(commit_delete_volume(state, &volume_id))
+    }
+
+    pub(crate) async fn attach_volume(
+        &self,
+        state: &Ec2State,
+        input: &Value,
+    ) -> Result<Value, AwsError> {
+        let plan = plan_attach_volume(state, input)?;
+        if plan.vm {
+            let serial = device_serial(&plan.device).unwrap_or_default();
+            self.hv
+                .attach_volume(&plan.instance_id, &plan.volume_id, serial)
+                .await
+                .map_err(|e| internal_error(format!("cannot attach {}: {e}", plan.volume_id)))?;
+        }
+        Ok(commit_attach_volume(state, &plan))
+    }
+
+    pub(crate) async fn detach_volume(
+        &self,
+        state: &Ec2State,
+        input: &Value,
+    ) -> Result<Value, AwsError> {
+        let plan = plan_detach_volume(state, input)?;
+        if plan.vm {
+            self.hv
+                .detach_volume(&plan.instance_id, &plan.volume_id)
+                .await
+                .map_err(|e| internal_error(format!("cannot detach {}: {e}", plan.volume_id)))?;
+        }
+        Ok(commit_detach_volume(state, &plan))
     }
 
     // -----------------------------------------------------------------------
@@ -999,5 +1072,82 @@ pub(crate) mod tests {
         let (script, stdin) = fake.last_exec(&id).unwrap();
         assert!(script.contains(GUEST_CREDENTIALS));
         assert!(stdin.contains("aws_session_token = token-"));
+    }
+
+    #[tokio::test]
+    async fn volumes_are_files_hot_plugged_by_device_name() {
+        let fake = Arc::new(FakeHypervisor::default());
+        let m = machines(fake.clone(), 2);
+        let state = m.store.get("000000000000", "us-east-1");
+        let id = launch(&m, json!({})).await;
+        m.reconcile().await;
+
+        let created = m
+            .create_volume(
+                &state,
+                &json!({ "AvailabilityZone": "us-east-1a", "Size": "1", "VolumeType": "gp3" }),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        let volume = created["volumeId"].as_str().unwrap().to_string();
+        assert!(fake.volume_exists(&volume));
+
+        m.attach_volume(
+            &state,
+            &json!({ "VolumeId": volume, "InstanceId": id, "Device": "/dev/sdh" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            fake.attached(&id),
+            vec![(volume.clone(), "sdh".to_string())]
+        );
+        assert_eq!(state.volumes.get(&volume).unwrap().state, "in-use");
+
+        let err = m
+            .delete_volume(&state, &json!({ "VolumeId": volume }))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, "VolumeInUse");
+        assert!(fake.volume_exists(&volume));
+
+        m.detach_volume(&state, &json!({ "VolumeId": volume }))
+            .await
+            .unwrap();
+        assert!(fake.attached(&id).is_empty());
+        m.delete_volume(&state, &json!({ "VolumeId": volume }))
+            .await
+            .unwrap();
+        assert!(!fake.volume_exists(&volume));
+    }
+
+    #[tokio::test]
+    async fn terminate_keeps_attached_volume_files() {
+        let fake = Arc::new(FakeHypervisor::default());
+        let m = machines(fake.clone(), 2);
+        let state = m.store.get("000000000000", "us-east-1");
+        let id = launch(&m, json!({})).await;
+        m.reconcile().await;
+        let created = m
+            .create_volume(
+                &state,
+                &json!({ "AvailabilityZone": "us-east-1a", "Size": "1" }),
+                &ctx(),
+            )
+            .await
+            .unwrap();
+        let volume = created["volumeId"].as_str().unwrap().to_string();
+        m.attach_volume(
+            &state,
+            &json!({ "VolumeId": volume, "InstanceId": id, "Device": "/dev/sdh" }),
+        )
+        .await
+        .unwrap();
+        m.terminate_instances(&state, &json!({ "InstanceId": [id] }))
+            .await
+            .unwrap();
+        assert!(fake.volume_exists(&volume));
+        assert_eq!(state.volumes.get(&volume).unwrap().state, "available");
     }
 }

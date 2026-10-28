@@ -244,12 +244,35 @@ pub(crate) struct AttachPlan {
     pub volume_id: String,
     pub instance_id: String,
     pub device: String,
+    /// Whether a virtual machine backs the instance.
+    pub vm: bool,
+}
+
+/// The guest's name for a device: `/dev/sdh` is `sdh`. `None` for a
+/// name EC2 would refuse.
+pub(crate) fn device_serial(device: &str) -> Option<&str> {
+    let name = device.strip_prefix("/dev/")?;
+    let letters = name
+        .strip_prefix("xvd")
+        .or_else(|| name.strip_prefix("sd"))
+        .or_else(|| name.strip_prefix("hd"))?;
+    let head = letters.trim_end_matches(|c: char| c.is_ascii_digit());
+    let ok = (1..=2).contains(&head.len()) && head.chars().all(|c| c.is_ascii_lowercase());
+    ok.then_some(name)
 }
 
 pub(crate) fn plan_attach_volume(state: &Ec2State, input: &Value) -> Result<AttachPlan, AwsError> {
     let volume_id = crate::operations::require_str(input, "VolumeId")?;
     let instance_id = crate::operations::require_str(input, "InstanceId")?;
     let device = crate::operations::require_str(input, "Device")?;
+    if device_serial(device).is_none() {
+        return Err(AwsError::bad_request(
+            "InvalidParameterValue",
+            format!(
+                "Value ({device}) for parameter device is invalid. {device} is not a valid EBS device name."
+            ),
+        ));
+    }
 
     let volume = state
         .volumes
@@ -297,6 +320,7 @@ pub(crate) fn plan_attach_volume(state: &Ec2State, input: &Value) -> Result<Atta
         volume_id: volume_id.to_string(),
         instance_id: instance_id.to_string(),
         device: device.to_string(),
+        vm: instance.vm,
     })
 }
 
@@ -345,6 +369,7 @@ pub(crate) struct DetachPlan {
     pub instance_id: String,
     pub device: String,
     pub attach_time: String,
+    pub vm: bool,
 }
 
 pub(crate) fn plan_detach_volume(state: &Ec2State, input: &Value) -> Result<DetachPlan, AwsError> {
@@ -394,6 +419,7 @@ pub(crate) fn plan_detach_volume(state: &Ec2State, input: &Value) -> Result<Deta
         instance_id: attachment.instance_id,
         device: attachment.device,
         attach_time: attachment.attach_time,
+        vm: instance.as_ref().is_some_and(|i| i.vm),
     })
 }
 
@@ -670,5 +696,25 @@ mod tests {
 
         terminate_instances(&state, &json!({ "InstanceId": [instance] })).unwrap();
         assert_eq!(describe_one(&state, &volume)["status"], "available");
+    }
+
+    #[test]
+    fn device_names_are_checked() {
+        assert_eq!(device_serial("/dev/sdh"), Some("sdh"));
+        assert_eq!(device_serial("/dev/xvdh"), Some("xvdh"));
+        assert_eq!(device_serial("/dev/xvdba"), Some("xvdba"));
+        assert_eq!(device_serial("/dev/sda1"), Some("sda1"));
+        for bad in ["sdh", "/dev/nvme1n1", "/dev/sd", "/dev/sdH", "/dev/../sdh"] {
+            assert_eq!(device_serial(bad), None, "{bad}");
+        }
+        let state = Ec2State::default();
+        let instance = launch(&state);
+        let volume = create(&state, json!({}));
+        let err = attach_volume(
+            &state,
+            &json!({ "VolumeId": volume, "InstanceId": instance, "Device": "/dev/foo" }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidParameterValue");
     }
 }

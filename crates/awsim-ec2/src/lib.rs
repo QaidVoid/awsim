@@ -127,6 +127,10 @@ impl ServiceHandler for Ec2Service {
                 "TerminateInstances" => {
                     return machines.terminate_instances(&state, &input).await;
                 }
+                "CreateVolume" => return machines.create_volume(&state, &input, ctx).await,
+                "DeleteVolume" => return machines.delete_volume(&state, &input).await,
+                "AttachVolume" => return machines.attach_volume(&state, &input).await,
+                "DetachVolume" => return machines.detach_volume(&state, &input).await,
                 _ => {}
             }
         }

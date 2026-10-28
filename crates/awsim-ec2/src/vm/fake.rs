@@ -82,6 +82,18 @@ impl FakeHypervisor {
         self.domains.remove(id);
     }
 
+    pub fn volume_exists(&self, id: &str) -> bool {
+        self.volumes.contains_key(id)
+    }
+
+    /// Volumes attached to a machine, with their serials.
+    pub fn attached(&self, id: &str) -> Vec<(String, String)> {
+        self.domains
+            .get(id)
+            .map(|d| d.volumes.clone())
+            .unwrap_or_default()
+    }
+
     /// The last command run on a machine, and what it was fed.
     pub fn last_exec(&self, id: &str) -> Option<(String, String)> {
         self.execs
