@@ -112,6 +112,13 @@ curl -s http://localhost:4566 \
   - Input: `CommandId`, optional `InstanceId`
   - Returns: stub with `Status: "Success"`, empty `StandardOutputContent`
 
+- `ListCommandInvocations` lists one entry per command and instance, with `CommandPlugins` output when `Details` is true
+
+When EC2 runs instances as virtual machines (see [EC2 Virtual Machines](/guide/ec2-vms)), `SendCommand` with `AWS-RunShellScript` and explicit instance ids runs the joined `commands` as root in each guest. Invocations then report the real `Status` (`InProgress`, `Success`, `Failed`, `TimedOut`), `ResponseCode`, `StandardOutputContent` (first 24,000 characters) and `StandardErrorContent` (first 8,000). A target whose agent is not online fails the send with `InvalidInstanceId`, and an instance the command did not target answers `InvocationDoesNotExist`.
+
+### Managed instances
+- `DescribeInstanceInformation` lists hybrid activations and, with VM-backed EC2 instances, every instance whose guest agent has answered (`PingStatus` `Online` while it answers, `ConnectionLost` otherwise). Filters on `InstanceIds`, `PingStatus` and `PlatformTypes`, through `Filters` or `InstanceInformationFilterList`
+
 ## Curl Examples
 
 ```bash

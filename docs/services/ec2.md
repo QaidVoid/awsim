@@ -1,6 +1,6 @@
 # EC2
 
-Amazon EC2 networking primitives — VPCs, subnets, security groups, route tables, internet gateways, and key pairs.
+Amazon EC2 networking primitives (VPCs, subnets, security groups, route tables, internet gateways, key pairs), instances, and EBS volumes. Instances are records by default, and real virtual machines with the opt-in [libvirt backend](/guide/ec2-vms).
 
 ## Configuration
 
@@ -12,7 +12,7 @@ Amazon EC2 networking primitives — VPCs, subnets, security groups, route table
 
 EC2 uses the `AwsQuery` protocol: `POST` requests with `Content-Type: application/x-www-form-urlencoded` and an `Action=` parameter.
 
-> **Note:** AWSim implements EC2 networking primitives only. Compute resources (instances, AMIs, EBS volumes, Auto Scaling) are **not** supported.
+> **Note:** AMI creation, snapshots, launch templates and Auto Scaling are **not** supported. Instances boot real guests only with the [libvirt backend](/guide/ec2-vms) turned on.
 
 ## Quick Start
 
@@ -151,20 +151,24 @@ aws --endpoint-url http://localhost:4566 ec2 authorize-security-group-ingress \
 
 ### Instances
 
-EC2 instances are modelled as a state machine — no real VMs run, but the lifecycle (`pending` / `running` / `stopping` / `stopped` / `shutting-down` / `terminated`) is honored end-to-end with proper numeric state codes.
+EC2 instances are modelled as a state machine with the lifecycle (`pending` / `running` / `stopping` / `stopped` / `shutting-down` / `terminated`) honored end-to-end with proper numeric state codes. Without a backend no machine runs and transitions are immediate. With the [libvirt backend](/guide/ec2-vms) each instance is a KVM guest and the transitional states last as long as the machine takes.
 
-- `RunInstances` — register one or more instances under a single reservation
-  - Input: `ImageId` (default `ami-00000000`), `InstanceType` (default `t2.micro`), `MinCount`, `MaxCount`, optional `SubnetId`
-  - Returns `instancesSet` (with `instanceId`, `instanceType`, `imageId`, `instanceState`, `privateIpAddress`, `launchTime`, `reservationId`) and a single shared `reservationId`
-  - Private IPs are allocated from the launch subnet's CIDR via a per-subnet host counter starting at `.10`. With no `SubnetId`, falls back to `10.0.0.10`
-  - Instances land in `running` immediately
+- `RunInstances` registers one or more instances under a single reservation
+  - Input: `ImageId` (default `ami-00000000`), `InstanceType` (default `t2.micro`), `MinCount`, `MaxCount`, optional `SubnetId` and `SecurityGroupId.N` at the top level or on `NetworkInterface.1`, `IamInstanceProfile.{Arn,Name}`, `ClientToken`, `UserData`, `TagSpecification.N` for `instance` and `volume`, and `BlockDeviceMapping.1` for the root volume's device and size
+  - Returns `instancesSet` (with `instanceId`, `instanceType`, `imageId`, `instanceState`, `privateIpAddress`, `launchTime`, `reservationId`, `placement`, `rootDeviceName`, `blockDeviceMapping`, `groupSet`, `iamInstanceProfile`, `tagSet`) and a single shared `reservationId`
+  - Each instance gets a root volume (8 GiB unless the mapping says otherwise) that is deleted on termination
+  - A repeated `ClientToken` returns the original reservation instead of launching again
+  - Private IPs are allocated from the launch subnet's CIDR via a per-subnet host counter starting at `.10`. With no `SubnetId`, falls back to `10.0.0.10`. VM-backed instances report their real DHCP lease address instead
+  - Instances land in `running` immediately, or in `pending` until the guest agent answers when VM-backed
 
-- `DescribeInstances` — list instances grouped by reservation
-  - Filters: `InstanceId.N`, plus `Filter.N.{Name=instance-state-name, Value.N}` for state-based filtering (the one `aws ec2 wait` reaches for)
+- `DescribeInstances` lists instances grouped by reservation
+  - Filters: `InstanceId.N`, plus `Filter.N` on `instance-state-name`, `instance-id`, `instance-type`, `subnet-id`, `client-token`, `tag:<key>` and `tag-key`, with `*` and `?` wildcards
 
-- `StartInstances` — `stopped` → `running`. Out-of-order calls (e.g. on a `running` instance) are well-shaped no-ops
+- `StartInstances`: `stopped` to `running` (VM-backed: to `pending`). Out-of-order calls (e.g. on a `running` instance) are well-shaped no-ops
 
-- `StopInstances` — `running` → `stopped`. Same no-op semantics for invalid predecessors
+- `StopInstances`: `running` to `stopped` (VM-backed: to `stopping`, then `stopped` once the machine is off). Same no-op semantics for invalid predecessors
+
+- `ModifyInstanceAttribute` changes `InstanceType` or `UserData` (either as `InstanceType.Value` or `Attribute` plus `Value`) on a stopped instance, and fails with `IncorrectInstanceState` otherwise
 
 - `RebootInstances` — fire-and-forget; instance stays in `running`
 
@@ -173,6 +177,16 @@ EC2 instances are modelled as a state machine — no real VMs run, but the lifec
 - `DescribeInstanceStatus` — returns the lifecycle state for non-terminated instances. Honors `IncludeAllInstances` to surface stopped/terminated entries too
 
 - `DescribeImages` — returns a small built-in AMI catalog (Amazon Linux 2, Ubuntu 22.04)
+
+### Volumes
+
+- `CreateVolume` requires `AvailabilityZone` and `Size`, and accepts `VolumeType` (default `gp2`), `Encrypted`, `KmsKeyId`, `Iops`, `Throughput`, `ClientToken` and `TagSpecification.N`. Returns `creating`, and the volume is `available` from the next describe
+- `DescribeVolumes` takes `VolumeId.N` (an unknown id fails with `InvalidVolume.NotFound`) and `Filter.N` on `volume-id`, `status`, `availability-zone`, `volume-type`, `attachment.instance-id`, `attachment.device`, `tag:<key>` and `tag-key`
+- `AttachVolume` needs a `running` or `stopped` instance in the volume's zone and a free device name such as `/dev/sdh`, and fails with `IncorrectState`, `VolumeInUse`, `InvalidVolume.ZoneMismatch` or `InvalidParameterValue` as EC2 does
+- `DetachVolume` refuses the root volume of a running instance with `OperationNotPermitted`
+- `DeleteVolume` refuses an attached volume with `VolumeInUse`
+
+With the libvirt backend a volume is a sparse qcow2 file, and the guest sees it at the device name it was attached as.
 
 ### Network / VPC Stubs
 - `DescribeNetworkInterfaces` — returns empty `networkInterfaceSet`
@@ -261,11 +275,11 @@ console.log('VPC:', vpcId, '| Subnet:', Subnet?.SubnetId, '| SG:', GroupId);
 
 ## Behavior Notes
 
-- `RunInstances` creates in-memory instance records; no compute is allocated and the instance never actually runs.
+- Without the [libvirt backend](/guide/ec2-vms), `RunInstances` creates in-memory instance records; no compute is allocated and the instance never actually runs.
 - The lifecycle state machine is real: `Stop` only works from `running`, `Start` only from `stopped`, etc. Out-of-order transitions are no-ops. `Terminated` instances stay queryable for the lifetime of the process so post-terminate `DescribeInstances` calls still see them (real EC2 also retains records ~1 hour).
 - Tags created with `CreateTags` are reflected on the underlying resource object (e.g., a tagged VPC shows tags in `DescribeVpcs`).
 - `DescribeNatGateways`, `DescribeVpcEndpoints`, `DescribeNetworkInterfaces` always return empty result sets. `DescribeImages` returns a small built-in catalog so listings aren't empty.
-- No userdata execution, no EBS volumes, no IMDS endpoint at 169.254.169.254 — see [the EC2 explainer in CONTRIBUTING](#) for what's modelled vs stubbed.
+- There is no IMDS endpoint at 169.254.169.254. User data runs only on VM-backed instances, through cloud-init, and those receive their instance profile credentials as files instead.
 - Resource IDs are generated with standard prefixes: `vpc-`, `subnet-`, `sg-`, `igw-`, `rtb-`, `keypair-`, `i-`.
 - `DescribeRegions` returns a hardcoded list of AWS regions (same as real AWS, not dynamic).
 - Security group rules are stored but not enforced — no actual network traffic filtering occurs.

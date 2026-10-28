@@ -37,6 +37,7 @@ export default defineConfig({
             { text: 'Cognito OAuth/OIDC', link: '/guide/cognito-oauth' },
             { text: 'Cognito Federation (OIDC IdP)', link: '/guide/cognito-federation' },
             { text: 'Lambda Execution', link: '/guide/lambda-execution' },
+            { text: 'EC2 Virtual Machines', link: '/guide/ec2-vms' },
             { text: 'API Gateway Proxy', link: '/guide/api-gateway' },
             { text: 'OpenSearch', link: '/guide/opensearch' },
             { text: 'Bedrock LLM Backend', link: '/guide/bedrock-backend' },

@@ -53,7 +53,7 @@ All services share the same `http://localhost:4566` endpoint; routing comes from
 | Category | Services |
 |---|---|
 | Storage | S3, EFS-style via S3 |
-| Compute | Lambda, ECS, EKS, Batch, EC2 (partial) |
+| Compute | Lambda, ECS, EKS, Batch, EC2 (partial, optional libvirt VMs) |
 | Networking | API Gateway (REST + HTTP), Route 53, ELB, CloudFront |
 | Database | DynamoDB (SQLite-backed), RDS metadata |
 | Messaging | SQS, SNS, EventBridge, EventBridge Scheduler, Kinesis, Firehose |
@@ -99,6 +99,7 @@ All services share the same `http://localhost:4566` endpoint; routing comes from
 | (env-only) | `AWSIM_ADMIN_ACCESS_KEY` | (none) | Access key ID that bypasses IAM enforcement, the signed-request gate, and SigV4 verification. Used for break-glass and bootstrap |
 | (env-only) | `AWSIM_TICK_INTERVAL_MS` | `1000` | How often the per-service tick loop fires (10 to 60000) |
 | (env-only) | `AWSIM_LIFECYCLE_FAST` | `false` | Collapse every observable resource-lifecycle delay to zero. Useful for CI |
+| (env-only) | `AWSIM_EC2_BACKEND` | `state` | `libvirt` runs every EC2 instance as a KVM guest and Run Command `AWS-RunShellScript` inside it. See [docs/guide/ec2-vms.md](docs/guide/ec2-vms.md) for `AWSIM_EC2_VM_DIR`, `AWSIM_EC2_IMAGES`, the resource caps and `AWSIM_EC2_GUEST_ENDPOINT` |
 | (env-only) | `AWSIM_S3_LAX_MULTIPART_SIZE` | `false` | Skip the 5 MiB minimum-part-size check on `CompleteMultipartUpload` for tests that exercise the multipart flow with tiny parts |
 
 ## Admin console
@@ -119,6 +120,7 @@ Open `http://localhost:5173`.
 - [IAM enforcement](docs/guide/iam-enforcement.md)
 - [Operator authentication](docs/guide/operator-auth.md)
 - [Lambda execution](docs/guide/lambda-execution.md)
+- [EC2 virtual machines](docs/guide/ec2-vms.md)
 - [API Gateway](docs/guide/api-gateway.md)
 - [Cognito OAuth](docs/guide/cognito-oauth.md)
 - [Estimated billing](docs/guide/billing.md)
