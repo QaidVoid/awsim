@@ -302,6 +302,22 @@ impl Machines {
             .collect()
     }
 
+    /// Move an instance from `from` to `to`, unless a request moved it
+    /// elsewhere while the machine was being looked at. Answers whether
+    /// it moved.
+    fn advance(state: &Ec2State, id: &str, from: &str, to: &str, reason: &str) -> bool {
+        let Some(mut instance) = state.instances.get_mut(id) else {
+            return false;
+        };
+        if instance.state != from {
+            return false;
+        }
+        instance.previous_state = Some(instance.state.clone());
+        instance.state = to.to_string();
+        instance.state_transition_reason = reason.to_string();
+        true
+    }
+
     fn set_state(state: &Ec2State, id: &str, to: &str, reason: &str) {
         if let Some(mut instance) = state.instances.get_mut(id) {
             instance.previous_state = Some(instance.state.clone());
@@ -551,8 +567,15 @@ impl Machines {
 
     async fn reconcile_one(&self, state: &Ec2State, account: &str, region: &str, i: &Instance) {
         let id = i.instance_id.as_str();
-        if i.state == "shutting-down" {
-            Self::set_state(state, id, "terminated", "Client.UserInitiatedShutdown");
+        let from = i.state.as_str();
+        if from == "shutting-down" {
+            Self::advance(
+                state,
+                id,
+                from,
+                "terminated",
+                "Client.UserInitiatedShutdown",
+            );
             return;
         }
         let power = match self.hv.power(id).await {
@@ -567,9 +590,10 @@ impl Machines {
                 instance_id = id,
                 "machine is gone; marking the instance terminated"
             );
-            self.agents.remove(id);
-            release_volumes(state, id);
-            Self::set_state(state, id, "terminated", "Server.InternalError");
+            if Self::advance(state, id, from, "terminated", "Server.InternalError") {
+                self.agents.remove(id);
+                release_volumes(state, id);
+            }
             return;
         };
         let now = now_secs();
@@ -581,9 +605,11 @@ impl Machines {
                 } else {
                     "Server.InternalError"
                 };
-                Self::set_state(state, id, "stopped", reason);
+                Self::advance(state, id, from, "stopped", reason);
             }
-            ("stopping", Power::Off) => Self::set_state(state, id, "stopped", "User initiated"),
+            ("stopping", Power::Off) => {
+                Self::advance(state, id, from, "stopped", "User initiated");
+            }
             ("stopping", Power::On) => {
                 let asked = self.agents.get(id).and_then(|a| a.stop_requested);
                 if asked.is_some_and(|t| now.saturating_sub(t) > STOP_GRACE) {
@@ -593,7 +619,9 @@ impl Machines {
                     }
                 }
             }
-            ("stopped", Power::On) => Self::set_state(state, id, "pending", ""),
+            ("stopped", Power::On) => {
+                Self::advance(state, id, from, "pending", "");
+            }
             ("pending", Power::On) => {
                 if !self.hv.ping(id).await {
                     return;
@@ -608,10 +636,12 @@ impl Machines {
                     agent.last_ping = now;
                     agent.info = info;
                 }
+                if !Self::advance(state, id, from, "running", "") {
+                    return;
+                }
                 if let Some(mut instance) = state.instances.get_mut(id) {
                     instance.private_ip_address = Some(address);
                 }
-                Self::set_state(state, id, "running", "");
                 info!(instance_id = id, "instance running");
                 self.refresh_credentials(i, account, region, false).await;
             }
@@ -1300,5 +1330,23 @@ pub(crate) mod tests {
             .await
             .unwrap();
         assert!(m.managed_instances("000000000000", "us-east-1").is_empty());
+    }
+
+    #[tokio::test]
+    async fn reconcile_never_overwrites_a_newer_request() {
+        let fake = Arc::new(FakeHypervisor::default());
+        let m = machines(fake.clone(), 2);
+        let state = m.store.get("000000000000", "us-east-1");
+        let id = launch(&m, json!({})).await;
+        // The pass saw `pending`, and a terminate lands before it writes.
+        let seen = instance_state(&m, &id);
+        m.terminate_instances(&state, &json!({ "InstanceId": [id.clone()] }))
+            .await
+            .unwrap();
+        m.reconcile_one(&state, "000000000000", "us-east-1", &seen)
+            .await;
+        let i = instance_state(&m, &id);
+        assert_eq!(i.state, "shutting-down");
+        assert_eq!(i.state_transition_reason, "Client.UserInitiatedShutdown");
     }
 }
