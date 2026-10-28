@@ -1,6 +1,6 @@
 [package]
 name = "awsim-ec2"
-description = "AWS EC2 networking primitives emulator for AWSim"
+description = "AWS EC2 emulator for AWSim, with optional libvirt-backed instances"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,8 +9,11 @@ repository.workspace = true
 [dependencies]
 awsim-core = { workspace = true }
 async-trait = { workspace = true }
+base64 = { workspace = true }
 dashmap = { workspace = true }
+flate2 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }

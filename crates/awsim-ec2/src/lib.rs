@@ -2,6 +2,7 @@ mod error;
 mod ids;
 mod operations;
 mod state;
+pub mod vm;
 
 use std::sync::Arc;
 

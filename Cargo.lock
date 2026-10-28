@@ -2176,9 +2176,12 @@ version = "0.8.0"
 dependencies = [
  "async-trait",
  "awsim-core",
+ "base64",
  "dashmap",
+ "flate2",
  "serde",
  "serde_json",
+ "tokio",
  "tracing",
  "uuid",
 ]
