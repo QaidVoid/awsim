@@ -7,22 +7,53 @@ pub mod vm;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use awsim_core::{AccountRegionStore, AwsError, Protocol, RequestContext, ServiceHandler};
+use awsim_core::{
+    AccountRegionStore, AwsError, InstanceProfileCredentials, Protocol, RequestContext,
+    ServiceHandler,
+};
 use serde_json::Value;
 use tracing::debug;
 
 use state::Ec2State;
+use vm::machines::Machines;
+use vm::{Hypervisor, VmConfig};
 
-/// The AWSim EC2 service handler (networking primitives subset).
+/// The AWSim EC2 service handler.
 pub struct Ec2Service {
     store: AccountRegionStore<Ec2State>,
+    machines: Option<Arc<Machines>>,
 }
 
 impl Ec2Service {
     pub fn new() -> Self {
         Self {
             store: AccountRegionStore::new(),
+            machines: None,
         }
+    }
+
+    /// Back instances launched from now on with virtual machines.
+    ///
+    /// `endpoint` is the AWS endpoint written into guests and `gateway`
+    /// the host's address on their network. `credentials` mints the
+    /// session each instance holds for its instance profile.
+    pub fn with_machines(
+        mut self,
+        hypervisor: Arc<dyn Hypervisor>,
+        config: VmConfig,
+        endpoint: String,
+        gateway: String,
+        credentials: Option<Arc<dyn InstanceProfileCredentials>>,
+    ) -> Self {
+        self.machines = Some(Arc::new(Machines::new(
+            hypervisor,
+            config,
+            self.store.clone(),
+            endpoint,
+            gateway,
+            credentials,
+        )));
+        self
     }
 
     fn get_state(&self, ctx: &RequestContext) -> Arc<Ec2State> {
@@ -86,6 +117,18 @@ impl ServiceHandler for Ec2Service {
                      Operation: {operation}."
                 ),
             ));
+        }
+
+        if let Some(machines) = &self.machines {
+            match operation {
+                "RunInstances" => return machines.run_instances(&state, &input, ctx).await,
+                "StartInstances" => return machines.start_instances(&state, &input).await,
+                "StopInstances" => return machines.stop_instances(&state, &input).await,
+                "TerminateInstances" => {
+                    return machines.terminate_instances(&state, &input).await;
+                }
+                _ => {}
+            }
         }
 
         match operation {
@@ -198,6 +241,12 @@ impl ServiceHandler for Ec2Service {
             "DescribeAddresses" => operations::stubs::describe_addresses(&state, &input),
 
             _ => Err(AwsError::unknown_operation(operation)),
+        }
+    }
+
+    async fn tick(&self) {
+        if let Some(machines) = &self.machines {
+            machines.kick();
         }
     }
 

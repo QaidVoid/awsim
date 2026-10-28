@@ -6,8 +6,11 @@
 //! sparse qcow2 file. Systems Manager runs commands in the guest through
 //! the QEMU guest agent.
 
+#[cfg(test)]
+pub(crate) mod fake;
 pub mod hypervisor;
 pub mod libvirt;
+pub(crate) mod machines;
 pub mod seed;
 
 use std::path::{Path, PathBuf};
