@@ -1102,6 +1102,32 @@ fn generate_assumed_role_output(
     (credentials, assumed_role_user, session)
 }
 
+/// Issue a role session and record it so the gateway resolves the keys to
+/// the assumed role. This is how EC2 hands an instance credentials for its
+/// instance profile's role. Answers the STS `Credentials` shape.
+pub fn issue_role_session(
+    sessions: &StsSessionStore,
+    partition: &str,
+    role_arn: &str,
+    session_name: &str,
+    account_id: &str,
+    duration_seconds: u64,
+) -> Value {
+    let (credentials, _, session) = generate_assumed_role_output(
+        partition,
+        role_arn,
+        session_name,
+        account_id,
+        duration_seconds,
+        None,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
+    sessions.record(session);
+    credentials
+}
+
 /// Extract the `Tags` parameter into a flat `(key, value)` vector.
 /// Validation already ran upstream so we just collect entries with
 /// both fields present.
@@ -2120,5 +2146,23 @@ mod tests {
             .decode_authorization_message(&json!({ "EncodedMessage": encoded }))
             .unwrap_err();
         assert_eq!(err.code, "InvalidAuthorizationMessageException");
+    }
+
+    #[test]
+    fn issued_role_session_resolves_from_the_store() {
+        let sessions = StsSessionStore::new();
+        let credentials = issue_role_session(
+            &sessions,
+            "aws",
+            "arn:aws:iam::000000000000:role/ws/owner",
+            "i-1234abcd",
+            "000000000000",
+            3_600,
+        );
+        let key = credentials["AccessKeyId"].as_str().unwrap();
+        let session = sessions.lookup(key).unwrap();
+        assert_eq!(session.role_name, "owner");
+        assert_eq!(session.session_name, "i-1234abcd");
+        assert!(credentials["SessionToken"].as_str().is_some());
     }
 }
