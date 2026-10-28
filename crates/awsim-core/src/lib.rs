@@ -8,6 +8,7 @@ pub mod error;
 pub mod events;
 pub mod gateway;
 pub mod idempotency;
+pub mod instances;
 pub mod lifecycle;
 pub mod pagination;
 pub mod persistence;
@@ -35,6 +36,9 @@ pub use body_store::{BlobInventory, BodyStore, join_safe};
 pub use error::AwsError;
 pub use events::{EventBus, InternalEvent};
 pub use gateway::{AppState, BodyStoreHandle};
+pub use instances::{
+    CommandExit, InstanceAgents, InstanceCredentials, InstanceProfileCredentials, ManagedInstance,
+};
 pub use pagination::{
     Page, cap_max_results, clamp_max_results_strict, decode_token, encode_token, paginate,
 };
