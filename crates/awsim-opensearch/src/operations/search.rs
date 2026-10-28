@@ -1037,7 +1037,7 @@ mod tests {
     #[test]
     fn test_comma_list_with_wildcard() {
         let state = test_state();
-        for name in ["captify-search-spaces-a-1", "captify-search-spaces-b-2"] {
+        for name in ["app-search-spaces-a-1", "app-search-spaces-b-2"] {
             state
                 .create_index_meta(
                     name,
@@ -1054,7 +1054,7 @@ mod tests {
                 .unwrap();
         }
         let query = json!({"query": {"match": {"title": "Rust"}}});
-        let (status, result) = search(&state, "articles,captify-search-spaces-*", &query);
+        let (status, result) = search(&state, "articles,app-search-spaces-*", &query);
         assert_eq!(status, 200);
         let indices: Vec<&str> = result["hits"]["hits"]
             .as_array()
@@ -1062,10 +1062,10 @@ mod tests {
             .iter()
             .map(|h| h["_index"].as_str().unwrap())
             .collect();
-        assert!(indices.contains(&"captify-search-spaces-a-1"));
-        assert!(indices.contains(&"captify-search-spaces-b-2"));
+        assert!(indices.contains(&"app-search-spaces-a-1"));
+        assert!(indices.contains(&"app-search-spaces-b-2"));
         assert!(indices.contains(&"articles"));
-        let (status, result) = count(&state, "articles,captify-search-spaces-*", &query, false);
+        let (status, result) = count(&state, "articles,app-search-spaces-*", &query, false);
         assert_eq!((status, result["count"].as_u64()), (200, Some(3)));
     }
 

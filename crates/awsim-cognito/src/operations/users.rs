@@ -2891,7 +2891,7 @@ mod tests {
 
     #[test]
     fn admin_get_user_accepts_sub_as_username() {
-        // Captify regression: clients pass the user's `sub` (UUID) as
+        // Regression: clients pass the user's `sub` (UUID) as
         // the AdminGetUser `Username` parameter. AWS docs explicitly
         // allow this when `sub` isn't an alias attribute on the pool.
         let (state, pool_id) = schema_fixture();

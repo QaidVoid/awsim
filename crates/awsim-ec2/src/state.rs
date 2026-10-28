@@ -21,6 +21,9 @@ pub struct Ec2State {
     /// allocates from the subnet's CIDR; we just bump a counter starting
     /// at host .10 (real EC2 reserves the first 4 addresses anyway).
     pub subnet_next_host: DashMap<String, u32>,
+    /// volumeId -> Volume, including the root volume of every instance.
+    #[serde(default)]
+    pub volumes: DashMap<String, Volume>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,6 +135,71 @@ pub struct Instance {
     /// UserData blob supplied at launch. AWS persists it as base64 and
     /// echoes it from `DescribeInstanceAttribute --attribute userData`.
     pub user_data: Option<String>,
+    /// Availability zone, taken from the launch subnet when it is known.
+    #[serde(default = "default_availability_zone")]
+    pub availability_zone: String,
+    #[serde(default)]
+    pub security_group_ids: Vec<String>,
+    /// ARN of the instance profile given at launch.
+    #[serde(default)]
+    pub iam_instance_profile: Option<String>,
+    #[serde(default)]
+    pub client_token: Option<String>,
+    #[serde(default = "default_root_device_name")]
+    pub root_device_name: String,
+    /// The root volume and every attached volume, in attach order.
+    #[serde(default)]
+    pub block_devices: Vec<BlockDevice>,
+    /// Whether a libvirt virtual machine backs this instance.
+    #[serde(default)]
+    pub vm: bool,
+}
+
+/// One entry of an instance's block device mapping.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockDevice {
+    pub device_name: String,
+    pub volume_id: String,
+    pub attach_time: String,
+    pub delete_on_termination: bool,
+}
+
+/// An EBS volume.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Volume {
+    pub volume_id: String,
+    pub size_gib: u64,
+    pub volume_type: String,
+    pub availability_zone: String,
+    /// `available` | `in-use`.
+    pub state: String,
+    pub create_time: String,
+    pub encrypted: bool,
+    pub kms_key_id: Option<String>,
+    pub iops: Option<i64>,
+    pub throughput: Option<i64>,
+    pub client_token: Option<String>,
+    pub attachment: Option<VolumeAttachment>,
+    pub tags: HashMap<String, String>,
+}
+
+/// Where a volume is attached.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VolumeAttachment {
+    pub instance_id: String,
+    pub device: String,
+    pub attach_time: String,
+    pub delete_on_termination: bool,
+}
+
+/// The availability zone an instance or volume reports when nothing
+/// placed it anywhere more specific.
+pub fn default_availability_zone() -> String {
+    "us-east-1a".to_string()
+}
+
+fn default_root_device_name() -> String {
+    "/dev/xvda".to_string()
 }
 
 impl Instance {

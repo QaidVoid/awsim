@@ -1,3 +1,4 @@
+pub mod filters;
 pub mod gateways;
 pub mod instances;
 pub mod key_pairs;

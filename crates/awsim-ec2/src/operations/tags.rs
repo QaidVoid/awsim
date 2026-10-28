@@ -125,6 +125,12 @@ fn apply_tags_to_resource(state: &Ec2State, resource_id: &str, tags: &[(String, 
         for (k, v) in tags {
             inst.tags.insert(k.clone(), v.clone());
         }
+        return;
+    }
+    if let Some(mut vol) = state.volumes.get_mut(resource_id) {
+        for (k, v) in tags {
+            vol.tags.insert(k.clone(), v.clone());
+        }
     }
 }
 
@@ -185,6 +191,12 @@ fn remove_tags_from_resource(state: &Ec2State, resource_id: &str, keys: &[&str])
         for k in keys {
             inst.tags.remove(*k);
         }
+        return;
+    }
+    if let Some(mut vol) = state.volumes.get_mut(resource_id) {
+        for k in keys {
+            vol.tags.remove(*k);
+        }
     }
 }
 
@@ -223,6 +235,8 @@ fn resource_type_for(resource_id: &str) -> &'static str {
         "route-table"
     } else if resource_id.starts_with("i-") {
         "instance"
+    } else if resource_id.starts_with("vol-") {
+        "volume"
     } else {
         "resource"
     }
