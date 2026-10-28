@@ -2,8 +2,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use async_trait::async_trait;
 use awsim_core::{
-    AccountRegionStore, AwsError, InstanceCredentials, InstanceProfileCredentials, RequestContext,
+    AccountRegionStore, AwsError, CommandExit, InstanceAgents, InstanceCredentials,
+    InstanceProfileCredentials, ManagedInstance, RequestContext,
 };
 use dashmap::DashMap;
 use serde_json::{Value, json};
@@ -28,6 +30,8 @@ use crate::state::{Ec2State, Instance};
 const RECONCILE_EVERY: u64 = 2;
 /// Seconds between agent pings of a running instance.
 const PING_EVERY: u64 = 10;
+/// An agent is `Online` while its last answer is at most this old.
+const ONLINE_WITHIN: u64 = 30;
 /// Seconds a graceful stop gets before the machine is powered off.
 const STOP_GRACE: u64 = 300;
 /// Credentials older than this are replaced.
@@ -690,6 +694,94 @@ impl Machines {
     }
 }
 
+fn not_managed(instance_id: &str, account: &str) -> AwsError {
+    AwsError::bad_request(
+        "InvalidInstanceId",
+        format!("Instances [[{instance_id}]] not in a valid state for account {account}"),
+    )
+}
+
+#[async_trait]
+impl InstanceAgents for Machines {
+    fn managed_instances(&self, account: &str, region: &str) -> Vec<ManagedInstance> {
+        let now = now_secs();
+        let state = self.store.get(account, region);
+        let mut found: Vec<ManagedInstance> = state
+            .instances
+            .iter()
+            .filter(|i| i.vm && !matches!(i.state.as_str(), "terminated" | "shutting-down"))
+            .filter_map(|i| {
+                let agent = self.agents.get(&i.instance_id)?;
+                let last = agent.last_answer?;
+                let online = i.state == "running" && now.saturating_sub(last) <= ONLINE_WITHIN;
+                let info = agent.info.clone().unwrap_or_default();
+                Some(ManagedInstance {
+                    instance_id: i.instance_id.clone(),
+                    ping_status: if online { "Online" } else { "ConnectionLost" }.to_string(),
+                    last_ping: last,
+                    ip_address: i.private_ip_address.clone().unwrap_or_default(),
+                    computer_name: info.hostname,
+                    platform_name: info.os_name,
+                    platform_version: info.os_version,
+                    iam_role: agent
+                        .credentials
+                        .as_ref()
+                        .map(|c| c.1.role_name.clone())
+                        .unwrap_or_default(),
+                })
+            })
+            .collect();
+        found.sort_by(|a, b| a.instance_id.cmp(&b.instance_id));
+        found
+    }
+
+    async fn run_shell(
+        &self,
+        account: &str,
+        region: &str,
+        instance_id: &str,
+        script: &str,
+    ) -> Result<i64, AwsError> {
+        let online = self
+            .managed_instances(account, region)
+            .into_iter()
+            .any(|m| m.instance_id == instance_id && m.ping_status == "Online");
+        let instance = self
+            .store
+            .get(account, region)
+            .instances
+            .get(instance_id)
+            .map(|i| i.value().clone());
+        let Some(instance) = instance.filter(|_| online) else {
+            return Err(not_managed(instance_id, account));
+        };
+        let credentials = self
+            .refresh_credentials(&instance, account, region, false)
+            .await;
+        let env = self.guest_aws(region).command_env(credentials.as_ref());
+        self.hv
+            .exec(instance_id, script, &env, None)
+            .await
+            .map_err(|e| {
+                warn!(instance_id, error = %e, "cannot start command");
+                not_managed(instance_id, account)
+            })
+    }
+
+    async fn command_exit(
+        &self,
+        _account: &str,
+        _region: &str,
+        instance_id: &str,
+        handle: i64,
+    ) -> Result<Option<CommandExit>, AwsError> {
+        self.hv
+            .exec_status(instance_id, handle)
+            .await
+            .map_err(|e| internal_error(format!("cannot read command on {instance_id}: {e}")))
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -1149,5 +1241,64 @@ pub(crate) mod tests {
             .unwrap();
         assert!(fake.volume_exists(&volume));
         assert_eq!(state.volumes.get(&volume).unwrap().state, "available");
+    }
+
+    #[tokio::test]
+    async fn agents_report_presence_and_run_commands_with_credentials() {
+        let fake = Arc::new(FakeHypervisor::default());
+        fake.set_agent(false);
+        let m = machines(fake.clone(), 2);
+        let state = m.store.get("000000000000", "us-east-1");
+        let id = launch(&m, json!({})).await;
+        m.reconcile().await;
+        assert!(m.managed_instances("000000000000", "us-east-1").is_empty());
+        let err = m
+            .run_shell("000000000000", "us-east-1", &id, "true")
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, "InvalidInstanceId");
+
+        fake.set_agent(true);
+        m.reconcile().await;
+        let listed = m.managed_instances("000000000000", "us-east-1");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].ping_status, "Online");
+        assert_eq!(listed[0].ip_address, "192.168.122.50");
+        assert_eq!(listed[0].platform_name, "Ubuntu");
+        assert_eq!(listed[0].iam_role, "owner");
+
+        let pid = m
+            .run_shell("000000000000", "us-east-1", &id, "echo hi; exit 3")
+            .await
+            .unwrap();
+        let env = fake.last_env(&id);
+        assert!(
+            env.iter()
+                .any(|e| e.starts_with("AWS_SESSION_TOKEN=token-"))
+        );
+        assert!(env.contains(&"AWS_REGION=us-east-1".to_string()));
+        assert!(env.contains(&"AWS_ENDPOINT_URL=http://192.168.122.1:4566".to_string()));
+        assert_eq!(
+            m.command_exit("000000000000", "us-east-1", &id, pid)
+                .await
+                .unwrap(),
+            None
+        );
+        let exit = m
+            .command_exit("000000000000", "us-east-1", &id, pid)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(exit.exit_code, 3);
+
+        m.stop_instances(&state, &json!({ "InstanceId": [id.clone()] }))
+            .await
+            .unwrap();
+        let listed = m.managed_instances("000000000000", "us-east-1");
+        assert_eq!(listed[0].ping_status, "ConnectionLost");
+        m.terminate_instances(&state, &json!({ "InstanceId": [id] }))
+            .await
+            .unwrap();
+        assert!(m.managed_instances("000000000000", "us-east-1").is_empty());
     }
 }

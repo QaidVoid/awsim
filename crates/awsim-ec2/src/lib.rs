@@ -60,6 +60,14 @@ impl Ec2Service {
         self.store.get(&ctx.account_id, &ctx.region)
     }
 
+    /// The agents of VM-backed instances, for Systems Manager. `None`
+    /// without a VM backend.
+    pub fn instance_agents(&self) -> Option<Arc<dyn awsim_core::InstanceAgents>> {
+        self.machines
+            .as_ref()
+            .map(|m| Arc::clone(m) as Arc<dyn awsim_core::InstanceAgents>)
+    }
+
     /// Count running instances for a given account+region pair.
     /// Used by the billing meter to charge instance-hours. Stopped /
     /// terminated / pending instances are excluded since AWS doesn't

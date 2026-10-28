@@ -19,6 +19,7 @@ struct Domain {
 struct Exec {
     instance_id: String,
     script: String,
+    env: Vec<String>,
     stdin: String,
     polls: u32,
 }
@@ -101,6 +102,15 @@ impl FakeHypervisor {
             .filter(|e| e.instance_id == id)
             .max_by_key(|e| *e.key())
             .map(|e| (e.script.clone(), e.stdin.clone()))
+    }
+
+    pub fn last_env(&self, id: &str) -> Vec<String> {
+        self.execs
+            .iter()
+            .filter(|e| e.instance_id == id)
+            .max_by_key(|e| *e.key())
+            .map(|e| e.env.clone())
+            .unwrap_or_default()
     }
 
     fn on(&self, id: &str) -> bool {
@@ -210,7 +220,7 @@ impl Hypervisor for FakeHypervisor {
         &self,
         id: &str,
         script: &str,
-        _env: &[String],
+        env: &[String],
         stdin: Option<&[u8]>,
     ) -> VmResult<i64> {
         self.call("exec");
@@ -223,6 +233,7 @@ impl Hypervisor for FakeHypervisor {
             Exec {
                 instance_id: id.to_string(),
                 script: script.to_string(),
+                env: env.to_vec(),
                 stdin: String::from_utf8_lossy(stdin.unwrap_or_default()).into_owned(),
                 polls: 0,
             },
