@@ -31,6 +31,7 @@ use awsim_core::{
 mod admin;
 mod bill_cli;
 mod chaos_cli;
+mod ec2_vms;
 mod integrations;
 mod named_snapshots;
 mod operator_auth;
@@ -632,6 +633,8 @@ async fn async_main() -> Result<()> {
         cli.ddb_wal_checkpoint_secs,
         cli.ddb_ttl_grace_secs,
         Arc::clone(&bedrock_swap),
+        ec2_vms::connect(cli.data_dir.as_deref(), cli.port).await?,
+        &cli.partition,
     );
 
     let mut body_stores: Vec<BodyStoreHandle> = Vec::new();
@@ -2968,6 +2971,8 @@ fn register_services(
     ddb_wal_checkpoint_secs: Option<u64>,
     ddb_ttl_grace_secs: u64,
     bedrock_swap: awsim_bedrock::BedrockBackendsSwap,
+    ec2_vms: Option<ec2_vms::Ec2Vms>,
+    partition: &str,
 ) -> RegisteredServices {
     use std::sync::Arc;
 
@@ -3124,7 +3129,29 @@ fn register_services(
     let secrets_store = secretsmanager.store();
     state.register(secretsmanager, vec![]);
 
-    let ssm = Arc::new(awsim_ssm::SsmService::new());
+    // EC2 is built ahead of SSM because, with VM-backed instances, SSM
+    // runs commands through EC2's guest agents.
+    let ec2 = awsim_ec2::Ec2Service::new();
+    let ec2 = match ec2_vms {
+        Some(vms) => ec2.with_machines(
+            vms.hypervisor,
+            vms.config,
+            vms.endpoint,
+            vms.gateway,
+            Some(Arc::new(ec2_vms::IamInstanceProfileCredentials {
+                iam: iam_store.clone(),
+                sessions: Arc::clone(&sts_sessions),
+                partition: partition.to_string(),
+            })),
+        ),
+        None => ec2,
+    };
+    let ec2 = Arc::new(ec2);
+    let ssm = match ec2.instance_agents() {
+        Some(agents) => awsim_ssm::SsmService::new().with_instance_agents(agents),
+        None => awsim_ssm::SsmService::new(),
+    };
+    let ssm = Arc::new(ssm);
     let ssm_store = ssm.store();
     state.register(ssm, vec![]);
 
@@ -3202,7 +3229,6 @@ fn register_services(
     );
     state.register(ecs, vec![]);
 
-    let ec2 = Arc::new(awsim_ec2::Ec2Service::new());
     let ec2_clone = Arc::clone(&ec2);
     state.register(ec2, vec![]);
 
