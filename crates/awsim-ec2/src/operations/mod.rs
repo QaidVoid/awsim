@@ -8,6 +8,7 @@ pub mod security_groups;
 pub mod stubs;
 pub mod subnets;
 pub mod tags;
+pub mod volumes;
 pub mod vpcs;
 
 use serde_json::Value;

@@ -173,6 +173,13 @@ impl ServiceHandler for Ec2Service {
             }
             "DescribeImages" => operations::instances::describe_images(&state, &input),
 
+            // Volumes
+            "CreateVolume" => operations::volumes::create_volume(&state, &input, ctx),
+            "DescribeVolumes" => operations::volumes::describe_volumes(&state, &input),
+            "AttachVolume" => operations::volumes::attach_volume(&state, &input),
+            "DetachVolume" => operations::volumes::detach_volume(&state, &input),
+            "DeleteVolume" => operations::volumes::delete_volume(&state, &input),
+
             // Tags
             "CreateTags" => operations::tags::create_tags(&state, &input),
             "DeleteTags" => operations::tags::delete_tags(&state, &input),
