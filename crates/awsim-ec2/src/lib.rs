@@ -161,6 +161,9 @@ impl ServiceHandler for Ec2Service {
             // Instances
             "RunInstances" => operations::instances::run_instances(&state, &input, ctx),
             "DescribeInstances" => operations::instances::describe_instances(&state, &input),
+            "ModifyInstanceAttribute" => {
+                operations::instances::modify_instance_attribute(&state, &input)
+            }
             "DescribeInstanceAttribute" => {
                 operations::instances::describe_instance_attribute(&state, &input)
             }

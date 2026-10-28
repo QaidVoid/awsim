@@ -696,6 +696,96 @@ pub fn describe_instance_attribute(state: &Ec2State, input: &Value) -> Result<Va
 }
 
 // ---------------------------------------------------------------------------
+// ModifyInstanceAttribute. The instance type and user data, both of which
+// EC2 only lets change while the instance is stopped.
+// ---------------------------------------------------------------------------
+
+/// A validated `ModifyInstanceAttribute`, not yet applied.
+pub(crate) enum Modification {
+    InstanceType { instance_id: String, value: String },
+    UserData { instance_id: String, value: String },
+}
+
+pub(crate) fn plan_modify_instance_attribute(
+    state: &Ec2State,
+    input: &Value,
+) -> Result<Modification, AwsError> {
+    let instance_id = crate::operations::require_str(input, "InstanceId")?;
+    let instance = state.instances.get(instance_id).ok_or_else(|| {
+        AwsError::bad_request(
+            "InvalidInstanceID.NotFound",
+            format!("The instance ID '{instance_id}' does not exist"),
+        )
+    })?;
+    // Both shapes are on the wire: `InstanceType.Value=x`, and the older
+    // `Attribute=instanceType&Value=x`.
+    let attribute = input["Attribute"].as_str();
+    let plain = input["Value"].as_str();
+    let instance_type = input["InstanceType"]["Value"]
+        .as_str()
+        .or(plain.filter(|_| attribute == Some("instanceType")));
+    let user_data = input["UserData"]["Value"]
+        .as_str()
+        .or(plain.filter(|_| attribute == Some("userData")));
+
+    let modification = match (instance_type, user_data) {
+        (Some(value), None) => Modification::InstanceType {
+            instance_id: instance_id.to_string(),
+            value: value.to_string(),
+        },
+        (None, Some(value)) => Modification::UserData {
+            instance_id: instance_id.to_string(),
+            value: value.to_string(),
+        },
+        (Some(_), Some(_)) => {
+            return Err(AwsError::bad_request(
+                "InvalidParameterCombination",
+                "Only one attribute can be modified at a time",
+            ));
+        }
+        (None, None) => {
+            return Err(AwsError::not_implemented("ModifyInstanceAttribute"));
+        }
+    };
+    if instance.state != "stopped" {
+        return Err(AwsError::bad_request(
+            "IncorrectInstanceState",
+            format!("The instance '{instance_id}' is not in the 'stopped' state."),
+        ));
+    }
+    if let Modification::InstanceType { value, .. } = &modification
+        && !value.contains('.')
+    {
+        return Err(AwsError::bad_request(
+            "InvalidInstanceAttributeValue",
+            format!("The instanceType '{value}' is not supported."),
+        ));
+    }
+    Ok(modification)
+}
+
+pub(crate) fn commit_modify_instance_attribute(state: &Ec2State, modification: &Modification) {
+    match modification {
+        Modification::InstanceType { instance_id, value } => {
+            if let Some(mut instance) = state.instances.get_mut(instance_id) {
+                instance.instance_type = value.clone();
+            }
+        }
+        Modification::UserData { instance_id, value } => {
+            if let Some(mut instance) = state.instances.get_mut(instance_id) {
+                instance.user_data = Some(value.clone());
+            }
+        }
+    }
+}
+
+pub fn modify_instance_attribute(state: &Ec2State, input: &Value) -> Result<Value, AwsError> {
+    let modification = plan_modify_instance_attribute(state, input)?;
+    commit_modify_instance_attribute(state, &modification);
+    Ok(json!({ "return": true }))
+}
+
+// ---------------------------------------------------------------------------
 // DescribeInstanceStatus. Surfaces the lifecycle state for non-terminated
 // instances, matching what `aws ec2 wait instance-running` consumes.
 // ---------------------------------------------------------------------------
@@ -1137,5 +1227,39 @@ mod tests {
         assert_eq!(home.state, "available");
         assert!(home.attachment.is_none());
         assert!(state.instances.get(&id).unwrap().block_devices.is_empty());
+    }
+
+    #[test]
+    fn modify_instance_type_only_when_stopped() {
+        let state = Ec2State::default();
+        let resp = run(&state, &json!({ "MinCount": 1, "MaxCount": 1 })).unwrap();
+        let id = resp["instancesSet"]["item"][0]["instanceId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let change = json!({ "InstanceId": id, "InstanceType": { "Value": "t3.xlarge" } });
+        let err = modify_instance_attribute(&state, &change).unwrap_err();
+        assert_eq!(err.code, "IncorrectInstanceState");
+
+        stop_instances(&state, &json!({ "InstanceId": [id.clone()] })).unwrap();
+        modify_instance_attribute(&state, &change).unwrap();
+        assert_eq!(state.instances.get(&id).unwrap().instance_type, "t3.xlarge");
+
+        modify_instance_attribute(
+            &state,
+            &json!({ "InstanceId": id, "Attribute": "userData", "Value": "aGk=" }),
+        )
+        .unwrap();
+        assert_eq!(
+            state.instances.get(&id).unwrap().user_data.as_deref(),
+            Some("aGk=")
+        );
+
+        let err = modify_instance_attribute(
+            &state,
+            &json!({ "InstanceId": "i-missing", "InstanceType": { "Value": "t3.large" } }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "InvalidInstanceID.NotFound");
     }
 }
