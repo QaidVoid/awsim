@@ -565,13 +565,20 @@ pub fn serialize_xml_response(output: &Value, request_id: &str) -> (StatusCode, 
         output.clone()
     };
 
+    // `__xml_namespace` overrides the S3 namespace for services sharing
+    // this serializer under another one, such as S3 Control.
+    let namespace = output
+        .get("__xml_namespace")
+        .and_then(Value::as_str)
+        .unwrap_or("http://s3.amazonaws.com/doc/2006-03-01/");
+
     let body = if let Some(root) = xml_root {
         // When an explicit XML root is present, always emit a root element
         // (even if there are no child fields. E.g. empty BucketLoggingStatus).
         let fields = super::query::json_to_xml_fields(&output_for_xml);
         format!(
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-             <{root} xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">\n\
+             <{root} xmlns=\"{namespace}\">\n\
              {fields}</{root}>",
         )
     } else if output_for_xml.is_null()
@@ -901,6 +908,25 @@ mod tests {
             header_to_param_name("x-amz-server-side-encryption"),
             "ServerSideEncryption"
         );
+    }
+
+    #[test]
+    fn xml_root_uses_the_s3_namespace_unless_one_is_named() {
+        let (_, _, body) = serialize_xml_response(&json!({ "__xml_root": "Tagging" }), "r");
+        let xml = std::str::from_utf8(&body).unwrap();
+        assert!(xml.contains("<Tagging xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">"));
+
+        let output = json!({
+            "__xml_root": "GetAccessPointPolicyResult",
+            "__xml_namespace": "http://awss3control.amazonaws.com/doc/2018-08-20/",
+            "Policy": "{}",
+        });
+        let (_, _, body) = serialize_xml_response(&output, "r");
+        let xml = std::str::from_utf8(&body).unwrap();
+        assert!(xml.contains(
+            "<GetAccessPointPolicyResult xmlns=\"http://awss3control.amazonaws.com/doc/2018-08-20/\">"
+        ));
+        assert!(!xml.contains("__xml_namespace"));
     }
 
     #[test]
