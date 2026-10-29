@@ -1494,8 +1494,22 @@ impl ServiceHandler for S3Service {
         input: &Value,
         ctx: &RequestContext,
     ) -> Vec<awsim_core::IamCheck> {
-        let listing = authz::listing_context(operation, input);
-        authz::iam_checks(operation, input, ctx)
+        let reached = input
+            .get("Bucket")
+            .and_then(Value::as_str)
+            .and_then(|bucket| operations::access_point::find(&self.store, bucket, &ctx.partition));
+        let (input, reached) = match reached {
+            None => (std::borrow::Cow::Borrowed(input), None),
+            // The request fails as NoSuchAccessPoint in `handle`.
+            Some(Err(_)) => return Vec::new(),
+            Some(Ok(reached)) => {
+                let mut input = input.clone();
+                input["Bucket"] = Value::String(reached.point.bucket.clone());
+                (std::borrow::Cow::Owned(input), Some(reached))
+            }
+        };
+        let listing = authz::listing_context(operation, &input);
+        let checks = authz::iam_checks(operation, &input, ctx)
             .into_iter()
             .map(|(action, resource)| {
                 let mut check = awsim_core::IamCheck::new(action, resource);
@@ -1504,7 +1518,11 @@ impl ServiceHandler for S3Service {
                 }
                 check
             })
-            .collect()
+            .collect();
+        match reached {
+            Some(reached) => authz::through_access_point(checks, &reached, ctx),
+            None => checks,
+        }
     }
 
     fn restore(&self, data: &[u8]) -> Result<(), String> {

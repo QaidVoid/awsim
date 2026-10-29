@@ -24,8 +24,33 @@ fn extract_bucket(arn: &str) -> Option<&str> {
     }
 }
 
+/// The `(account, region, name)` of an Access Point resource ARN,
+/// `arn:{partition}:s3:{region}:{account}:accesspoint/{name}[/object/{key}]`.
+fn extract_access_point(arn: &str) -> Option<(&str, &str, &str)> {
+    let mut parts = arn.splitn(6, ':');
+    let (Some("arn"), Some(_), Some("s3"), Some(region), Some(account), Some(resource)) = (
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+    ) else {
+        return None;
+    };
+    let name = resource.strip_prefix("accesspoint/")?.split('/').next()?;
+    Some((account, region, name))
+}
+
 impl ResourcePolicyLookup for S3ResourcePolicyLookup {
     fn lookup(&self, resource_arn: &str) -> Option<PolicyDocument> {
+        if let Some((account, region, name)) = extract_access_point(resource_arn) {
+            let state = self.store.get(account, "global");
+            let point = state
+                .access_points
+                .get(&(region.to_string(), name.to_string()))?;
+            return awsim_iam_policy::parse(point.policy.as_deref()?).ok();
+        }
         let bucket_name = extract_bucket(resource_arn)?;
         for (_, state) in self.store.iter_all() {
             if let Some(bucket) = state.buckets.get(bucket_name)
@@ -213,6 +238,54 @@ pub(crate) fn listing_context(
     context
 }
 
+/// The checks for a request made through an Access Point, from the
+/// checks the same request makes on its bucket.
+///
+/// Each check on the bucket is made twice, as AWS makes it: on the Access
+/// Point resource, where the identity and Access Point policies apply, and
+/// on the bucket, where the bucket policy applies. Both carry the Access
+/// Point's condition keys. A check on another bucket, a copy source say,
+/// is kept as it is.
+pub(crate) fn through_access_point(
+    checks: Vec<awsim_core::IamCheck>,
+    reached: &crate::operations::access_point::Reached,
+    ctx: &RequestContext,
+) -> Vec<awsim_core::IamCheck> {
+    use awsim_core::ContextValue;
+    let bucket_arn = arn::build_partition(ctx, "s3", &reached.point.bucket);
+    let origin = if reached.point.vpc_id.is_some() {
+        "VPC"
+    } else {
+        "Internet"
+    };
+    let keys = [
+        ("s3:DataAccessPointArn", reached.arn.clone()),
+        ("s3:DataAccessPointAccount", reached.account.clone()),
+        ("s3:AccessPointNetworkOrigin", origin.to_string()),
+    ];
+    let mut out = Vec::with_capacity(checks.len() * 2);
+    for mut check in checks {
+        let point_resource = if check.resource == bucket_arn {
+            reached.arn.clone()
+        } else if let Some(key) = check.resource.strip_prefix(&format!("{bucket_arn}/")) {
+            format!("{}/object/{key}", reached.arn)
+        } else {
+            out.push(check);
+            continue;
+        };
+        for (key, value) in &keys {
+            check
+                .context
+                .insert(key.to_string(), ContextValue::String(value.clone()));
+        }
+        let mut on_point = check.clone();
+        on_point.resource = point_resource;
+        out.push(on_point);
+        out.push(check);
+    }
+    out
+}
+
 /// Every `(action, resource)` pair IAM must allow for an S3 request,
 /// per the S3 service authorization reference. Empty for operations
 /// awsim does not enforce.
@@ -385,6 +458,97 @@ mod tests {
         assert_eq!(
             checks("ListAccessPoints", json!({ "AccountId": "111111111111" })),
             vec![pair("s3:ListAccessPoints", "*")]
+        );
+    }
+
+    fn reached(vpc: Option<&str>) -> crate::operations::access_point::Reached {
+        crate::operations::access_point::Reached {
+            account: "000000000000".to_string(),
+            arn: "arn:aws:s3:us-east-1:000000000000:accesspoint/ap".to_string(),
+            point: crate::state::AccessPoint {
+                name: "ap".to_string(),
+                region: "us-east-1".to_string(),
+                bucket: "b".to_string(),
+                alias: "ap-x-s3alias".to_string(),
+                vpc_id: vpc.map(str::to_string),
+                public_access_block: crate::state::PublicAccessBlock {
+                    block_public_acls: true,
+                    ignore_public_acls: true,
+                    block_public_policy: true,
+                    restrict_public_buckets: true,
+                },
+                created_at: String::new(),
+                policy: None,
+            },
+        }
+    }
+
+    #[test]
+    fn test_access_point_checks_cover_the_point_and_the_bucket() {
+        use awsim_core::{ContextValue, IamCheck};
+        let ctx = RequestContext::new("s3", "us-east-1");
+        let checks = vec![
+            IamCheck::new("s3:GetObject", "arn:aws:s3:::src/k"),
+            IamCheck::new("s3:PutObject", "arn:aws:s3:::b/dir/k"),
+            IamCheck::new("s3:ListBucket", "arn:aws:s3:::b"),
+        ];
+        let out = through_access_point(checks, &reached(Some("vpc-1")), &ctx);
+        let pairs: Vec<(&str, &str)> = out
+            .iter()
+            .map(|c| (c.action.as_str(), c.resource.as_str()))
+            .collect();
+        assert_eq!(
+            pairs,
+            [
+                ("s3:GetObject", "arn:aws:s3:::src/k"),
+                (
+                    "s3:PutObject",
+                    "arn:aws:s3:us-east-1:000000000000:accesspoint/ap/object/dir/k"
+                ),
+                ("s3:PutObject", "arn:aws:s3:::b/dir/k"),
+                (
+                    "s3:ListBucket",
+                    "arn:aws:s3:us-east-1:000000000000:accesspoint/ap"
+                ),
+                ("s3:ListBucket", "arn:aws:s3:::b"),
+            ]
+        );
+        assert!(out[0].context.is_empty(), "another bucket gets no keys");
+        for check in &out[1..] {
+            assert_eq!(
+                check.context.get("s3:DataAccessPointArn"),
+                Some(&ContextValue::String(
+                    "arn:aws:s3:us-east-1:000000000000:accesspoint/ap".to_string()
+                ))
+            );
+            assert_eq!(
+                check.context.get("s3:DataAccessPointAccount"),
+                Some(&ContextValue::String("000000000000".to_string()))
+            );
+            assert_eq!(
+                check.context.get("s3:AccessPointNetworkOrigin"),
+                Some(&ContextValue::String("VPC".to_string()))
+            );
+        }
+    }
+
+    #[test]
+    fn test_resource_policy_lookup_reads_access_point_policies() {
+        let store: AccountRegionStore<S3State> = AccountRegionStore::new();
+        let mut point = reached(None).point;
+        point.policy = Some(r#"{"Version":"2012-10-17","Statement":[]}"#.to_string());
+        store
+            .get("000000000000", "global")
+            .access_points
+            .insert(("us-east-1".to_string(), "ap".to_string()), point);
+        let lookup = S3ResourcePolicyLookup::new(store);
+        let arn = "arn:aws:s3:us-east-1:000000000000:accesspoint/ap";
+        assert!(lookup.lookup(arn).is_some());
+        assert!(lookup.lookup(&format!("{arn}/object/k")).is_some());
+        assert!(
+            lookup
+                .lookup("arn:aws:s3:us-west-2:000000000000:accesspoint/ap")
+                .is_none()
         );
     }
 
