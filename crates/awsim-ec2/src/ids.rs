@@ -1,13 +1,14 @@
 use uuid::Uuid;
 
-/// Generate an EC2 resource ID: `{prefix}-{8 hex chars}`, e.g. `vpc-1a2b3c4d`.
+/// Generate an EC2 resource ID in AWS's long form: `{prefix}-{17 hex chars}`,
+/// e.g. `vol-0a1b2c3d4e5f60718`.
 pub fn new_ec2_id(prefix: &str) -> String {
     let bytes = Uuid::new_v4();
-    let hex: String = bytes.as_bytes()[..4]
+    let hex: String = bytes.as_bytes()[..9]
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
-    format!("{prefix}-{hex}")
+    format!("{prefix}-{}", &hex[..17])
 }
 
 /// Current UTC timestamp in ISO 8601 format (reused from IAM pattern).
@@ -76,13 +77,13 @@ mod tests {
             id.starts_with("vpc-"),
             "vpc id should start with vpc-: {id}"
         );
-        assert_eq!(id.len(), 12); // "vpc-" (4) + 8 hex = 12
+        assert_eq!(id.len(), 21); // "vpc-" (4) + 17 hex = 21
     }
 
     #[test]
     fn sg_id_format() {
         let id = new_ec2_id("sg");
         assert!(id.starts_with("sg-"), "sg id should start with sg-: {id}");
-        assert_eq!(id.len(), 11); // "sg-" (3) + 8 hex = 11
+        assert_eq!(id.len(), 20); // "sg-" (3) + 17 hex = 20
     }
 }
