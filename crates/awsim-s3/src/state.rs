@@ -346,6 +346,33 @@ pub struct S3RegionSnapshot {
     pub account_id: String,
     pub region: String,
     pub buckets: Vec<BucketSnapshot>,
+    #[serde(default)]
+    pub access_points: Vec<AccessPoint>,
+}
+
+/// The four public access switches of an Access Point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublicAccessBlock {
+    pub block_public_acls: bool,
+    pub ignore_public_acls: bool,
+    pub block_public_policy: bool,
+    pub restrict_public_buckets: bool,
+}
+
+/// An S3 Access Point: a named route, with its own policy, to one bucket
+/// of the same account.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccessPoint {
+    pub name: String,
+    /// Access Points are regional while buckets are stored under `global`.
+    pub region: String,
+    pub bucket: String,
+    pub alias: String,
+    /// Set for a VPC-origin Access Point, `None` for an Internet one.
+    pub vpc_id: Option<String>,
+    pub public_access_block: PublicAccessBlock,
+    pub created_at: String,
+    pub policy: Option<String>,
 }
 
 /// Global S3 state. All buckets are stored here.
@@ -353,6 +380,8 @@ pub struct S3RegionSnapshot {
 pub struct S3State {
     /// Buckets keyed by bucket name.
     pub buckets: DashMap<String, Bucket>,
+    /// Access Points keyed by `(region, name)`.
+    pub access_points: DashMap<(String, String), AccessPoint>,
     /// Optional disk-backed body store, set once at service construction.
     pub body_store: OnceLock<Arc<BodyStore>>,
 }
@@ -408,6 +437,11 @@ impl Snapshottable for S3State {
             account_id: account_id.to_string(),
             region: region.to_string(),
             buckets,
+            access_points: self
+                .access_points
+                .iter()
+                .map(|entry| entry.value().clone())
+                .collect(),
         }
     }
 
@@ -461,6 +495,11 @@ impl Snapshottable for S3State {
                 multipart_uploads: DashMap::new(),
             };
             state.buckets.insert(bs.name, bucket);
+        }
+        for point in snapshot.access_points {
+            state
+                .access_points
+                .insert((point.region.clone(), point.name.clone()), point);
         }
         (snapshot.account_id, snapshot.region, state)
     }

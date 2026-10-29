@@ -1411,6 +1411,7 @@ impl ServiceHandler for S3Service {
             account_id: "000000000000".to_string(),
             region: "global".to_string(),
             buckets: legacy.buckets,
+            access_points: Vec::new(),
         };
         let (acct, region, state) = S3State::from_snapshot(region_snap);
         self.store.clear();
