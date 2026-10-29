@@ -114,6 +114,21 @@ fn bucket_action(operation: &str) -> Option<&'static str> {
     })
 }
 
+/// IAM action for an S3 Control Access Point operation, which shares its
+/// name with the operation.
+fn control_action(operation: &str) -> Option<&'static str> {
+    Some(match operation {
+        "CreateAccessPoint" => "s3:CreateAccessPoint",
+        "GetAccessPoint" => "s3:GetAccessPoint",
+        "DeleteAccessPoint" => "s3:DeleteAccessPoint",
+        "ListAccessPoints" => "s3:ListAccessPoints",
+        "PutAccessPointPolicy" => "s3:PutAccessPointPolicy",
+        "GetAccessPointPolicy" => "s3:GetAccessPointPolicy",
+        "DeleteAccessPointPolicy" => "s3:DeleteAccessPointPolicy",
+        _ => return None,
+    })
+}
+
 /// IAM action for an object-level operation as `(plain, versioned)`:
 /// the second applies when the request names a `versionId`.
 fn object_action(operation: &str) -> Option<(&'static str, &'static str)> {
@@ -208,6 +223,16 @@ pub(crate) fn iam_checks(
 ) -> Vec<(String, String)> {
     if operation == "ListBuckets" {
         return vec![("s3:ListAllMyBuckets".to_string(), "*".to_string())];
+    }
+    if let Some(action) = control_action(operation) {
+        if operation == "ListAccessPoints" {
+            return vec![(action.to_string(), "*".to_string())];
+        }
+        let account = input.get("AccountId").and_then(Value::as_str).unwrap_or("");
+        let name = input.get("Name").and_then(Value::as_str).unwrap_or("");
+        let resource =
+            crate::operations::access_point::arn(&ctx.partition, &ctx.region, account, name);
+        return vec![(action.to_string(), resource)];
     }
     let Some(bucket) = input.get("Bucket").and_then(Value::as_str) else {
         return Vec::new();
@@ -334,6 +359,32 @@ mod tests {
         assert_eq!(
             checks("ListBuckets", json!({})),
             vec![pair("s3:ListAllMyBuckets", "*")]
+        );
+    }
+
+    #[test]
+    fn test_iam_checks_access_point_operations_use_access_point_arn() {
+        let point = json!({ "Name": "ap", "AccountId": "111111111111" });
+        for (operation, action) in [
+            ("CreateAccessPoint", "s3:CreateAccessPoint"),
+            ("GetAccessPoint", "s3:GetAccessPoint"),
+            ("DeleteAccessPoint", "s3:DeleteAccessPoint"),
+            ("PutAccessPointPolicy", "s3:PutAccessPointPolicy"),
+            ("GetAccessPointPolicy", "s3:GetAccessPointPolicy"),
+            ("DeleteAccessPointPolicy", "s3:DeleteAccessPointPolicy"),
+        ] {
+            assert_eq!(
+                checks(operation, point.clone()),
+                vec![pair(
+                    action,
+                    "arn:aws:s3:us-east-1:111111111111:accesspoint/ap"
+                )],
+                "{operation}"
+            );
+        }
+        assert_eq!(
+            checks("ListAccessPoints", json!({ "AccountId": "111111111111" })),
+            vec![pair("s3:ListAccessPoints", "*")]
         );
     }
 
