@@ -631,6 +631,21 @@ async fn process_request(
     // 3. Determine effective protocol
     let mut detected = protocol::effective_protocol(handler.protocol(), headers, body);
 
+    // 3b. Let the service route on its host, for requests whose host
+    // names the resource (S3 Access Points).
+    let routed_uri = headers
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|host| handler.path_for_host(host, uri.path(), &region, &state.default_partition))
+        .and_then(|path| {
+            let target = match uri.query() {
+                Some(query) => format!("{path}?{query}"),
+                None => path,
+            };
+            target.parse::<Uri>().ok()
+        });
+    let uri = routed_uri.as_ref().unwrap_or(uri);
+
     // 4. Get routes for REST protocols
     let empty_routes = Vec::new();
     let routes = state.routes.get(&service_name).unwrap_or(&empty_routes);
@@ -1521,5 +1536,108 @@ mod tick_tests {
             fast >= 3,
             "fast service should keep ticking past the slow one; got {fast}"
         );
+    }
+}
+
+#[cfg(test)]
+mod host_routing_tests {
+    use super::*;
+    use crate::RequestContext;
+    use crate::RouteDefinition;
+    use axum::http::HeaderValue;
+
+    /// Restxml service that echoes the operation and input it was given,
+    /// and routes `tenant.*` hosts under `/{tenant}`.
+    struct HostRoutedService;
+
+    #[async_trait::async_trait]
+    impl ServiceHandler for HostRoutedService {
+        fn service_name(&self) -> &str {
+            "hosted"
+        }
+        fn protocol(&self) -> Protocol {
+            Protocol::RestXml
+        }
+        fn path_for_host(
+            &self,
+            host: &str,
+            path: &str,
+            region: &str,
+            _partition: &str,
+        ) -> Option<String> {
+            let tenant = host.strip_suffix(".example")?;
+            Some(format!("/{tenant}-{region}{path}"))
+        }
+        async fn handle(
+            &self,
+            operation: &str,
+            input: serde_json::Value,
+            _: &RequestContext,
+        ) -> Result<serde_json::Value, AwsError> {
+            Ok(serde_json::json!({
+                "__xml_root": "Echo",
+                "Operation": operation,
+                "Tenant": input.get("Tenant").cloned().unwrap_or_default(),
+                "Key": input.get("Key").cloned().unwrap_or_default(),
+            }))
+        }
+    }
+
+    fn state() -> AppState {
+        let mut state = AppState::new("us-east-1".to_string(), "000000000000".to_string());
+        let routes = vec![
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/",
+                operation: "ListTenants",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/{Tenant}/{Key+}",
+                operation: "GetThing",
+                required_query_param: None,
+            },
+        ];
+        state.register(Arc::new(HostRoutedService), routes);
+        state
+    }
+
+    async fn echo(host: &str, path: &str) -> String {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            HeaderValue::from_static(
+                "AWS4-HMAC-SHA256 Credential=test/20260101/eu-west-1/hosted/aws4_request, \
+                 SignedHeaders=host, Signature=x",
+            ),
+        );
+        headers.insert("host", HeaderValue::from_str(host).unwrap());
+        let (response, _) = dispatch_request(
+            &state(),
+            Method::GET,
+            path.parse().unwrap(),
+            headers,
+            Bytes::new(),
+        )
+        .await;
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        String::from_utf8(body.to_vec()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn host_routed_request_matches_the_rewritten_path() {
+        let xml = echo("acme.example", "/dir/file?x=1").await;
+        assert!(xml.contains("<Operation>GetThing</Operation>"), "{xml}");
+        assert!(xml.contains("<Tenant>acme-eu-west-1</Tenant>"), "{xml}");
+        assert!(xml.contains("<Key>dir/file</Key>"), "{xml}");
+    }
+
+    #[tokio::test]
+    async fn other_hosts_route_on_their_own_path() {
+        let xml = echo("localhost:4566", "/").await;
+        assert!(xml.contains("<Operation>ListTenants</Operation>"), "{xml}");
     }
 }

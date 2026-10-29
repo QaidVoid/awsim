@@ -119,6 +119,23 @@ pub trait ServiceHandler: Send + Sync {
         Vec::new()
     }
 
+    /// The path to route a request on when its host names a resource
+    /// rather than the service, as an S3 Access Point host
+    /// (`{name}-{account}.s3-accesspoint.{region}.amazonaws.com`) does.
+    ///
+    /// Called before the routes are matched, with the `Host` header and the
+    /// region and partition the request is served in. `None`, the default,
+    /// routes on the request's own path.
+    fn path_for_host(
+        &self,
+        _host: &str,
+        _path: &str,
+        _region: &str,
+        _partition: &str,
+    ) -> Option<String> {
+        None
+    }
+
     /// Handle an AWS API operation.
     async fn handle(
         &self,
