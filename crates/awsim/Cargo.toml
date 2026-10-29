@@ -139,6 +139,7 @@ rlimit = "0.10"
 [dev-dependencies]
 aws-config = "1"
 aws-sdk-s3 = "1"
+aws-sdk-s3control = "1"
 aws-sdk-sqs = "1"
 aws-sdk-dynamodb = "1"
 aws-sdk-sts = "1"
