@@ -220,6 +220,30 @@ impl S3Service {
         }))
     }
 
+    /// Point a data request made through an Access Point at its bucket.
+    ///
+    /// When `Bucket` names an Access Point by ARN or alias, returns the
+    /// input with the underlying bucket in its place and a context in the
+    /// Access Point owner's account.
+    fn through_access_point(
+        &self,
+        mut input: Value,
+        ctx: &RequestContext,
+    ) -> Result<(Value, Option<RequestContext>), AwsError> {
+        let reached = input
+            .get("Bucket")
+            .and_then(Value::as_str)
+            .and_then(|bucket| operations::access_point::find(&self.store, bucket, &ctx.partition));
+        let Some(reached) = reached.transpose()? else {
+            return Ok((input, None));
+        };
+        debug!(access_point = %reached.arn, bucket = %reached.point.bucket, "Through an Access Point");
+        input["Bucket"] = Value::String(reached.point.bucket);
+        let mut scoped = ctx.clone();
+        scoped.account_id = reached.account;
+        Ok((input, Some(scoped)))
+    }
+
     fn get_state(&self, ctx: &RequestContext) -> Arc<S3State> {
         let state = self.store.get(&ctx.account_id, "global");
         if let Some(bs) = &self.body_store {
@@ -419,6 +443,16 @@ impl ServiceHandler for S3Service {
 
     fn signing_name(&self) -> &str {
         "s3"
+    }
+
+    fn path_for_host(
+        &self,
+        host: &str,
+        path: &str,
+        region: &str,
+        partition: &str,
+    ) -> Option<String> {
+        operations::access_point::path_for_host(host, path, region, partition)
     }
 
     fn protocol(&self) -> Protocol {
@@ -1103,6 +1137,8 @@ impl ServiceHandler for S3Service {
         if let Some(result) = self.handle_control(operation, &input, ctx) {
             return result;
         }
+        let (input, scoped) = self.through_access_point(input, ctx)?;
+        let ctx = scoped.as_ref().unwrap_or(ctx);
         let state = self.get_state(ctx);
 
         match operation {

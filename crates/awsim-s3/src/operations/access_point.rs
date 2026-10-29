@@ -361,6 +361,27 @@ pub fn delete_access_point_policy(
     Ok(json!({}))
 }
 
+/// The path-style path for a request on an Access Point host,
+/// `{name}-{account}.{anything}`, as the SDKs and Mountpoint address an
+/// Access Point ARN: the original path under the percent-encoded ARN.
+///
+/// `None` for any other host. No lookup is made, so a request through a
+/// deleted Access Point still fails as one.
+pub fn path_for_host(host: &str, path: &str, region: &str, partition: &str) -> Option<String> {
+    if host.starts_with('[') {
+        return None;
+    }
+    let label = host.split([':', '.']).next()?;
+    let (name, account) = label.rsplit_once('-')?;
+    let is_account = account.len() == 12 && account.bytes().all(|b| b.is_ascii_digit());
+    if !is_account || validate_name(name).is_err() {
+        return None;
+    }
+    let point = arn(partition, region, account, name).replace('/', "%2F");
+    let rest = if path == "/" { "" } else { path };
+    Some(format!("/{point}{rest}"))
+}
+
 /// An Access Point a data request reached, with the account that owns it.
 #[derive(Debug, Clone)]
 pub struct Reached {
@@ -715,6 +736,48 @@ mod tests {
             .unwrap()
             .unwrap_err();
         assert_eq!(err.code, "NoSuchAccessPoint");
+    }
+
+    #[test]
+    fn access_point_hosts_route_under_the_arn() {
+        let arn = "/arn:aws:s3:us-east-1:000000000000:accesspoint%2Fowner-1";
+        for host in [
+            "owner-1-000000000000.aws.qaidvoid.dev:4567",
+            "owner-1-000000000000.localhost:4566",
+            "owner-1-000000000000.s3-accesspoint.us-east-1.amazonaws.com",
+        ] {
+            assert_eq!(
+                path_for_host(host, "/", "us-east-1", "aws").as_deref(),
+                Some(arn),
+                "{host}"
+            );
+            assert_eq!(
+                path_for_host(host, "/dir/a%20b", "us-east-1", "aws"),
+                Some(format!("{arn}/dir/a%20b")),
+                "{host}"
+            );
+        }
+    }
+
+    #[test]
+    fn other_hosts_keep_their_path() {
+        for host in [
+            "localhost:4566",
+            "aws.qaidvoid.dev:4567",
+            "000000000000.aws.qaidvoid.dev:4567",
+            "s3.us-east-1.amazonaws.com",
+            "my-bucket.s3.amazonaws.com",
+            "Bad_Name-000000000000.localhost",
+            "owner-1-00000000000.localhost",
+            "127.0.0.1:4566",
+            "[::1]:4566",
+        ] {
+            assert_eq!(
+                path_for_host(host, "/k", "us-east-1", "aws"),
+                None,
+                "{host}"
+            );
+        }
     }
 
     #[test]
