@@ -213,11 +213,13 @@ impl S3Service {
             "DeleteAccessPointPolicy" => ap::delete_access_point_policy,
             _ => return None,
         };
-        Some(ap::account_id(input).and_then(|account| {
+        let result = ap::account_id(input).and_then(|account| {
             let mut scoped = ctx.clone();
             scoped.account_id = account.to_string();
             run(&self.get_state(&scoped), input, &scoped)
-        }))
+        });
+        // S3 Control errors come in an `<ErrorResponse>`, unlike S3's.
+        Some(result.map_err(|e| e.with_extra("__wrapped", Value::Bool(true))))
     }
 
     /// Point a data request made through an Access Point at its bucket.
