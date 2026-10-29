@@ -1,3 +1,4 @@
+pub mod access_point;
 pub mod bucket;
 pub mod config;
 pub mod list;

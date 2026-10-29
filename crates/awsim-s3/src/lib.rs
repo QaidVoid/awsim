@@ -194,6 +194,32 @@ impl S3Service {
         self
     }
 
+    /// Serve an S3 Control Access Point operation in the account its
+    /// `x-amz-account-id` names. `None` for any other operation.
+    fn handle_control(
+        &self,
+        operation: &str,
+        input: &Value,
+        ctx: &RequestContext,
+    ) -> Option<Result<Value, AwsError>> {
+        use operations::access_point as ap;
+        let run = match operation {
+            "CreateAccessPoint" => ap::create_access_point,
+            "GetAccessPoint" => ap::get_access_point,
+            "DeleteAccessPoint" => ap::delete_access_point,
+            "ListAccessPoints" => ap::list_access_points,
+            "PutAccessPointPolicy" => ap::put_access_point_policy,
+            "GetAccessPointPolicy" => ap::get_access_point_policy,
+            "DeleteAccessPointPolicy" => ap::delete_access_point_policy,
+            _ => return None,
+        };
+        Some(ap::account_id(input).and_then(|account| {
+            let mut scoped = ctx.clone();
+            scoped.account_id = account.to_string();
+            run(&self.get_state(&scoped), input, &scoped)
+        }))
+    }
+
     fn get_state(&self, ctx: &RequestContext) -> Arc<S3State> {
         let state = self.store.get(&ctx.account_id, "global");
         if let Some(bs) = &self.body_store {
@@ -401,6 +427,51 @@ impl ServiceHandler for S3Service {
 
     fn routes(&self) -> Vec<RouteDefinition> {
         vec![
+            // -- S3 Control Access Points -------------------------------------
+            // Listed first: their literal `v20180820` segment must win over
+            // the `/{Bucket}/{Key+}` object routes.
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v20180820/accesspoint",
+                operation: "ListAccessPoints",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/v20180820/accesspoint/{Name}",
+                operation: "CreateAccessPoint",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v20180820/accesspoint/{Name}",
+                operation: "GetAccessPoint",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/v20180820/accesspoint/{Name}",
+                operation: "DeleteAccessPoint",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/v20180820/accesspoint/{Name}/policy",
+                operation: "PutAccessPointPolicy",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "GET",
+                path_pattern: "/v20180820/accesspoint/{Name}/policy",
+                operation: "GetAccessPointPolicy",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "DELETE",
+                path_pattern: "/v20180820/accesspoint/{Name}/policy",
+                operation: "DeleteAccessPointPolicy",
+                required_query_param: None,
+            },
             // -- Bucket-level operations --------------------------------------
             // GET /. List all buckets
             RouteDefinition {
@@ -1029,6 +1100,9 @@ impl ServiceHandler for S3Service {
         ctx: &RequestContext,
     ) -> Result<Value, AwsError> {
         debug!(operation, "S3 request");
+        if let Some(result) = self.handle_control(operation, &input, ctx) {
+            return result;
+        }
         let state = self.get_state(ctx);
 
         match operation {
