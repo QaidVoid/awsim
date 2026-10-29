@@ -723,7 +723,9 @@ pub fn serialize_error(error: &AwsError, request_id: &str) -> (StatusCode, Heade
             for (key, val) in extras.iter() {
                 // Skip extras that are promoted to headers or the
                 // dedicated <Resource> element above.
-                if matches!(key.as_str(), "DeleteMarker" | "VersionId" | "Resource") {
+                if key.starts_with("__")
+                    || matches!(key.as_str(), "DeleteMarker" | "VersionId" | "Resource")
+                {
                     continue;
                 }
                 let s = match val {
@@ -738,17 +740,39 @@ pub fn serialize_error(error: &AwsError, request_id: &str) -> (StatusCode, Heade
         })
         .unwrap_or_default();
 
-    let xml = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-         <Error>\n\
-         <Code>{code}</Code>\n\
-         <Message>{message}</Message>\n\
-         {resource_xml}<RequestId>{request_id}</RequestId>\n\
-         <HostId>{host_id}</HostId>\n\
-         {extras_xml}</Error>",
-        code = escape_xml(&error.code),
-        message = escape_xml(&error.message),
-    );
+    // An `__wrapped` extra asks for the `<ErrorResponse>` envelope, which
+    // S3 Control uses where S3 sends a bare `<Error>`.
+    let wrapped = error
+        .extras
+        .as_deref()
+        .and_then(|extras| extras.get("__wrapped"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let code = escape_xml(&error.code);
+    let message = escape_xml(&error.message);
+    let xml = if wrapped {
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <ErrorResponse>\n\
+             <Error>\n\
+             <Code>{code}</Code>\n\
+             <Message>{message}</Message>\n\
+             {resource_xml}{extras_xml}</Error>\n\
+             <RequestId>{request_id}</RequestId>\n\
+             <HostId>{host_id}</HostId>\n\
+             </ErrorResponse>",
+        )
+    } else {
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <Error>\n\
+             <Code>{code}</Code>\n\
+             <Message>{message}</Message>\n\
+             {resource_xml}<RequestId>{request_id}</RequestId>\n\
+             <HostId>{host_id}</HostId>\n\
+             {extras_xml}</Error>",
+        )
+    };
 
     let mut headers = HeaderMap::new();
     headers.insert("content-type", "application/xml".parse().unwrap());
@@ -927,6 +951,18 @@ mod tests {
             "<GetAccessPointPolicyResult xmlns=\"http://awss3control.amazonaws.com/doc/2018-08-20/\">"
         ));
         assert!(!xml.contains("__xml_namespace"));
+    }
+
+    #[test]
+    fn serialize_error_wraps_the_envelope_when_asked() {
+        let err = AwsError::not_found("NoSuchAccessPoint", "absent")
+            .with_extra("__wrapped", Value::Bool(true));
+        let (status, _, body) = serialize_error(&err, "req-1");
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let xml = std::str::from_utf8(&body).unwrap();
+        assert!(xml.contains("<ErrorResponse>\n<Error>\n<Code>NoSuchAccessPoint</Code>"));
+        assert!(xml.contains("</Error>\n<RequestId>req-1</RequestId>"));
+        assert!(!xml.contains("__wrapped"));
     }
 
     #[test]
