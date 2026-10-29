@@ -70,7 +70,7 @@ Binary values round-trip correctly: a DynamoDB `B` or `BS` attribute arrives as 
 | RDS | `rds` | Query | Yes | — | Relational database metadata |
 | Resource Groups Tagging API | `tagging` | JSON | Yes | 8 | Cross-service resource discovery by tags |
 | Route 53 | `route53` | REST-XML | Yes | — | DNS management |
-| S3 | `s3` | REST-XML | Yes* | 44 | Object storage |
+| S3 | `s3` | REST-XML | Yes* | 51 | Object storage, plus S3 Control Access Points |
 | Secrets Manager | `secretsmanager` | JSON | Yes | — | Secret storage |
 | SES | `ses` | REST-JSON (v2) + Query (classic) | Yes | — | Simple Email Service, both APIs |
 | SNS | `sns` | Query | Yes | 21 | Simple Notification Service |

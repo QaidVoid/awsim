@@ -83,6 +83,17 @@ iifname "virbr*" tcp dport { 4566, 4567 } accept
 
 To use the HTTPS listener and its bundled certificate, set `AWSIM_EC2_GUEST_ENDPOINT=https://aws.qaidvoid.dev:4567`. Guests then map `aws.qaidvoid.dev` to the gateway, and the certificate is publicly trusted.
 
+Only that one name is mapped. Names the SDKs derive from it, such as `000000000000.aws.qaidvoid.dev` for S3 Control and `{name}-{account}.aws.qaidvoid.dev` for an S3 Access Point ARN, still resolve through public DNS to the guest's own loopback. To send the whole domain to the gateway, have the network's dnsmasq answer for it. `virsh net-edit default` and add, then restart the network, which briefly disconnects running guests:
+
+```xml
+<network xmlns:dnsmasq='http://libvirt.org/schemas/network/dnsmasq/1.0'>
+  ...
+  <dnsmasq:options>
+    <dnsmasq:option value='address=/aws.qaidvoid.dev/192.168.122.1'/>
+  </dnsmasq:options>
+</network>
+```
+
 ## Cost per instance
 
 | | Size |

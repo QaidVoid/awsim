@@ -68,6 +68,12 @@ default to for custom endpoints.
 Each wildcard is still only one level deep. A name that adds another
 label, such as `deep.nested.aws.qaidvoid.dev`, does not validate.
 
+The SDKs build two such one-label names themselves from a custom
+endpoint: S3 Control puts the account id in front of the host
+(`000000000000.aws.qaidvoid.dev`), and an S3 Access Point ARN becomes
+`{name}-{account}.aws.qaidvoid.dev`. Both resolve through the public
+wildcard and validate under `*.aws.qaidvoid.dev`.
+
 ## Cert sources, in order of preference
 
 When `--https-port` is set, AWSim picks a cert source like this:
