@@ -19,7 +19,7 @@ use awsim_enforcement_tests::{
     start_server_unenforced,
 };
 
-const TABLE: &str = "captify_core_x";
+const TABLE: &str = "app_core_x";
 const INDEX: &str = "gsi1";
 
 const TRUST_ANYONE: &str = r#"{
