@@ -72,6 +72,9 @@ pub fn parse_json_request(
     })
 }
 
+/// RestXml operations whose body is an object's bytes rather than an XML document.
+const OPAQUE_BODY_OPERATIONS: &[&str] = &["PutObject", "UploadPart"];
+
 /// Parse a restXml request (used by S3).
 pub fn parse_xml_request(
     method: &Method,
@@ -91,8 +94,9 @@ pub fn parse_xml_request(
         // Only attempt XML parsing if the body actually looks like XML (starts
         // with '<').  Otherwise treat it as raw binary data and store it as
         // base64 in `__raw_body` so handlers like S3 PutObject can access it.
+        // An uploaded object is opaque, whatever its first byte.
         let looks_like_xml = body.first().is_some_and(|&b| b == b'<');
-        if looks_like_xml {
+        if looks_like_xml && !OPAQUE_BODY_OPERATIONS.contains(&operation) {
             match parse_xml_body(body) {
                 Ok(v) => v,
                 Err(_) => {
@@ -1064,6 +1068,52 @@ mod tests {
         assert_ne!(a, c);
         // Real S3 host ids are 76 chars (base64 of 57 bytes).
         assert_eq!(a.len(), 76);
+    }
+
+    #[test]
+    fn xml_request_keeps_an_uploaded_body_opaque() {
+        use base64::Engine;
+        let routes = [
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/{Bucket}/{Key+}",
+                operation: "PutObject",
+                required_query_param: None,
+            },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/{Bucket}/{Key+}",
+                operation: "UploadPart",
+                required_query_param: Some("partNumber"),
+            },
+            RouteDefinition {
+                method: "PUT",
+                path_pattern: "/{Bucket}",
+                operation: "PutBucketTagging",
+                required_query_param: Some("tagging"),
+            },
+        ];
+        let body = Bytes::from_static(b"<h1><ContentType>a/b</ContentType></h1>");
+        let raw = base64::engine::general_purpose::STANDARD.encode(&body);
+        let parse = |uri: &str| {
+            let uri: Uri = uri.parse().expect("uri");
+            parse_xml_request(&Method::PUT, &uri, &HeaderMap::new(), &body, &routes).expect("parse")
+        };
+
+        for (uri, operation) in [
+            ("/b/page.html", "PutObject"),
+            ("/b/page.html?partNumber=1&uploadId=u", "UploadPart"),
+        ] {
+            let parsed = parse(uri);
+            assert_eq!(parsed.operation, operation);
+            assert_eq!(parsed.input["__raw_body"].as_str(), Some(raw.as_str()));
+            assert!(parsed.input.get("h1").is_none());
+            assert!(parsed.input.get("ContentType").is_none());
+        }
+
+        let document = parse("/b?tagging");
+        assert_eq!(document.operation, "PutBucketTagging");
+        assert!(document.input.get("__raw_body").is_none());
     }
 
     #[test]
