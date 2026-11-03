@@ -616,6 +616,23 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
         if matches!(bucket.versioning, VersioningStatus::Disabled) {
             check_object_lock(&bucket, key, bypass_governance)?;
         }
+        // Conditional write: `If-Match` replaces the key only while its current object still
+        // has one of the given ETags, and fails on a key that holds none, as S3 does.
+        if let Some(header) = opt_str(input, "IfMatch") {
+            let current = bucket
+                .objects
+                .get(key)
+                .and_then(|versions| versions.current().map(|obj| obj.etag.clone()));
+            match current {
+                None => return Err(no_such_key(key)),
+                Some(etag) if !etag_list_matches(header, &etag) => {
+                    return Err(precondition_failed(
+                        "At least one of the pre-conditions you specified did not hold",
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
         // Conditional write: `If-None-Match: *` creates the key only if no current object
         // holds it. Checked before the body is stored, since an unversioned write replaces
         // the existing blob in place.
@@ -690,21 +707,9 @@ pub fn put_object(state: &S3State, input: &Value, ctx: &RequestContext) -> Resul
             is_delete_marker: false,
         };
 
-        // Suspended / Disabled buckets overwrite the existing null-slot
-        // blob. Purge it before we record the new version so the stale
-        // file doesn't linger.
-        if !matches!(status, VersioningStatus::Enabled)
-            && let Some(store) = state.body_store()
-            && let Some(versions_ref) = bucket.objects.get(key)
-            && let Some(prev) = versions_ref
-                .versions
-                .iter()
-                .find(|o| o.version_id.is_none())
-            && !prev.is_delete_marker
-        {
-            let prev_key = versioned_blob_key(key, None);
-            let _ = store.delete_blob("objects", bucket_name, &prev_key);
-        }
+        // Suspended / Disabled buckets keep one null-slot blob per key, at the
+        // same path the write above just replaced in place, so there is no
+        // stale file to purge: deleting that path would drop the new body.
 
         let mut versions = bucket.objects.entry(key.to_string()).or_default();
         record_version(&mut versions, obj, &status);

@@ -229,3 +229,65 @@ async fn multipart_then_restart_then_get() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn overwrite_on_disk_keeps_the_new_body() {
+    let dir = tmp_dir("overwrite");
+    let svc = S3Service::with_data_dir(&dir);
+    svc.handle("CreateBucket", json!({"Bucket": "bucket"}), &ctx())
+        .await
+        .unwrap();
+    for body in [b"one".as_slice(), b"one two".as_slice()] {
+        svc.handle(
+            "PutObject",
+            json!({ "Bucket": "bucket", "Key": "k.txt", "__raw_body": b64(body) }),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+    }
+    let got = svc
+        .handle(
+            "GetObject",
+            json!({ "Bucket": "bucket", "Key": "k.txt" }),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(decode(&got), b"one two");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn put_if_match_writes_only_over_the_etag_named() {
+    let dir = tmp_dir("ifmatch");
+    let svc = S3Service::with_data_dir(&dir);
+    svc.handle("CreateBucket", json!({"Bucket": "bucket"}), &ctx())
+        .await
+        .unwrap();
+    let request = ctx();
+    let put = |body: &[u8], if_match: Option<&str>| {
+        let mut input = json!({ "Bucket": "bucket", "Key": "k.txt", "__raw_body": b64(body) });
+        if let Some(etag) = if_match {
+            input["IfMatch"] = json!(etag);
+        }
+        svc.handle("PutObject", input, &request)
+    };
+    let missing = put(b"x", Some("\"abc\"")).await.unwrap_err();
+    assert_eq!(missing.code, "NoSuchKey");
+    let first = put(b"one", None).await.unwrap();
+    let etag = first["ETag"].as_str().unwrap().to_string();
+    put(b"one two", Some(&etag)).await.unwrap();
+    let stale = put(b"lost", Some(&etag)).await.unwrap_err();
+    assert_eq!(stale.code, "PreconditionFailed");
+    let got = svc
+        .handle(
+            "GetObject",
+            json!({ "Bucket": "bucket", "Key": "k.txt" }),
+            &ctx(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(decode(&got), b"one two");
+    let _ = std::fs::remove_dir_all(&dir);
+}
