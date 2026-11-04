@@ -649,10 +649,9 @@ pub fn query(
     }
 
     // Convert ExclusiveStartKey into resume cursors. The base-table query
-    // (and LSI, which executes over the base partition) resumes on the base
-    // sort key, which is unique within a partition. The GSI path additionally
-    // needs the index sort key plus the base primary key as a tiebreaker,
-    // since GSI sort keys repeat.
+    // resumes on the base sort key, which is unique within a partition. An
+    // index resumes on its own sort key with the base primary key as a
+    // tiebreaker, since index sort keys repeat.
     let esk_base_pk = exclusive_start_key.as_ref().and_then(|esk| {
         esk.get(&base_hash_name)
             .and_then(crate::keys::storage_key)
@@ -818,10 +817,58 @@ pub fn query(
                     handle(item)
                 },
             )?;
+        } else if index_name.is_some() {
+            // An LSI shares the base partition but orders it by its own range
+            // key, which has no column of its own. Read the partition's index
+            // members, order them as the index does, by (index key, base sort
+            // key), and resume strictly after the cursor's place in that
+            // order. This holds one partition in memory, which an LSI already
+            // caps at 10 GB on AWS.
+            let lsi_range = range_key_name.as_deref().unwrap_or_default();
+            let mut members: Vec<(String, String, DynamoItem)> = Vec::new();
+            sqlite.query_partition(
+                &ctx.account_id,
+                &ctx.region,
+                table_name,
+                pk,
+                true,
+                None,
+                None,
+                |sk, attrs| {
+                    let item = storage_value_to_item(attrs).ok_or_else(|| {
+                        AwsError::internal("DynamoDB stored attrs is not an object")
+                    })?;
+                    if let Some(key) = item.get(lsi_range).and_then(crate::keys::storage_key) {
+                        members.push((key, sk.to_string(), item));
+                    }
+                    Ok(true)
+                },
+            )?;
+            members.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+            if !scan_index_forward {
+                members.reverse();
+            }
+            let resume = esk_index_sk.as_deref().zip(esk_base_sk.as_deref());
+            for (key, sk, item) in members {
+                if let Some(cursor) = resume {
+                    let at = (key.as_str(), sk.as_str());
+                    let past = if scan_index_forward {
+                        at > cursor
+                    } else {
+                        at < cursor
+                    };
+                    if !past {
+                        continue;
+                    }
+                }
+                if !handle(item)? {
+                    break;
+                }
+            }
         } else {
-            // Base table and LSI both stream the base partition ordered by
-            // the base sort key, which is unique per partition, so the base
-            // sort key alone is a sufficient resume cursor.
+            // The base table streams its partition ordered by the base sort
+            // key, which is unique per partition, so the base sort key alone
+            // is a sufficient resume cursor.
             sqlite.query_partition(
                 &ctx.account_id,
                 &ctx.region,

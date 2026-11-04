@@ -927,3 +927,128 @@ async fn limit_rejects_zero_negative_and_fractional() {
         );
     }
 }
+
+// --- LSI ordering ---------------------------------------------------------
+
+/// The `lsi_sk` values of `items`, in the order a read returned them.
+fn lsi_keys(items: &[Value]) -> Vec<String> {
+    items
+        .iter()
+        .map(|i| i["lsi_sk"]["S"].as_str().unwrap_or_default().to_string())
+        .collect()
+}
+
+/// Items whose base sort key orders them the opposite way to their LSI key,
+/// with two sharing an LSI key so the base sort key has to break the tie.
+async fn put_out_of_order(svc: &DynamoDbService) {
+    for (sk, lsi) in [
+        ("1", "e"),
+        ("2", "d"),
+        ("3", "b"),
+        ("4", "c"),
+        ("5", "a"),
+        ("6", "c"),
+    ] {
+        put(
+            svc,
+            json!({
+                "pk": { "S": "a" },
+                "sk": { "S": sk },
+                "lsi_sk": { "S": lsi },
+            }),
+        )
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn query_on_lsi_returns_items_in_the_index_order() {
+    let svc = service().await;
+    put_out_of_order(&svc).await;
+    let input = json!({
+        "TableName": "T",
+        "IndexName": "L1",
+        "KeyConditionExpression": "pk = :p",
+        "ExpressionAttributeValues": { ":p": { "S": "a" } },
+    });
+
+    let forward = svc
+        .handle("Query", input.clone(), &ctx())
+        .await
+        .expect("Query");
+    let items = forward["Items"].as_array().expect("Items");
+    assert_eq!(lsi_keys(items), ["a", "b", "c", "c", "d", "e"]);
+    let tied: Vec<&str> = items
+        .iter()
+        .filter(|i| i["lsi_sk"]["S"] == "c")
+        .map(|i| i["sk"]["S"].as_str().unwrap_or_default())
+        .collect();
+    assert_eq!(
+        tied,
+        ["4", "6"],
+        "equal index keys follow the base sort key"
+    );
+
+    let mut backward = input;
+    backward["ScanIndexForward"] = json!(false);
+    let back = svc.handle("Query", backward, &ctx()).await.expect("Query");
+    assert_eq!(
+        lsi_keys(back["Items"].as_array().expect("Items")),
+        ["e", "d", "c", "c", "b", "a"]
+    );
+}
+
+#[tokio::test]
+async fn query_on_lsi_pages_in_the_index_order() {
+    let svc = service().await;
+    put_out_of_order(&svc).await;
+    for forward in [true, false] {
+        let seen = page_all(
+            &svc,
+            "Query",
+            json!({
+                "TableName": "T",
+                "IndexName": "L1",
+                "KeyConditionExpression": "pk = :p",
+                "ExpressionAttributeValues": { ":p": { "S": "a" } },
+                "ScanIndexForward": forward,
+                "Limit": 2,
+            }),
+        )
+        .await;
+        let mut expected = vec!["a", "b", "c", "c", "d", "e"];
+        if !forward {
+            expected.reverse();
+        }
+        assert_eq!(lsi_keys(&seen), expected, "forward={forward}");
+    }
+}
+
+#[tokio::test]
+async fn query_on_lsi_bounds_its_own_sort_key() {
+    let svc = service().await;
+    put_out_of_order(&svc).await;
+    let res = svc
+        .handle(
+            "Query",
+            json!({
+                "TableName": "T",
+                "IndexName": "L1",
+                "KeyConditionExpression": "pk = :p AND lsi_sk BETWEEN :lo AND :hi",
+                "ExpressionAttributeValues": {
+                    ":p": { "S": "a" },
+                    ":lo": { "S": "b" },
+                    ":hi": { "S": "d" },
+                },
+                "ScanIndexForward": false,
+                "Limit": 3,
+            }),
+            &ctx(),
+        )
+        .await
+        .expect("Query");
+    assert_eq!(
+        lsi_keys(res["Items"].as_array().expect("Items")),
+        ["d", "c", "c"]
+    );
+}
