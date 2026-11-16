@@ -211,8 +211,9 @@ pub fn update_by_query(state: &OpenSearchState, index_name: &str, body: &Value) 
         // Collect the doc snapshot first, then mutate. Holding the
         // read transaction open while issuing writes would deadlock.
         let mut matching: Vec<(String, Value)> = Vec::new();
+        let index = Value::String(name.to_string());
         let _ = state.for_each_doc(name, |id, doc| {
-            if super::search::match_score(&query, doc) > 0.0 {
+            if super::search::match_score(&query, doc, &index) > 0.0 {
                 matching.push((id.to_string(), doc.clone()));
             }
             true
@@ -455,8 +456,9 @@ pub fn delete_by_query(state: &OpenSearchState, index_name: &str, body: &Value) 
         .unwrap_or(json!({"match_all": {}}));
 
     let mut matching: Vec<String> = Vec::new();
+    let index = Value::String(index_name.to_string());
     let _ = state.for_each_doc(index_name, |id, doc| {
-        if super::search::match_score(&query, doc) > 0.0 {
+        if super::search::match_score(&query, doc, &index) > 0.0 {
             matching.push(id.to_string());
         }
         true

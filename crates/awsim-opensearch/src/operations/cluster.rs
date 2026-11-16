@@ -115,8 +115,9 @@ pub fn reindex(state: &OpenSearchState, body: &Value, wait_for_completion: bool)
     // we open the write transaction for the destination puts.
     let mut docs: Vec<(String, Value)> = Vec::new();
     if state.index_exists(source_index) {
+        let index = Value::String(source_index.to_string());
         let _ = state.for_each_doc(source_index, |id, doc| {
-            if super::search::match_score(&query, doc) > 0.0 {
+            if super::search::match_score(&query, doc, &index) > 0.0 {
                 docs.push((id.to_string(), doc.clone()));
             }
             true

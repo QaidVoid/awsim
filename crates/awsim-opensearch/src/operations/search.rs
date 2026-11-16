@@ -74,13 +74,14 @@ pub fn search_with(
         // k-NN runs per shard, and each index here is a single shard.
         let mut query = query.clone();
         apply_knn_cutoffs(state, idx_name, &mut query);
+        let index = Value::String(idx_name.to_string());
         let _ = state.for_each_doc(idx_name, |doc_id, doc| {
             if let Some(ref allowed) = ids_filter
                 && !allowed.contains(&doc_id.to_string())
             {
                 return true;
             }
-            let score = match_score(&query, doc);
+            let score = match_score(&query, doc, &index);
             if score > 0.0 {
                 hits.push(json!({
                     "_index": idx_name,
@@ -178,8 +179,9 @@ pub fn count(
         if !state.index_exists(name) {
             continue;
         }
+        let index = Value::String(name.to_string());
         let _ = state.for_each_doc(name, |_, doc| {
-            if match_score(&query, doc) > 0.0 {
+            if match_score(&query, doc, &index) > 0.0 {
                 count += 1;
             }
             true
@@ -261,8 +263,8 @@ fn wildcard_match_inner(p: &[char], t: &[char], pi: usize, ti: usize) -> bool {
     false
 }
 
-/// Score a document against a query. Returns 0.0 for no match.
-pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
+/// Score a document held in `index` against a query. Returns 0.0 for no match.
+pub(crate) fn match_score(query: &Value, doc: &Value, index: &Value) -> f64 {
     if let Some(obj) = query.as_object() {
         if obj.contains_key("match_all") {
             return 1.0;
@@ -321,7 +323,7 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
         // Supports string, number, and boolean values.
         if let Some(term_obj) = obj.get("term").and_then(|t| t.as_object()) {
             for (field, expected) in term_obj {
-                if let Some(field_val) = get_nested_field(doc, field)
+                if let Some(field_val) = field_in(doc, field, index)
                     && term_match(expected, field_val)
                 {
                     return 1.0;
@@ -334,7 +336,7 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
         if let Some(terms_obj) = obj.get("terms").and_then(|t| t.as_object()) {
             for (field, values) in terms_obj {
                 if let Some(arr) = values.as_array()
-                    && let Some(field_val) = get_nested_field(doc, field)
+                    && let Some(field_val) = field_in(doc, field, index)
                 {
                     for expected in arr {
                         if term_match(expected, field_val) {
@@ -349,7 +351,7 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
         // range: { "field": { "gt": ..., "gte": ..., "lt": ..., "lte": ... } }
         if let Some(range_obj) = obj.get("range").and_then(|r| r.as_object()) {
             for (field, conditions) in range_obj {
-                if let Some(field_val) = get_nested_field(doc, field)
+                if let Some(field_val) = field_in(doc, field, index)
                     && range_match(conditions, field_val)
                 {
                     return 1.0;
@@ -365,7 +367,7 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
                     .as_str()
                     .or_else(|| spec.get("value").and_then(|v| v.as_str()))
                     .unwrap_or("");
-                if let Some(field_val) = get_nested_field(doc, field) {
+                if let Some(field_val) = field_in(doc, field, index) {
                     let field_str = value_to_string(field_val);
                     if wildcard_match(pattern, &field_str) {
                         return 1.0;
@@ -382,7 +384,7 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
                     .as_str()
                     .or_else(|| spec.get("value").and_then(|v| v.as_str()))
                     .unwrap_or("");
-                if let Some(field_val) = get_nested_field(doc, field) {
+                if let Some(field_val) = field_in(doc, field, index) {
                     let field_str = value_to_string(field_val);
                     if field_str
                         .to_lowercase()
@@ -401,7 +403,7 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
             .and_then(|e| e.get("field"))
             .and_then(|f| f.as_str())
         {
-            return if get_nested_field(doc, exists_field).is_some() {
+            return if field_in(doc, exists_field, index).is_some() {
                 1.0
             } else {
                 0.0
@@ -419,7 +421,7 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
             return knn_obj
                 .iter()
                 .map(|(field, spec)| {
-                    let score = knn_score(field, spec, doc);
+                    let score = knn_score(field, spec, doc, index);
                     let cutoff = spec
                         .get(KNN_CUTOFF_KEY)
                         .and_then(Value::as_f64)
@@ -458,7 +460,7 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
             // must_not: any clause matches -> bool fails outright.
             if let Some(must_not) = bool_obj.get("must_not").and_then(|n| n.as_array()) {
                 for clause in must_not {
-                    if match_score(clause, doc) > 0.0 {
+                    if match_score(clause, doc, index) > 0.0 {
                         return 0.0;
                     }
                 }
@@ -473,7 +475,7 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
 
             if let Some(must) = bool_obj.get("must").and_then(|m| m.as_array()) {
                 for clause in must {
-                    let s = match_score(clause, doc);
+                    let s = match_score(clause, doc, index);
                     if s <= 0.0 {
                         must_pass = false;
                         break;
@@ -484,7 +486,7 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
 
             if let Some(filter) = bool_obj.get("filter").and_then(|f| f.as_array()) {
                 for clause in filter {
-                    if match_score(clause, doc) <= 0.0 {
+                    if match_score(clause, doc, index) <= 0.0 {
                         must_pass = false;
                         break;
                     }
@@ -499,7 +501,7 @@ pub(crate) fn match_score(query: &Value, doc: &Value) -> f64 {
             let mut should_matched = false;
             if let Some(should) = bool_obj.get("should").and_then(|s| s.as_array()) {
                 for clause in should {
-                    let s = match_score(clause, doc);
+                    let s = match_score(clause, doc, index);
                     if s > 0.0 {
                         should_matched = true;
                     }
@@ -730,6 +732,16 @@ fn get_nested_field<'a>(doc: &'a Value, field: &str) -> Option<&'a Value> {
     Some(current)
 }
 
+/// A document's `field`, or for `_index` the name of the index holding it, as OpenSearch
+/// exposes it to exact-value queries.
+fn field_in<'a>(doc: &'a Value, field: &str, index: &'a Value) -> Option<&'a Value> {
+    if field == "_index" {
+        Some(index)
+    } else {
+        get_nested_field(doc, field)
+    }
+}
+
 /// Field collapsing: keep only the best (first, since `hits` is already
 /// sorted) hit per value of `field`, and expose that value under `fields`
 /// like OpenSearch does. Docs missing the field form a single group.
@@ -829,8 +841,9 @@ fn apply_knn_cutoffs(state: &OpenSearchState, index: &str, query: &mut Value) {
                 for (field, spec) in knn_obj.iter_mut() {
                     let k = spec.get("k").and_then(Value::as_u64).unwrap_or(10) as usize;
                     let mut scores = Vec::new();
+                    let held = Value::String(index.to_string());
                     let _ = state.for_each_doc(index, |_, doc| {
-                        let score = knn_score(field, spec, doc);
+                        let score = knn_score(field, spec, doc, &held);
                         if score > 0.0 {
                             scores.push(score);
                         }
@@ -867,7 +880,7 @@ fn apply_knn_cutoffs(state: &OpenSearchState, index: &str, query: &mut Value) {
 /// Score is `(1 + cos) / 2` so the result lands in `[0, 1]` like the
 /// real k-NN plugin's normalised score, and unrelated vectors don't
 /// produce negative scores that would be filtered downstream.
-fn knn_score(field: &str, spec: &Value, doc: &Value) -> f64 {
+fn knn_score(field: &str, spec: &Value, doc: &Value, index: &Value) -> f64 {
     let Some(vector) = spec.get("vector").and_then(extract_vector) else {
         return 0.0;
     };
@@ -878,7 +891,7 @@ fn knn_score(field: &str, spec: &Value, doc: &Value) -> f64 {
         return 0.0;
     }
     if let Some(filter) = spec.get("filter")
-        && match_score(filter, doc) <= 0.0
+        && match_score(filter, doc, index) <= 0.0
     {
         return 0.0;
     }
@@ -1032,6 +1045,81 @@ mod tests {
         assert_eq!(plain["hits"]["hits"][0]["_source"]["title"], "AWS Lambda");
         let (_, unsorted) = search(&state, "articles", &json!({"query": {"match_all": {}}}));
         assert!(unsorted["hits"]["hits"][0].get("sort").is_none());
+    }
+
+    #[test]
+    fn test_index_field_in_exact_value_queries() {
+        let state = test_state();
+        for name in ["notes", "app-docs-a", "app-docs-b"] {
+            state
+                .create_index_meta(
+                    name,
+                    IndexMeta {
+                        mappings: json!({}),
+                        settings: json!({}),
+                        created_at: "2026-01-01".to_string(),
+                        uuid: format!("uuid-{name}"),
+                    },
+                )
+                .unwrap();
+            state
+                .put_doc(name, "1", &json!({"title": "Rust notes", "body": "Rust"}))
+                .unwrap();
+        }
+        let scored = |query: Value| -> Vec<(String, f64)> {
+            let (status, result) = search(
+                &state,
+                "articles,notes,app-docs-*",
+                &json!({"query": query}),
+            );
+            assert_eq!(status, 200);
+            let mut hits: Vec<(String, f64)> = result["hits"]["hits"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|h| {
+                    (
+                        h["_index"].as_str().unwrap().to_string(),
+                        h["_score"].as_f64().unwrap(),
+                    )
+                })
+                .collect();
+            hits.sort_by(|a, b| a.0.cmp(&b.0));
+            hits
+        };
+        // Each index weighs a field its own way, as one clause per index filtered by `_index`.
+        let only = |filter: Value, field: &str| json!({"bool": {"filter": [filter], "must": [{"multi_match": {"query": "rust", "fields": [field]}}]}});
+        let found = scored(json!({"bool": {"should": [
+            only(json!({"term": {"_index": "notes"}}), "title^5"),
+            only(json!({"wildcard": {"_index": "app-docs-*"}}), "title^2"),
+        ], "minimum_should_match": 1}}));
+        let names: Vec<&str> = found.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, ["app-docs-a", "app-docs-b", "notes"]);
+        assert!(found[2].1 > found[0].1 && found[0].1 == found[1].1);
+        let named = |query: Value| -> Vec<String> {
+            scored(query).into_iter().map(|(name, _)| name).collect()
+        };
+        assert_eq!(named(json!({"terms": {"_index": ["articles"]}})).len(), 3);
+        assert_eq!(
+            named(json!({"prefix": {"_index": "app-"}})),
+            ["app-docs-a", "app-docs-b"]
+        );
+        // A document's own field of that name is never read for it.
+        state
+            .put_doc(
+                "notes",
+                "2",
+                &json!({"title": "Rust", "_index": "articles"}),
+            )
+            .unwrap();
+        assert_eq!(named(json!({"term": {"_index": "articles"}})).len(), 3);
+        let (_, counted) = count(
+            &state,
+            "articles,notes",
+            &json!({"query": {"term": {"_index": "notes"}}}),
+            false,
+        );
+        assert_eq!(counted["count"], 2);
     }
 
     #[test]
